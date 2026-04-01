@@ -44,3 +44,4 @@ with DAG(
     source = check_data_source()
     validation = validate_latest_data(source)
     report_status(validation)
+
