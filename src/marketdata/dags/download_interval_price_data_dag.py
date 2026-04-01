@@ -30,7 +30,7 @@ with DAG(
         task_id="download_interval_price_data",
         name="download-interval-price-data",
         namespace="default",
-        image="marketdata:latest",
+        image="731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-marketdata-download-interval-price-data:202604011539",
         image_pull_policy="IfNotPresent",
         cmds=["python", "marketdata/usecases/download-interval-price-data.py"],
         env_vars=[
