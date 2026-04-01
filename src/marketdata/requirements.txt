@@ -1,0 +1,7 @@
+ctrader-open-api
+pandas
+twisted
+service_identity
+python-dotenv
+pytest
+pyarrow
