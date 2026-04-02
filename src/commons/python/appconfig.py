@@ -9,6 +9,8 @@ Usage:
     print(config.s3_bucket)
 """
 
+import base64
+import json
 import os
 import time
 from pathlib import Path
@@ -18,6 +20,11 @@ from dotenv import load_dotenv
 
 # Refresh the token if it expires within this many seconds
 _TOKEN_EXPIRY_BUFFER_SECONDS = 60
+
+# Kubernetes service account paths
+_K8S_SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+_K8S_SA_CA_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+_K8S_SA_NS_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 
 
 class AppConfig:
@@ -83,17 +90,22 @@ class AppConfig:
         expires_in = int(token.get("expiresIn", 0))
 
         if not new_access:
-            raise RuntimeError("Token refresh failed; no accessToken returned.")
+            raise RuntimeError(
+                f"Token refresh failed; no accessToken returned. Response: {token}"
+            )
 
         self.access_token = new_access
         self.refresh_token = new_refresh
         self.token_expiry = time.time() + expires_in
 
-        self._upsert_env_vars({
+        token_updates = {
             "ACCESS_TOKEN": new_access,
             "REFRESH_TOKEN": new_refresh,
             "TOKEN_EXPIRY": str(int(self.token_expiry)),
-        })
+        }
+
+        self._upsert_env_vars(token_updates)
+        self._update_k8s_secret(token_updates)
 
     def update_tokens(self, access_token: str, refresh_token: str) -> None:
         """Update access and refresh tokens in memory and persist to .env."""
@@ -126,6 +138,46 @@ class AppConfig:
             output_lines.append(f"{k}={updates[k]}")
 
         self._env_path.write_text("\n".join(output_lines).rstrip() + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _update_k8s_secret(updates: dict[str, str]) -> None:
+        """Patch the marketdata-credentials K8s secret with updated values.
+
+        Only runs when inside a Kubernetes pod (detected by service account mount).
+        """
+        if not _K8S_SA_TOKEN_PATH.exists():
+            return
+
+        import requests as req
+
+        sa_token = _K8S_SA_TOKEN_PATH.read_text().strip()
+        namespace = _K8S_SA_NS_PATH.read_text().strip()
+        ca_path = str(_K8S_SA_CA_PATH)
+        api = "https://kubernetes.default.svc"
+
+        secret_name = os.getenv("K8S_CREDENTIALS_SECRET", "marketdata-credentials")
+
+        patch_data = {
+            "data": {
+                k: base64.b64encode(v.encode()).decode() for k, v in updates.items()
+            }
+        }
+
+        resp = req.patch(
+            f"{api}/api/v1/namespaces/{namespace}/secrets/{secret_name}",
+            headers={
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/strategic-merge-patch+json",
+            },
+            data=json.dumps(patch_data),
+            verify=ca_path,
+            timeout=10,
+        )
+
+        if resp.status_code < 300:
+            print(f"K8s secret '{secret_name}' updated with new tokens")
+        else:
+            print(f"Warning: failed to update K8s secret: {resp.status_code} {resp.text}")
 
     @property
     def account_id(self) -> int | None:
