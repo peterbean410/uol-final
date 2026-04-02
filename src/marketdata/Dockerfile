@@ -2,9 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY marketdata/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY marketdata/ /app/marketdata/
+COPY commons/ /app/commons/
 
-ENTRYPOINT ["python", "usecases/download-interval-price-data.py"]
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "marketdata/usecases/download-interval-price-data.py"]
