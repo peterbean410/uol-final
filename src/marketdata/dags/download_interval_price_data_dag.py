@@ -30,10 +30,10 @@ with DAG(
         task_id="download_interval_price_data",
         name="download-interval-price-data",
         namespace="airflow",
-        image="731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-marketdata-download-interval-price-data:202604011539",
-        image_pull_policy="IfNotPresent",
+        image="731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-marketdata-download-interval-price-data:latest",
+        image_pull_policy="Always",
         image_pull_secrets=[k8s.V1LocalObjectReference(name="ecr-registry-credentials")],
-        cmds=["python", "usecases/download-interval-price-data.py"],
+        cmds=["python", "marketdata/usecases/download-interval-price-data.py"],
         env_vars=[
             k8s.V1EnvVar(name="FX_SYMBOL", value="USDJPY"),
             k8s.V1EnvVar(name="FX_INTERVAL", value="15"),
