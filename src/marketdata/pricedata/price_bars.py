@@ -143,13 +143,21 @@ class _PriceBarFetcher:
         reactor.stop()
 
 
-def get_price_bars(fx_symbol: str, time_interval: int = 15) -> pd.DataFrame:
+def get_price_bars(
+    fx_symbol: str,
+    time_interval: int = 15,
+    end_dt: datetime | None = None,
+    time_window_minutes: int | None = None,
+) -> pd.DataFrame:
     """Retrieve OHLCV price bars for an FX symbol.
 
     Args:
         fx_symbol: The FX symbol (e.g. "USDJPY", "EURUSD").
         time_interval: Bar interval in minutes. Valid values:
             1, 2, 3, 4, 5, 10, 15, 30, 60, 240, 720, 1440.
+        end_dt: End of the data window (defaults to now UTC).
+        time_window_minutes: How far back from end_dt to fetch
+            (defaults to 60 * time_interval).
 
     Returns:
         A DataFrame with columns: Timestamp, Symbol, Open, High, Low, Close, Volume.
@@ -179,9 +187,13 @@ def get_price_bars(fx_symbol: str, time_interval: int = 15) -> pd.DataFrame:
     port = EndPoints.PROTOBUF_PORT
     period = INTERVAL_TO_PERIOD[time_interval]
 
-    now = datetime.now(tz=timezone.utc)
-    to_ts = int(now.timestamp() * 1000)
-    from_ts = int((now - timedelta(minutes=60 * time_interval)).timestamp() * 1000)
+    if end_dt is None:
+        end_dt = datetime.now(tz=timezone.utc)
+    if time_window_minutes is None:
+        time_window_minutes = 60 * time_interval
+
+    to_ts = int(end_dt.timestamp() * 1000)
+    from_ts = int((end_dt - timedelta(minutes=time_window_minutes)).timestamp() * 1000)
 
     fetcher = _PriceBarFetcher(
         host, port, config.app_client_id, config.app_client_secret, config.access_token,

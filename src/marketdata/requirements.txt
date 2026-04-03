@@ -5,3 +5,4 @@ service_identity
 python-dotenv
 pytest
 pyarrow
+boto3
