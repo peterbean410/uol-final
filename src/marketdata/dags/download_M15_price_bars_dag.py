@@ -1,4 +1,4 @@
-"""DAG: Download interval price data via Kubernetes.
+"""DAG: Download M15 price bars via Kubernetes.
 
 Runs the marketdata download-interval-price-data script as a
 KubernetesPodOperator task, using the image defined in the Helm chart.
@@ -17,18 +17,18 @@ default_args = {
 }
 
 with DAG(
-    dag_id="download_interval_price_data",
+    dag_id="download_M15_price_bars",
     default_args=default_args,
-    description="Download FX interval price data using the marketdata Helm chart image",
+    description="Download FX M15 price bars using the marketdata Helm chart image",
     schedule="*/15 * * * 1-5",
-    start_date=datetime(2026, 4, 1),
-    catchup=False,
+    start_date=datetime(2012, 1, 1),
+    catchup=True,
     tags=["marketdata", "pricedata"],
 ) as dag:
 
     download_price_data = KubernetesPodOperator(
-        task_id="download_interval_price_data",
-        name="download-interval-price-data",
+        task_id="download_M15_price_bars",
+        name="download-m15-price-bars",
         namespace="airflow",
         image="731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-marketdata-download-interval-price-data:latest",
         image_pull_policy="Always",
@@ -38,6 +38,7 @@ with DAG(
         env_vars=[
             k8s.V1EnvVar(name="FX_SYMBOL", value="USDJPY"),
             k8s.V1EnvVar(name="FX_INTERVAL", value="15"),
+            k8s.V1EnvVar(name="EXECUTION_TS", value="{{ data_interval_end.to_iso8601_string() }}"),
         ],
         env_from=[
             k8s.V1EnvFromSource(
