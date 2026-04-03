@@ -14,6 +14,7 @@ default_args = {
     "owner": "fintech",
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
+    "depends_on_past": True,
 }
 
 with DAG(
