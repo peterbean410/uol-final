@@ -44,6 +44,9 @@ with DAG(
         env_from=[
             k8s.V1EnvFromSource(
                 secret_ref=k8s.V1SecretEnvSource(name="marketdata-credentials")
+            ),
+            k8s.V1EnvFromSource(
+                secret_ref=k8s.V1SecretEnvSource(name="airflow-s3-marketdata")
             )
         ],
         container_resources=k8s.V1ResourceRequirements(
