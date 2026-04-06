@@ -42,7 +42,7 @@ with DAG(
             name=f"download-{interval.lower()}-price-bars",
             namespace="airflow",
             image=_ECR_IMAGE,
-            image_pull_policy="Always",
+            image_pull_policy="IfNotPresent",
             image_pull_secrets=[k8s.V1LocalObjectReference(name="ecr-registry-credentials")],
             service_account_name="airflow-worker",
             cmds=["python", "marketdata/usecases/download-interval-price-data.py"],
