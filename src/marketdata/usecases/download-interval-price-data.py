@@ -25,6 +25,7 @@ from marketdata.pricedata.price_ticks import get_price_ticks
 INTERVAL_TO_MINUTES = {
     "M1": 1, "M2": 2, "M3": 3, "M4": 4, "M5": 5, "M10": 10,
     "M15": 15, "M30": 30, "H1": 60, "H4": 240, "H12": 720, "D1": 1440,
+    "W1": 10080,
 }
 
 

@@ -26,6 +26,7 @@ from commons.python.appconfig import AppConfig
 INTERVAL_TO_PERIOD = {
     1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 10: 6,
     15: 7, 30: 8, 60: 9, 240: 10, 720: 11, 1440: 12,
+    10080: 13,
 }
 
 PRICE_DIVISOR = 100_000
