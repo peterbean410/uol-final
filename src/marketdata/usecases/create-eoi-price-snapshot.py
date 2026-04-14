@@ -9,7 +9,7 @@ Environment variables:
     FX_SYMBOL: The FX symbol (e.g. 'USDJPY')
     INTERVAL: The interval string (e.g. 'M15', 'H1', 'D1')
     EXECUTION_TS: ISO-8601 timestamp marking the end of the scheduled window
-    TIME_WINDOW_IN_MINUTES: The partition granularity in minutes (e.g. 60, 1440)
+    TIME_WINDOW_IN_MINUTES: The partition granularity in minutes (e.g. 60, 1440, 43200)
 """
 
 import io
@@ -22,6 +22,7 @@ import pandas as pd
 from commons.python.appconfig import AppConfig
 
 DAILY_MINUTES = 1440
+VALID_TIME_WINDOWS = {60, 1440, 43200}
 
 
 def _partition_prefix(fx_symbol: str, interval: str, dt: datetime, time_window_minutes: int) -> str:
@@ -75,6 +76,46 @@ def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str, s3) -> None:
     print(f"Uploaded to s3://{bucket}/{key}")
 
 
+def create_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
+                    time_window_minutes: int, s3, bucket: str) -> pd.DataFrame:
+    """Create an EOI snapshot by merging current and previous partitions.
+
+    Raises:
+        ValueError: If time_window_minutes is not 60 or 1440 or 43200.
+    """
+    if time_window_minutes not in VALID_TIME_WINDOWS:
+        raise ValueError(
+            f"Invalid TIME_WINDOW_IN_MINUTES={time_window_minutes}. Must be one of {sorted(VALID_TIME_WINDOWS)}."
+        )
+
+    current_prefix = _partition_prefix(fx_symbol, interval, end_dt, time_window_minutes)
+    prev_dt = _previous_partition_dt(end_dt, time_window_minutes)
+    prev_prefix = _partition_prefix(fx_symbol, interval, prev_dt, time_window_minutes)
+
+    print(f"Loading current partition: {current_prefix}")
+    df_current = _load_partition(s3, bucket, current_prefix)
+
+    print(f"Loading previous partition: {prev_prefix}")
+    df_previous = _load_partition(s3, bucket, prev_prefix)
+
+    df = pd.concat([df_previous, df_current], ignore_index=True)
+
+    if df.empty:
+        print("No data found in either partition.")
+        return df
+
+    df.drop_duplicates(subset=["Timestamp", "Symbol"], keep="last", inplace=True)
+    df.sort_values("Timestamp", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    snapshot_key = _build_snapshot_key(fx_symbol, interval, end_dt, time_window_minutes)
+    _upload_to_s3(df, bucket, snapshot_key, s3)
+    print(f"Snapshot contains {len(df)} rows")
+    print(df.tail(15).to_string(index=False))
+
+    return df
+
+
 if __name__ == "__main__":
     config = AppConfig()
     fx_symbol = os.environ.get("FX_SYMBOL", "USDJPY")
@@ -91,26 +132,4 @@ if __name__ == "__main__":
     s3 = boto3.client("s3")
     bucket = config.s3_bucket
 
-    current_prefix = _partition_prefix(fx_symbol, interval, end_dt, time_window)
-    prev_dt = _previous_partition_dt(end_dt, time_window)
-    prev_prefix = _partition_prefix(fx_symbol, interval, prev_dt, time_window)
-
-    print(f"Loading current partition: {current_prefix}")
-    df_current = _load_partition(s3, bucket, current_prefix)
-
-    print(f"Loading previous partition: {prev_prefix}")
-    df_previous = _load_partition(s3, bucket, prev_prefix)
-
-    df = pd.concat([df_previous, df_current], ignore_index=True)
-
-    if df.empty:
-        print("No data found in either partition.")
-    else:
-        df.drop_duplicates(subset=["Timestamp", "Symbol"], inplace=True)
-        df.sort_values("Timestamp", inplace=True)
-        df.reset_index(drop=True, inplace=True)
-
-        snapshot_key = _build_snapshot_key(fx_symbol, interval, end_dt, time_window)
-        _upload_to_s3(df, bucket, snapshot_key, s3)
-        print(f"Snapshot contains {len(df)} rows")
-        print(df.tail(15).to_string(index=False))
+    create_snapshot(fx_symbol, interval, end_dt, time_window, s3, bucket)
