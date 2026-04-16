@@ -67,7 +67,7 @@ if __name__ == "__main__":
     )
 
     if interval == "ticks":
-        df = get_price_ticks(fx_symbol)
+        df = get_price_ticks(fx_symbol, num_ticks=None, end_dt=end_dt, time_window_minutes=time_window)
     else:
         minutes = INTERVAL_TO_MINUTES.get(interval)
         if minutes is None:

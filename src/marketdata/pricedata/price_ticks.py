@@ -152,7 +152,8 @@ class _PriceTickFetcher:
             self._request_ticks(last_ts + 1)
             return
 
-        self._results[self._current_qt] = self._phase_ticks[-self.num_ticks:]
+        kept = self._phase_ticks if self.num_ticks is None else self._phase_ticks[-self.num_ticks:]
+        self._results[self._current_qt] = kept
         self._advance_or_finalize()
 
     def _advance_or_finalize(self):
@@ -204,16 +205,21 @@ class _PriceTickFetcher:
 
 def get_price_ticks(
     fx_symbol: str,
-    num_ticks: int = 100,
+    num_ticks: int | None = 100,
     quote_type: str | None = None,
+    end_dt: datetime | None = None,
+    time_window_minutes: int = 60,
 ) -> pd.DataFrame:
-    """Retrieve the last N price tick updates for an FX symbol.
+    """Retrieve price tick updates for an FX symbol within a configurable time window.
 
     Args:
         fx_symbol: The FX symbol (e.g. "USDJPY", "EURUSD").
         num_ticks: Number of the last price tick updates to retrieve per quote type.
+            When None, all ticks in the window are returned.
         quote_type: "bid", "ask", or None. When None, fetches and returns
             both BID and ASK price ticks combined into a single DataFrame.
+        end_dt: End of the data window. Defaults to datetime.now(tz=timezone.utc).
+        time_window_minutes: How far back from end_dt to fetch. Defaults to 60.
 
     Returns:
         A DataFrame with columns: Timestamp, Symbol, Type, Price.
@@ -245,9 +251,10 @@ def get_price_ticks(
     else:
         quote_types = [QUOTE_TYPE_ASK]
 
-    now = datetime.now(tz=timezone.utc)
-    to_ts = int(now.timestamp() * 1000)
-    from_ts = int((now - timedelta(hours=1)).timestamp() * 1000)
+    if end_dt is None:
+        end_dt = datetime.now(tz=timezone.utc)
+    to_ts = int(end_dt.timestamp() * 1000)
+    from_ts = int((end_dt - timedelta(minutes=time_window_minutes)).timestamp() * 1000)
 
     fetcher = _PriceTickFetcher(
         host, port, config.app_client_id, config.app_client_secret, config.access_token,
