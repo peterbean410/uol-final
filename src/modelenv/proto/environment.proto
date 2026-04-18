@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package environment;
+
+service Environment {
+  rpc Reset(ResetRequest) returns (Observation);
+  rpc Step(Action) returns (StepResponse);
+  rpc Observe(ObserveRequest) returns (Observation);
+  rpc StreamObservations(ObserveRequest) returns (stream Observation);
+}
+
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_TRAINING = 1;
+  MODE_LIVE = 2;
+}
+
+enum ActionType {
+  ACTION_HOLD = 0;
+  ACTION_BUY = 1;
+  ACTION_SELL = 2;
+  ACTION_CLOSE = 3;
+}
+
+enum PositionSide {
+  POSITION_FLAT = 0;
+  POSITION_LONG = 1;
+  POSITION_SHORT = 2;
+}
+
+message ResetRequest {
+  string symbol = 1;
+  string episode_start_ts = 2;
+  string episode_end_ts = 3;
+  int64 seed = 4;
+}
+
+message ObserveRequest {
+  string symbol = 1;
+}
+
+message Action {
+  ActionType action = 1;
+  double size = 2;
+  string client_order_id = 3;
+}
+
+message Bar {
+  int64 timestamp_ns = 1;
+  double open = 2;
+  double high = 3;
+  double low = 4;
+  double close = 5;
+  double volume = 6;
+}
+
+message Position {
+  PositionSide side = 1;
+  double size = 2;
+  double entry_price = 3;
+  double unrealised_pnl = 4;
+  double realised_pnl = 5;
+}
+
+message Fill {
+  string order_id = 1;
+  int64 timestamp_ns = 2;
+  double price = 3;
+  double size = 4;
+  ActionType side = 5;
+  bool partial = 6;
+}
+
+message Observation {
+  int64 timestamp_ns = 1;
+  string symbol = 2;
+  Bar current_bar = 3;
+  repeated Bar recent_bars = 4;
+  Position position = 5;
+  repeated Fill recent_fills = 6;
+  repeated double indicators = 7;
+  bool done = 8;
+}
+
+message StepResponse {
+  Observation observation = 1;
+  double reward = 2;
+  bool done = 3;
+  string info = 4;
+}

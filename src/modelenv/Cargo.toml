@@ -1,0 +1,34 @@
+[package]
+name = "modelenv"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "modelenv"
+path = "src/main.rs"
+
+[dependencies]
+tonic = "0.12"
+prost = "0.13"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+async-trait = "0.1"
+arrow = "53"
+parquet = { version = "53", features = ["async", "object_store"] }
+object_store = { version = "0.11", features = ["aws"] }
+futures = "0.3"
+url = "2"
+chrono = { version = "0.4", features = ["serde"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
