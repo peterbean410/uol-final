@@ -1,159 +1,251 @@
 use crate::proto;
 use super::round_price;
+use std::collections::VecDeque;
 
-/// In-memory simulator tracking position, fills, and PnL for a single symbol.
-/// Used by the training backend; the live backend delegates fills to the broker
-/// but reuses the same PnL bookkeeping for the observation payload.
+/// A closed position record for rolling realised P/L tracking.
+#[derive(Clone, Debug)]
+struct ClosedPosition {
+    pnl: f64,
+    swap: f64,
+    closed_timestamp_ns: i64,
+}
+
+/// In-memory simulator tracking multiple buy-only positions, fills, swap costs,
+/// and rolling 12-month realised P/L for a single symbol.
 pub struct SimEngine {
     pub symbol: String,
-    pub position: proto::Position,
+    pub positions: Vec<proto::Position>,
     pub recent_fills: Vec<proto::Fill>,
+    /// Rolling window of closed position P/L (kept for 12 months).
+    closed_positions: VecDeque<ClosedPosition>,
     /// Spread in price units (not pips). For USD/JPY 0.01 == 1 pip.
     pub spread: f64,
     /// Per-unit transaction cost applied on every fill, in quote currency.
     pub cost_per_unit: f64,
+    /// Swap rate per day for long positions (in price units).
+    pub swap_long_per_day: f64,
     pub order_seq: u64,
+    /// Current environment timestamp (nanoseconds) for swap calculation.
+    pub current_ts_ns: i64,
+    /// Fixed volume per position.
+    pub default_volume: f64,
 }
+
+/// Nanoseconds in one day.
+const NS_PER_DAY: i64 = 86_400_000_000_000;
+
+/// 12 months in nanoseconds (approximate: 365 days).
+const TWELVE_MONTHS_NS: i64 = 365 * NS_PER_DAY;
 
 impl SimEngine {
     pub fn new(symbol: String, spread: f64, cost_per_unit: f64) -> Self {
         Self {
             symbol,
-            position: proto::Position {
-                side: proto::PositionSide::PositionFlat as i32,
-                size: 0.0,
-                entry_price: 0.0,
-                unrealised_pnl: 0.0,
-                realised_pnl: 0.0,
-            },
+            positions: Vec::new(),
             recent_fills: Vec::new(),
+            closed_positions: VecDeque::new(),
             spread,
             cost_per_unit,
+            swap_long_per_day: 0.0,
             order_seq: 0,
+            current_ts_ns: 0,
+            default_volume: 1.0,
         }
     }
 
     pub fn reset(&mut self) {
-        self.position = proto::Position {
-            side: proto::PositionSide::PositionFlat as i32,
-            size: 0.0,
-            entry_price: 0.0,
-            unrealised_pnl: 0.0,
-            realised_pnl: 0.0,
-        };
+        self.positions.clear();
         self.recent_fills.clear();
+        self.closed_positions.clear();
         self.order_seq = 0;
+        self.current_ts_ns = 0;
     }
 
+    /// Update unrealised P/L on all open positions against the current mid price.
     pub fn mark_to_market(&mut self, mid_price: f64) {
-        let side = proto::PositionSide::try_from(self.position.side).unwrap_or(proto::PositionSide::PositionFlat);
-        self.position.unrealised_pnl = match side {
-            proto::PositionSide::PositionFlat => 0.0,
-            proto::PositionSide::PositionLong => (mid_price - self.position.entry_price) * self.position.size,
-            proto::PositionSide::PositionShort => (self.position.entry_price - mid_price) * self.position.size,
-        };
+        for pos in &mut self.positions {
+            pos.unrealised_pnl = (mid_price - pos.entry_price) * self.default_volume;
+        }
     }
 
-    /// Apply an action at the given mid price. Returns realised PnL delta and the fill, if any.
+    /// Accrue daily swap on all open positions. Call once per simulated day
+    /// (when the bar crosses a rollover boundary).
+    pub fn accrue_swap(&mut self, days: f64) {
+        for pos in &mut self.positions {
+            pos.swap += self.swap_long_per_day * days * self.default_volume;
+        }
+    }
+
+    /// Realised P/L over the trailing 12 months, inclusive of swap costs.
+    pub fn realised_pnl_12m(&self) -> f64 {
+        let cutoff = self.current_ts_ns - TWELVE_MONTHS_NS;
+        self.closed_positions
+            .iter()
+            .filter(|c| c.closed_timestamp_ns >= cutoff)
+            .map(|c| c.pnl + c.swap)
+            .sum()
+    }
+
+    /// Prune closed positions older than 12 months.
+    fn prune_closed(&mut self) {
+        let cutoff = self.current_ts_ns - TWELVE_MONTHS_NS;
+        while self.closed_positions.front().is_some_and(|c| c.closed_timestamp_ns < cutoff) {
+            self.closed_positions.pop_front();
+        }
+    }
+
+    /// Apply a discrete action at the given mid price and timestamp.
+    /// Returns the realised P/L delta from this step.
     pub fn apply(
         &mut self,
         action: proto::ActionType,
-        size: f64,
         mid_price: f64,
         ts_ns: i64,
         client_order_id: String,
-    ) -> (f64, Option<proto::Fill>) {
+    ) -> f64 {
+        self.current_ts_ns = ts_ns;
         let half_spread = self.spread / 2.0;
-        let size = size.max(0.0);
 
-        let (fill_price, fill_side) = match action {
-            proto::ActionType::ActionHold => return (0.0, None),
-            proto::ActionType::ActionBuy => (round_price(&self.symbol, mid_price + half_spread), proto::ActionType::ActionBuy),
-            proto::ActionType::ActionSell => (round_price(&self.symbol, mid_price - half_spread), proto::ActionType::ActionSell),
-            proto::ActionType::ActionClose => {
-                let side = proto::PositionSide::try_from(self.position.side).unwrap_or(proto::PositionSide::PositionFlat);
-                match side {
-                    proto::PositionSide::PositionLong => (round_price(&self.symbol, mid_price - half_spread), proto::ActionType::ActionSell),
-                    proto::PositionSide::PositionShort => (round_price(&self.symbol, mid_price + half_spread), proto::ActionType::ActionBuy),
-                    proto::PositionSide::PositionFlat => return (0.0, None),
+        match action {
+            proto::ActionType::ActionHold => 0.0,
+
+            proto::ActionType::ActionOpenBuy => {
+                let fill_price = round_price(&self.symbol, mid_price + half_spread);
+                self.order_seq += 1;
+                let pos_id = format!("sim-pos-{}", self.order_seq);
+
+                self.positions.push(proto::Position {
+                    position_id: pos_id.clone(),
+                    entry_price: fill_price,
+                    unrealised_pnl: 0.0,
+                    swap: 0.0,
+                    open_timestamp_ns: ts_ns,
+                });
+
+                let cost = self.default_volume * self.cost_per_unit;
+                self.push_fill(fill_price, ts_ns, proto::ActionType::ActionOpenBuy, client_order_id);
+                -cost
+            }
+
+            proto::ActionType::ActionCloseMostLoss => {
+                if self.positions.is_empty() {
+                    return 0.0;
                 }
+                let idx = self.positions
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| a.unrealised_pnl.partial_cmp(&b.unrealised_pnl).unwrap())
+                    .map(|(i, _)| i)
+                    .unwrap();
+                self.close_position(idx, mid_price - half_spread, ts_ns, client_order_id)
             }
-        };
 
-        let close_size = match (action, proto::PositionSide::try_from(self.position.side)) {
-            (proto::ActionType::ActionClose, _) => self.position.size,
-            (proto::ActionType::ActionBuy, Ok(proto::PositionSide::PositionShort)) => size.min(self.position.size),
-            (proto::ActionType::ActionSell, Ok(proto::PositionSide::PositionLong)) => size.min(self.position.size),
-            _ => 0.0,
-        };
+            proto::ActionType::ActionCloseMostProfit => {
+                if self.positions.is_empty() {
+                    return 0.0;
+                }
+                let idx = self.positions
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.unrealised_pnl.partial_cmp(&b.unrealised_pnl).unwrap())
+                    .map(|(i, _)| i)
+                    .unwrap();
+                self.close_position(idx, mid_price - half_spread, ts_ns, client_order_id)
+            }
 
-        let mut realised_delta = 0.0;
-        if close_size > 0.0 {
-            let current_side = proto::PositionSide::try_from(self.position.side).unwrap_or(proto::PositionSide::PositionFlat);
-            realised_delta = match current_side {
-                proto::PositionSide::PositionLong => (fill_price - self.position.entry_price) * close_size,
-                proto::PositionSide::PositionShort => (self.position.entry_price - fill_price) * close_size,
-                proto::PositionSide::PositionFlat => 0.0,
-            };
-            self.position.realised_pnl += realised_delta;
-            self.position.size -= close_size;
-            if self.position.size.abs() < f64::EPSILON {
-                self.position.size = 0.0;
-                self.position.side = proto::PositionSide::PositionFlat as i32;
-                self.position.entry_price = 0.0;
+            proto::ActionType::ActionCloseAllLoss => {
+                let indices: Vec<usize> = self.positions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.unrealised_pnl < 0.0)
+                    .map(|(i, _)| i)
+                    .collect();
+                self.close_positions_by_indices(indices, mid_price - half_spread, ts_ns, client_order_id)
+            }
+
+            proto::ActionType::ActionCloseAllProfit => {
+                let indices: Vec<usize> = self.positions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.unrealised_pnl > 0.0)
+                    .map(|(i, _)| i)
+                    .collect();
+                self.close_positions_by_indices(indices, mid_price - half_spread, ts_ns, client_order_id)
             }
         }
+    }
 
-        let open_size = match action {
-            proto::ActionType::ActionClose => 0.0,
-            _ => (size - close_size).max(0.0),
-        };
-        if open_size > 0.0 {
-            let new_side = match fill_side {
-                proto::ActionType::ActionBuy => proto::PositionSide::PositionLong,
-                proto::ActionType::ActionSell => proto::PositionSide::PositionShort,
-                _ => proto::PositionSide::PositionFlat,
-            };
-            if self.position.size == 0.0 {
-                self.position.side = new_side as i32;
-                self.position.entry_price = fill_price;
-                self.position.size = open_size;
+    fn close_position(
+        &mut self,
+        idx: usize,
+        fill_price: f64,
+        ts_ns: i64,
+        client_order_id: String,
+    ) -> f64 {
+        let pos = self.positions.remove(idx);
+        let fill_price = round_price(&self.symbol, fill_price);
+        let raw_pnl = (fill_price - pos.entry_price) * self.default_volume;
+        let cost = self.default_volume * self.cost_per_unit;
+        let realised = raw_pnl - cost;
+
+        self.closed_positions.push_back(ClosedPosition {
+            pnl: realised,
+            swap: pos.swap,
+            closed_timestamp_ns: ts_ns,
+        });
+        self.prune_closed();
+
+        self.push_fill(fill_price, ts_ns, proto::ActionType::ActionCloseMostLoss, client_order_id);
+        realised
+    }
+
+    fn close_positions_by_indices(
+        &mut self,
+        mut indices: Vec<usize>,
+        fill_price: f64,
+        ts_ns: i64,
+        client_order_id: String,
+    ) -> f64 {
+        // Remove from highest index first to avoid shifting.
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        let mut total = 0.0;
+        for (i, idx) in indices.into_iter().enumerate() {
+            let oid = if i == 0 {
+                client_order_id.clone()
             } else {
-                let existing = self.position.size;
-                let blended = (self.position.entry_price * existing + fill_price * open_size)
-                    / (existing + open_size);
-                self.position.entry_price = round_price(&self.symbol, blended);
-                self.position.size += open_size;
-            }
+                format!("{}-{}", client_order_id, i)
+            };
+            total += self.close_position(idx, fill_price, ts_ns, oid);
         }
+        total
+    }
 
-        let filled_size = close_size + open_size;
-        let costs = filled_size * self.cost_per_unit;
-        self.position.realised_pnl -= costs;
-        realised_delta -= costs;
-
+    fn push_fill(
+        &mut self,
+        price: f64,
+        ts_ns: i64,
+        side: proto::ActionType,
+        client_order_id: String,
+    ) {
         self.order_seq += 1;
         let order_id = if client_order_id.is_empty() {
             format!("sim-{}", self.order_seq)
         } else {
             client_order_id
         };
-
         let fill = proto::Fill {
             order_id,
             timestamp_ns: ts_ns,
-            price: fill_price,
-            size: filled_size,
-            side: fill_side as i32,
+            price,
+            size: self.default_volume,
+            side: side as i32,
             partial: false,
         };
-        self.recent_fills.push(fill.clone());
+        self.recent_fills.push(fill);
         if self.recent_fills.len() > 64 {
             let overflow = self.recent_fills.len() - 64;
             self.recent_fills.drain(0..overflow);
         }
-
-        (realised_delta, Some(fill))
     }
 }
 
@@ -166,27 +258,76 @@ mod tests {
     }
 
     #[test]
-    fn buy_then_close_realises_pnl_with_spread() {
+    fn open_buy_creates_position() {
         let mut e = engine();
-        let (_, fill) = e.apply(proto::ActionType::ActionBuy, 1.0, 150.000, 0, String::new());
-        assert!(fill.is_some());
-        assert_eq!(e.position.side, proto::PositionSide::PositionLong as i32);
-        // buy at mid+half_spread = 150.005
-        assert!((e.position.entry_price - 150.005).abs() < 1e-6);
-
-        let (delta, _) = e.apply(proto::ActionType::ActionClose, 0.0, 150.200, 1, String::new());
-        // close at 150.200 - 0.005 = 150.195 → pnl = (150.195 - 150.005) * 1 = 0.190
-        assert!((delta - 0.190).abs() < 1e-6);
-        assert_eq!(e.position.side, proto::PositionSide::PositionFlat as i32);
+        e.apply(proto::ActionType::ActionOpenBuy, 150.000, 1000, String::new());
+        assert_eq!(e.positions.len(), 1);
+        // buy at mid + half_spread = 150.005
+        assert!((e.positions[0].entry_price - 150.005).abs() < 1e-6);
     }
 
     #[test]
-    fn sell_updates_position_and_mark_to_market() {
+    fn close_most_loss_removes_worst() {
         let mut e = engine();
-        e.apply(proto::ActionType::ActionSell, 2.0, 150.000, 0, String::new());
-        assert_eq!(e.position.side, proto::PositionSide::PositionShort as i32);
-        e.mark_to_market(149.800);
-        // short 2 @ 149.995, mtm at 149.800 → (149.995 - 149.800) * 2 = 0.390
-        assert!((e.position.unrealised_pnl - 0.390).abs() < 1e-6);
+        e.apply(proto::ActionType::ActionOpenBuy, 150.000, 1000, "a".into());
+        e.apply(proto::ActionType::ActionOpenBuy, 151.000, 2000, "b".into());
+        // Mark to market at 150.500, first position up, second down
+        e.mark_to_market(150.500);
+        assert!(e.positions[0].unrealised_pnl > 0.0);
+        assert!(e.positions[1].unrealised_pnl < 0.0);
+
+        e.apply(proto::ActionType::ActionCloseMostLoss, 150.500, 3000, "c".into());
+        assert_eq!(e.positions.len(), 1);
+        // The remaining position should be the profitable one (entered at 150.005)
+        assert!((e.positions[0].entry_price - 150.005).abs() < 1e-6);
+    }
+
+    #[test]
+    fn close_all_loss_removes_all_losing() {
+        let mut e = engine();
+        e.apply(proto::ActionType::ActionOpenBuy, 150.000, 1000, "a".into());
+        e.apply(proto::ActionType::ActionOpenBuy, 151.000, 2000, "b".into());
+        e.apply(proto::ActionType::ActionOpenBuy, 152.000, 3000, "c".into());
+        e.mark_to_market(150.800);
+        // First position profitable, second and third at a loss
+        e.apply(proto::ActionType::ActionCloseAllLoss, 150.800, 4000, "d".into());
+        assert_eq!(e.positions.len(), 1);
+        assert!((e.positions[0].entry_price - 150.005).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hold_does_nothing() {
+        let mut e = engine();
+        e.apply(proto::ActionType::ActionOpenBuy, 150.000, 1000, "a".into());
+        let delta = e.apply(proto::ActionType::ActionHold, 150.500, 2000, String::new());
+        assert_eq!(delta, 0.0);
+        assert_eq!(e.positions.len(), 1);
+    }
+
+    #[test]
+    fn swap_accrues_on_open_positions() {
+        let mut e = engine();
+        e.swap_long_per_day = -0.05; // negative swap (cost)
+        e.apply(proto::ActionType::ActionOpenBuy, 150.000, 1000, "a".into());
+        e.accrue_swap(1.0);
+        assert!((e.positions[0].swap - (-0.05)).abs() < 1e-9);
+        e.accrue_swap(1.0);
+        assert!((e.positions[0].swap - (-0.10)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn realised_pnl_12m_includes_swap() {
+        let mut e = engine();
+        e.swap_long_per_day = -0.05;
+        e.apply(proto::ActionType::ActionOpenBuy, 150.000, 1000, "a".into());
+        e.accrue_swap(1.0);
+        e.mark_to_market(150.200);
+        e.apply(proto::ActionType::ActionCloseMostProfit, 150.200, 2000, "b".into());
+
+        let pnl_with_swap = e.realised_pnl_12m();
+        // Raw close P/L: (150.195 - 150.005) * 1.0 = 0.190
+        // Swap cost: 0.05 (absolute value, subtracted)
+        // Net: 0.190 - 0.05 = 0.14
+        assert!((pnl_with_swap - 0.14).abs() < 1e-6, "pnl_with_swap={pnl_with_swap}");
     }
 }

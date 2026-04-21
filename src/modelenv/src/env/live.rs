@@ -1,16 +1,14 @@
-use super::{sim::SimEngine, Environment, StepOutcome};
+use super::{Environment, StepOutcome};
 use crate::proto;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 /// Live broker adapter. Production implementations wire this up to cTrader /
-/// FIX / broker SDKs. The skeleton validates actions and keeps the same
-/// observation shape as the training backend so the model cannot tell them
-/// apart. Actions in live mode have real financial consequences; every
-/// branch here must either forward to the broker or refuse with an error.
+/// FIX / broker SDKs. Actions in live mode have real financial consequences;
+/// every branch here must either forward to the broker or refuse with an error.
 #[async_trait]
 pub trait BrokerGateway: Send + Sync {
-    async fn sync_state(&self, symbol: &str) -> Result<proto::Position>;
+    async fn sync_positions(&self, symbol: &str) -> Result<Vec<proto::Position>>;
     async fn current_bar(&self, symbol: &str) -> Result<proto::Bar>;
     async fn submit(&self, symbol: &str, action: &proto::Action) -> Result<proto::Fill>;
 }
@@ -18,17 +16,21 @@ pub trait BrokerGateway: Send + Sync {
 pub struct LiveBackend {
     pub symbol: String,
     pub gateway: Option<Box<dyn BrokerGateway>>,
-    pub sim: SimEngine,
+    pub positions: Vec<proto::Position>,
+    pub recent_fills: Vec<proto::Fill>,
     pub last_bar: Option<proto::Bar>,
+    pub realised_pnl_12m: f64,
 }
 
 impl LiveBackend {
     pub fn new(symbol: String) -> Result<Self> {
         Ok(Self {
-            symbol: symbol.clone(),
+            symbol,
             gateway: None,
-            sim: SimEngine::new(symbol, 0.01, 0.0),
+            positions: Vec::new(),
+            recent_fills: Vec::new(),
             last_bar: None,
+            realised_pnl_12m: 0.0,
         })
     }
 
@@ -49,20 +51,80 @@ impl LiveBackend {
             symbol: self.symbol.clone(),
             current_bar: self.last_bar.clone(),
             recent_bars: Vec::new(),
-            position: Some(self.sim.position.clone()),
-            recent_fills: self.sim.recent_fills.clone(),
+            positions: self.positions.clone(),
+            realised_pnl_12m: self.realised_pnl_12m,
+            recent_fills: self.recent_fills.clone(),
             indicators: Vec::new(),
             done: false,
         }
     }
 
     fn validate(&self, action: &proto::Action) -> Result<()> {
-        if !action.size.is_finite() || action.size < 0.0 {
-            return Err(anyhow!("invalid action size: {}", action.size));
-        }
         let _ = proto::ActionType::try_from(action.action)
             .map_err(|_| anyhow!("unknown action type {}", action.action))?;
         Ok(())
+    }
+
+    /// Compare internal state against broker-reported positions and log discrepancies.
+    fn reconcile(&self, broker_positions: &[proto::Position]) {
+        // Position count mismatch.
+        if self.positions.len() != broker_positions.len() {
+            tracing::warn!(
+                internal = self.positions.len(),
+                broker = broker_positions.len(),
+                "reconciliation: position count mismatch"
+            );
+        }
+
+        // Per-position checks (match by position_id).
+        for internal in &self.positions {
+            if let Some(broker) = broker_positions.iter().find(|b| b.position_id == internal.position_id) {
+                let price_diff = (internal.entry_price - broker.entry_price).abs();
+                if price_diff > 1e-6 {
+                    tracing::warn!(
+                        position_id = %internal.position_id,
+                        internal_price = internal.entry_price,
+                        broker_price = broker.entry_price,
+                        "reconciliation: entry price drift"
+                    );
+                }
+
+                let pnl_diff = (internal.unrealised_pnl - broker.unrealised_pnl).abs();
+                if pnl_diff > 0.01 {
+                    tracing::warn!(
+                        position_id = %internal.position_id,
+                        internal_pnl = internal.unrealised_pnl,
+                        broker_pnl = broker.unrealised_pnl,
+                        "reconciliation: unrealised P/L divergence"
+                    );
+                }
+
+                let swap_diff = (internal.swap - broker.swap).abs();
+                if swap_diff > 0.01 {
+                    tracing::warn!(
+                        position_id = %internal.position_id,
+                        internal_swap = internal.swap,
+                        broker_swap = broker.swap,
+                        "reconciliation: swap cost divergence"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    position_id = %internal.position_id,
+                    "reconciliation: internal position not found on broker"
+                );
+            }
+        }
+
+        // Check for broker positions we don't know about.
+        for broker in broker_positions {
+            if !self.positions.iter().any(|p| p.position_id == broker.position_id) {
+                tracing::warn!(
+                    position_id = %broker.position_id,
+                    "reconciliation: unexpected position on broker"
+                );
+            }
+        }
     }
 }
 
@@ -71,31 +133,41 @@ impl Environment for LiveBackend {
     async fn reset(&mut self, req: proto::ResetRequest) -> Result<proto::Observation> {
         let symbol = if req.symbol.is_empty() { self.symbol.clone() } else { req.symbol };
         self.symbol = symbol.clone();
-        let (position, bar) = {
+        let (positions, bar) = {
             let gw = self.require_gateway()?;
-            let position = gw.sync_state(&self.symbol).await?;
+            let positions = gw.sync_positions(&self.symbol).await?;
             let bar = gw.current_bar(&self.symbol).await?;
-            (position, bar)
+            (positions, bar)
         };
-        self.sim.position = position;
+        self.positions = positions;
         self.last_bar = Some(bar);
+        self.recent_fills.clear();
         Ok(self.build_observation())
     }
 
     async fn step(&mut self, action: proto::Action) -> Result<StepOutcome> {
         self.validate(&action)?;
-        let (fill, position, bar) = {
+        let (fill, broker_positions, bar) = {
             let gw = self.require_gateway()?;
             let fill = gw.submit(&self.symbol, &action).await?;
-            // Resync position from broker rather than inferring it; the broker
-            // is the source of truth once the order leaves the gateway.
-            let position = gw.sync_state(&self.symbol).await?;
+            let positions = gw.sync_positions(&self.symbol).await?;
             let bar = gw.current_bar(&self.symbol).await?;
-            (fill, position, bar)
+            (fill, positions, bar)
         };
-        self.sim.recent_fills.push(fill);
-        self.sim.position = position;
+
+        self.recent_fills.push(fill);
+        if self.recent_fills.len() > 64 {
+            let overflow = self.recent_fills.len() - 64;
+            self.recent_fills.drain(0..overflow);
+        }
+
+        // Reconcile before updating internal state.
+        self.reconcile(&broker_positions);
+
+        // Broker is source of truth, adopt its state.
+        self.positions = broker_positions;
         self.last_bar = Some(bar);
+
         let obs = self.build_observation();
         Ok(StepOutcome { observation: obs, reward: 0.0, done: false, info: String::from("live") })
     }
