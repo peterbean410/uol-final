@@ -195,11 +195,12 @@ class _PriceTickFetcher:
                     "Price": t["price_raw"] / PRICE_DIVISOR,
                 })
 
-        df = pd.DataFrame(rows)
+        columns = ["Timestamp", "Symbol", "Type", "Price"]
+        df = pd.DataFrame(rows, columns=columns)
         if not df.empty:
             df.sort_values("Timestamp", inplace=True)
             df.reset_index(drop=True, inplace=True)
-        self.result_df = df[["Timestamp", "Symbol", "Type", "Price"]]
+        self.result_df = df[columns]
         reactor.stop()
 
 
