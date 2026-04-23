@@ -27,10 +27,6 @@ _ECR_IMAGE = (
 
 _INTERVALS = ["D1", "W1"]
 
-_TIME_WINDOW_JINJA = (
-    "{{ ((data_interval_end - data_interval_start).total_seconds() // 60) | int }}"
-)
-
 with DAG(
     dag_id="create_eom_snapshot",
     default_args=default_args,
@@ -63,7 +59,7 @@ with DAG(
             env_vars=[
                 k8s.V1EnvVar(name="FX_SYMBOL", value="USDJPY"),
                 k8s.V1EnvVar(name="INTERVAL", value=interval),
-                k8s.V1EnvVar(name="TIME_WINDOW_IN_MINUTES", value=_TIME_WINDOW_JINJA),
+                k8s.V1EnvVar(name="TIME_WINDOW_IN_MINUTES", value="43200"),
                 k8s.V1EnvVar(name="EXECUTION_TS", value="{{ data_interval_end.to_iso8601_string() }}"),
             ],
             env_from=[
