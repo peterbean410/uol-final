@@ -29,7 +29,7 @@ with DAG(
     dag_id="download_tick_data",
     default_args=default_args,
     description="Download FX tick data per minute using the marketdata Helm chart image",
-    schedule="* * * * 1-5",
+    schedule="0 * * * 1-5",
     start_date=datetime(2021, 1, 1),
     catchup=True,
     max_active_runs=4,
@@ -48,7 +48,7 @@ with DAG(
         env_vars=[
             k8s.V1EnvVar(name="FX_SYMBOL", value="USDJPY"),
             k8s.V1EnvVar(name="INTERVAL", value="ticks"),
-            k8s.V1EnvVar(name="TIME_WINDOW_IN_MINUTES", value="1"),
+            k8s.V1EnvVar(name="TIME_WINDOW_IN_MINUTES", value="60"),
             k8s.V1EnvVar(name="EXECUTION_TS", value="{{ data_interval_end.to_iso8601_string() }}"),
         ],
         env_from=[
