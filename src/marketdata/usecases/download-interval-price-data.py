@@ -94,4 +94,5 @@ if __name__ == "__main__":
     else:
         s3_key = _build_s3_key(fx_symbol, interval, end_dt, time_window)
         _upload_to_s3(df, config.s3_bucket, s3_key)
+        print(df.head(15).to_string(index=False))
         print(df.tail(15).to_string(index=False))

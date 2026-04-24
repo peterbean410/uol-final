@@ -43,7 +43,7 @@ with DAG(
     default_args=default_args,
     description="Aggregate 24h of M1 bars into H1/H4/D1 interval-price partitions using the marketdata Helm chart image",
     schedule="0 0 * * 2-6",
-    start_date=datetime(2020, 1, 1),
+    start_date=datetime(2020, 1, 2),
     catchup=True,
     tags=["marketdata", "snapshot"],
 ) as dag:
