@@ -26,9 +26,18 @@ VALID_TIME_WINDOWS = {60, 1440, 43200}
 
 
 def _partition_prefix(fx_symbol: str, interval: str, dt: datetime, time_window_minutes: int) -> str:
-    """Build the S3 prefix for an interval-price partition."""
+    """Build the S3 prefix for an interval-price partition.
+
+    Matches the three-tier layout produced by download-interval-price-data.py:
+      - > 1440 min: year/month
+      - == 1440 min: year/month/day
+      - < 1440 min: year/month/day/hour
+    """
     base = f"marketdata/interval-price/symbol={fx_symbol}/interval={interval}"
-    prefix = f"{base}/year={dt.year}/month={dt.month:02d}/day={dt.day:02d}"
+    prefix = f"{base}/year={dt.year}/month={dt.month:02d}"
+    if time_window_minutes > DAILY_MINUTES:
+        return prefix + "/"
+    prefix += f"/day={dt.day:02d}"
     if time_window_minutes < DAILY_MINUTES:
         prefix += f"/hour={dt.hour:02d}"
     return prefix + "/"
@@ -58,10 +67,21 @@ def _load_partition(s3, bucket: str, prefix: str) -> pd.DataFrame:
 
 
 def _build_snapshot_key(fx_symbol: str, interval: str, dt: datetime, time_window_minutes: int) -> str:
-    """Build the S3 key for the EOI snapshot."""
+    """Build the S3 key for the EOI snapshot.
+
+    - > 1440 min: marketdata/interval-price/.../year/month/{ts}.parquet
+    - == 1440 min: marketdata/eod-snapshot/.../year/month/day/{ts}.parquet
+    - < 1440 min: marketdata/eod-snapshot/.../year/month/day/hour/{ts}.parquet
+    """
     ts = dt.strftime("%Y%m%dT%H%M%SZ")
+    year_month = f"year={dt.year}/month={dt.month:02d}"
+
+    if time_window_minutes > DAILY_MINUTES:
+        base = f"marketdata/interval-price/symbol={fx_symbol}/interval={interval}"
+        return f"{base}/{year_month}/{ts}.parquet"
+
     base = f"marketdata/eod-snapshot/symbol={fx_symbol}/interval={interval}"
-    key = f"{base}/year={dt.year}/month={dt.month:02d}/day={dt.day:02d}"
+    key = f"{base}/{year_month}/day={dt.day:02d}"
     if time_window_minutes < DAILY_MINUTES:
         key += f"/hour={dt.hour:02d}"
     return f"{key}/{ts}.parquet"

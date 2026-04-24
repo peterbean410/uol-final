@@ -67,6 +67,7 @@ def test_daily_snapshot_merge_and_path(mock_load, mock_upload):
     s3_key = mock_upload.call_args[0][2]
 
     # S3 path assertions
+    assert s3_key.startswith("marketdata/eod-snapshot/")
     assert f"symbol={FX_SYMBOL}" in s3_key
     assert f"interval={INTERVAL}" in s3_key
     assert "year=2026/month=01/day=01" in s3_key
@@ -87,7 +88,7 @@ def test_daily_snapshot_merge_and_path(mock_load, mock_upload):
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_partition")
 def test_hourly_snapshot_path_contains_hour(mock_load, mock_upload):
-    """1h window: S3 path includes hour component."""
+    """1h window: S3 path includes hour component and uses eod-snapshot prefix."""
     mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 60, MagicMock(), BUCKET)
@@ -97,8 +98,28 @@ def test_hourly_snapshot_path_contains_hour(mock_load, mock_upload):
     uploaded_df = mock_upload.call_args[0][0]
     s3_key = mock_upload.call_args[0][2]
 
-    assert "hour=10" in s3_key
+    assert s3_key.startswith("marketdata/eod-snapshot/")
+    assert "year=2026/month=01/day=01/hour=10" in s3_key
     assert len(uploaded_df) == 3
+
+
+# ── Test Case 2b: Monthly snapshot (> 24h window) ───────────────────
+
+@patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_partition")
+def test_monthly_snapshot_uses_interval_price_prefix(mock_load, mock_upload):
+    """> 24h window: S3 path uses interval-price prefix, year/month only."""
+    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+
+    df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 43200, MagicMock(), BUCKET)
+
+    assert mock_upload.call_count == 1
+    s3_key = mock_upload.call_args[0][2]
+
+    assert s3_key.startswith("marketdata/interval-price/")
+    assert "year=2026/month=01" in s3_key
+    assert "day=" not in s3_key
+    assert "hour=" not in s3_key
 
 
 # ── Test Case 3: Missing previous partition ──────────────────────────
