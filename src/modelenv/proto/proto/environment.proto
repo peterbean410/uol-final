@@ -67,6 +67,8 @@ message Position {
   double unrealised_pnl = 3;
   double swap = 4;
   int64 open_timestamp_ns = 5;
+  double volume = 6;
+  int32 side = 7;  // 0=BUY, 1=SELL
 }
 
 message Fill {

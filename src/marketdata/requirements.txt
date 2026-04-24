@@ -6,3 +6,4 @@ python-dotenv
 pytest
 pyarrow
 boto3
+python-dateutil

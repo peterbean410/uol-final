@@ -110,25 +110,37 @@ impl Position {
 
     /// Convert to proto Position
     pub fn to_proto(&self) -> modelenv_proto::Position {
+        let side = match self.side {
+            Side::Buy => 0,
+            Side::Sell => 1,
+        };
         modelenv_proto::Position {
             position_id: self.position_id.clone(),
             entry_price: self.entry_price,
             unrealised_pnl: self.unrealised_pnl,
             swap: self.swap,
             open_timestamp_ns: self.open_timestamp_ns,
+            volume: self.volume,
+            side,
         }
     }
 
     /// Create a Position from proto Position
     pub fn from_proto(proto: &modelenv_proto::Position) -> Self {
+        let side = match proto.side {
+            0 => Side::Buy,
+            1 => Side::Sell,
+            _ => Side::Buy, // Default to Buy if unknown
+        };
+        
         Position {
             position_id: proto.position_id.clone(),
             entry_price: proto.entry_price,
             unrealised_pnl: proto.unrealised_pnl,
             swap: proto.swap,
             open_timestamp_ns: proto.open_timestamp_ns,
-            volume: 1.0, // Default volume - should be stored in proto
-            side: Side::Buy, // Default side - should be stored in proto
+            volume: proto.volume,
+            side,
             last_swap_accrual_ns: proto.open_timestamp_ns,
         }
     }

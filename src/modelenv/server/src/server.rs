@@ -1,9 +1,11 @@
 // gRPC server implementation for FX RL Model Environment
 use anyhow::Result;
 use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
-use futures::Stream;
+use futures::stream::{self, Stream};
 
 use modelenv_proto::{
     environment_server::Environment, ResetRequest, ObserveRequest, Action, StepResponse,
@@ -14,13 +16,15 @@ use modelenv_core::environment::Environment as CoreEnvironment;
 
 /// Environment service implementation
 pub struct EnvironmentService {
-    environment: CoreEnvironment,
+    environment: Arc<Mutex<CoreEnvironment>>,
 }
 
 impl EnvironmentService {
     /// Create a new EnvironmentService
     pub fn new(environment: CoreEnvironment) -> Self {
-        EnvironmentService { environment }
+        EnvironmentService { 
+            environment: Arc::new(Mutex::new(environment)) 
+        }
     }
 }
 
@@ -29,11 +33,14 @@ type StreamObservationsResponse = Pin<Box<dyn Stream<Item = Result<Observation, 
 
 #[tonic::async_trait]
 impl Environment for EnvironmentService {
+    type StreamObservationsStream = StreamObservationsResponse;
+
     async fn reset(&self, req: Request<ResetRequest>) -> Result<Response<Observation>, Status> {
         let reset_req = req.into_inner();
         
         // Call the environment reset method
-        let observation = self.environment.reset(reset_req)
+        let mut env = self.environment.lock().await;
+        let observation = env.reset(reset_req)
             .await
             .map_err(|e| Status::internal(format!("Reset failed: {}", e)))?;
         
@@ -44,7 +51,8 @@ impl Environment for EnvironmentService {
         let action = req.into_inner();
         
         // Call the environment step method
-        let step_response = self.environment.step(action)
+        let mut env = self.environment.lock().await;
+        let step_response = env.step(action)
             .await
             .map_err(|e| Status::internal(format!("Step failed: {}", e)))?;
         
@@ -55,7 +63,8 @@ impl Environment for EnvironmentService {
         let observe_req = req.into_inner();
         
         // Call the environment observe method
-        let observation = self.environment.observe(observe_req)
+        let env = self.environment.lock().await;
+        let observation = env.observe(observe_req)
             .await
             .map_err(|e| Status::internal(format!("Observe failed: {}", e)))?;
         
@@ -81,7 +90,12 @@ impl Environment for EnvironmentService {
             // For now, just send a single observation and close the stream
             
             // Get initial observation
-            let observation = match env.observe(ObserveRequest { symbol }).await {
+            let observation = {
+                let env = env.lock().await;
+                env.observe(ObserveRequest { symbol }).await
+            };
+            
+            let observation = match observation {
                 Ok(obs) => obs,
                 Err(e) => {
                     let _ = tx.send(Err(Status::internal(format!("Observe failed: {}", e)))).await;
@@ -97,7 +111,13 @@ impl Environment for EnvironmentService {
             // Close the channel
         });
         
-        let stream = Box::pin(tokio_stream::from_iter(rx));
+        let stream = stream::unfold(rx, |mut rx| async move {
+            match rx.recv().await {
+                Some(item) => Some((item, rx)),
+                None => None,
+            }
+        });
+        let stream = Box::pin(stream);
         Ok(Response::new(stream))
     }
 }

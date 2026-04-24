@@ -3,6 +3,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use log::info;
 use modelenv_proto::{Action, ObserveRequest, Observation, ResetRequest, StepResponse, ActionType};
 
 use crate::broker_gateway::BrokerGateway;
@@ -141,21 +142,45 @@ impl Environment {
             }
             Mode::Live => {
                 // Production mode - sync with broker
+                // First, get the broker gateway reference
                 let broker = self.get_broker_gateway()?;
                 
-                // Synchronise positions with broker
+                // Sync positions with broker
                 let broker_positions = broker.sync_positions(&req.symbol).await?;
-                self.positions = broker_positions
-                    .iter()
-                    .map(|p| Position::from_proto(p))
-                    .collect();
+                
+                // Clear all existing internal positions, unrealised P/L, and accumulated swap
+                self.positions.clear();
+                for p in &broker_positions {
+                    let position = Position::from_proto(p);
+                    info!(
+                        "Synchronised position: id={}, entry_price={}, unrealised_pnl={}, swap={}",
+                        position.position_id,
+                        position.entry_price,
+                        position.unrealised_pnl,
+                        position.swap
+                    );
+                    self.positions.push(position);
+                }
                 
                 // Get current bar from broker
-                let _current_bar = broker.current_bar(&req.symbol).await?;
+                let current_bar = broker.current_bar(&req.symbol).await?;
                 
-                // TODO: Initialize episode with broker data
-                // For now, return an error as we need to implement episode initialization from broker data
-                Err(anyhow::anyhow!("Production mode reset not fully implemented"))
+                // Log the current bar
+                info!(
+                    "Fetched current bar: timestamp={}, open={}, high={}, low={}, close={}, volume={}",
+                    current_bar.timestamp_ns,
+                    current_bar.open,
+                    current_bar.high,
+                    current_bar.low,
+                    current_bar.close,
+                    current_bar.volume
+                );
+                
+                // Get initial observation
+                self.observe(ObserveRequest {
+                    symbol: req.symbol,
+                })
+                .await
             }
         }
     }
@@ -224,7 +249,10 @@ impl Environment {
                     timestamp_ns: fill.timestamp_ns,
                     price: fill.price,
                     size: fill.size,
-                    side: ActionType::from_i32(fill.side).unwrap_or(ActionType::ActionHold),
+                    side: match ActionType::try_from(fill.side) {
+                        Ok(action) => action,
+                        Err(_) => ActionType::ActionHold,
+                    },
                     partial: fill.partial,
                 });
                 

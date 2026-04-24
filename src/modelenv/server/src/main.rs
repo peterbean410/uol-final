@@ -1,11 +1,13 @@
 // FX RL Model Environment Server
 mod server;
+mod broker;
 
 use anyhow::Result;
-use modelenv_core::{config::Config, environment::Environment, Mode};
-use std::time::Duration;
+use modelenv_core::{config::{Config, Mode}, environment::Environment};
+
 use tonic::transport::Server;
-use modelenv_proto::{environment_server::EnvironmentServer, EnvironmentService};
+use modelenv_proto::environment_server::EnvironmentServer;
+use crate::server::EnvironmentService;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,9 +26,35 @@ async fn main() -> Result<()> {
     
     // Configure broker gateway if in Production Mode
     if config.mode == Mode::Live && config.is_broker_gateway_configured() {
-        // TODO: Create broker gateway implementation
-        // For now, log that broker gateway is configured but not implemented
-        println!("Broker gateway configured: {:?}", config.broker_gateway);
+        println!("Connecting to broker gateway...");
+        
+        // Try to create broker gateway connection
+        let broker_gateway = broker::try_create_broker_gateway(
+            config.broker_gateway.broker_gateway.as_deref(),
+            config.broker_gateway.broker_addr.as_deref(),
+            config.broker_gateway.broker_username.as_deref(),
+            config.broker_gateway.broker_password.as_deref(),
+            config.broker_gateway.broker_account.as_deref(),
+        )
+        .await?;
+        
+        match broker_gateway {
+            Some(bg) => {
+                environment = environment.with_broker_gateway(bg);
+                println!("Broker gateway connected successfully");
+            }
+            None => {
+                // This shouldn't happen since we checked is_broker_gateway_configured()
+                return Err(anyhow::anyhow!(
+                    "Broker gateway not configured but mode is Live"
+                ));
+            }
+        }
+    } else if config.mode == Mode::Live && !config.is_broker_gateway_configured() {
+        return Err(anyhow::anyhow!(
+            "Production Mode requires broker gateway configuration. \
+            Please provide --broker-gateway and --broker-addr arguments."
+        ));
     }
     
     // Create the gRPC service
