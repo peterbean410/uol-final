@@ -27,6 +27,17 @@ _ECR_IMAGE = (
 
 _TARGET_INTERVALS = ["H1", "H4", "D1"]
 
+
+def _last_m1_hourly_logical_date(_dt, **context):
+    """Logical date of the hourly M1 download covering the last hour of this run.
+
+    The hourly download DAG's `logical_date` equals `data_interval_start`,
+    i.e. one hour before its fire time. The hourly run that fires at our
+    `data_interval_end` covers the final hour of our 24h window.
+    """
+    return context["data_interval_end"] - timedelta(hours=1)
+
+
 with DAG(
     dag_id="aggregate_daily_interval_price_2020",
     default_args=default_args,
@@ -41,7 +52,7 @@ with DAG(
         task_id="wait_for_last_M1_download",
         external_dag_id="download_price_bars_hourly_2020",
         external_task_id="download_M1_price_bars",
-        execution_date_fn=lambda dt: dt - timedelta(hours=1),
+        execution_date_fn=_last_m1_hourly_logical_date,
         poke_interval=300,
         timeout=7200,
         mode="reschedule",
