@@ -35,11 +35,13 @@ def _build_s3_key(
     """Build the S3 object key based on the time window granularity."""
     ts = end_dt.strftime("%Y%m%dT%H%M%SZ")
     base = f"marketdata/interval-price/symbol={fx_symbol}/interval={interval}"
+    year_month = f"year={end_dt.year}/month={end_dt.month:02d}"
 
-    if time_window_minutes >= 1440:
-        return f"{base}/year={end_dt.year}/month={end_dt.month:02d}/day={end_dt.day:02d}/{ts}.parquet"
-
-    return f"{base}/year={end_dt.year}/month={end_dt.month:02d}/day={end_dt.day:02d}/hour={end_dt.hour:02d}/{ts}.parquet"
+    if time_window_minutes > 1440:
+        return f"{base}/{year_month}/{ts}.parquet"
+    if time_window_minutes == 1440:
+        return f"{base}/{year_month}/day={end_dt.day:02d}/{ts}.parquet"
+    return f"{base}/{year_month}/day={end_dt.day:02d}/hour={end_dt.hour:02d}/{ts}.parquet"
 
 
 def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str) -> None:
