@@ -1,0 +1,115 @@
+"""
+Create an end-of-day (EOD) tick snapshot by merging the previous trading
+day's tick partitions with the current day's (so-far) tick partitions and
+uploading the cumulative result to S3.
+
+Usage:
+    python marketdata/usecases/create-eod-tick-snapshot.py
+
+Environment variables:
+    FX_SYMBOL: The FX symbol (e.g. 'USDJPY')
+    EXECUTION_TS: ISO-8601 timestamp marking the end of the scheduled window (UTC)
+"""
+
+import io
+import os
+from datetime import datetime, timedelta, timezone
+
+import boto3
+import pandas as pd
+
+from commons.python.appconfig import AppConfig
+
+TICK_DEDUP_KEYS = ["Timestamp", "Symbol", "Type"]
+
+
+def _partition_prefix(fx_symbol: str, dt: datetime) -> str:
+    """S3 prefix covering every hour partition of ticks for the given calendar day."""
+    return (
+        f"marketdata/interval-price/symbol={fx_symbol}/interval=ticks"
+        f"/year={dt.year}/month={dt.month:02d}/day={dt.day:02d}/"
+    )
+
+
+def _load_partition(s3, bucket: str, prefix: str) -> pd.DataFrame:
+    """Load every parquet file under an S3 prefix (paginated) into one DataFrame."""
+    frames = []
+    paginator = s3.get_paginator("list_objects_v2")
+    empty = True
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith(".parquet"):
+                continue
+            empty = False
+            body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            frames.append(pd.read_parquet(io.BytesIO(body)))
+
+    if empty:
+        print(f"No parquet files found under s3://{bucket}/{prefix}")
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _build_snapshot_key(fx_symbol: str, dt: datetime) -> str:
+    """Snapshot key at `marketdata/eod-tick-snapshot/.../year/month/day/{ts}.parquet`."""
+    ts = dt.strftime("%Y%m%dT%H%M%SZ")
+    return (
+        f"marketdata/eod-tick-snapshot/symbol={fx_symbol}"
+        f"/year={dt.year}/month={dt.month:02d}/day={dt.day:02d}/{ts}.parquet"
+    )
+
+
+def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str, s3) -> None:
+    """Upload a DataFrame as a Parquet file to S3."""
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False)
+    buf.seek(0)
+    s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue())
+    print(f"Uploaded to s3://{bucket}/{key}")
+
+
+def create_snapshot(fx_symbol: str, end_dt: datetime, s3, bucket: str) -> pd.DataFrame:
+    """Merge the previous day's and current day's tick partitions and upload."""
+    current_prefix = _partition_prefix(fx_symbol, end_dt)
+    prev_prefix = _partition_prefix(fx_symbol, end_dt - timedelta(days=1))
+
+    print(f"Loading current partition: {current_prefix}")
+    df_current = _load_partition(s3, bucket, current_prefix)
+
+    print(f"Loading previous partition: {prev_prefix}")
+    df_previous = _load_partition(s3, bucket, prev_prefix)
+
+    df = pd.concat([df_previous, df_current], ignore_index=True)
+
+    if df.empty:
+        print("No data found in either partition.")
+        return df
+
+    df.drop_duplicates(subset=TICK_DEDUP_KEYS, keep="last", inplace=True)
+    df.sort_values("Timestamp", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    key = _build_snapshot_key(fx_symbol, end_dt)
+    _upload_to_s3(df, bucket, key, s3)
+    print(f"Snapshot contains {len(df)} rows")
+    print(df.tail(15).to_string(index=False))
+    return df
+
+
+if __name__ == "__main__":
+    config = AppConfig()
+    fx_symbol = os.environ.get("FX_SYMBOL", "USDJPY")
+    execution_ts = os.environ.get("EXECUTION_TS")
+
+    print(f"FX_SYMBOL={fx_symbol}")
+    print(f"EXECUTION_TS={execution_ts}")
+
+    end_dt = (
+        datetime.fromisoformat(execution_ts).astimezone(timezone.utc)
+        if execution_ts
+        else datetime.now(tz=timezone.utc)
+    )
+
+    s3 = boto3.client("s3")
+    create_snapshot(fx_symbol, end_dt, s3, config.s3_bucket)
