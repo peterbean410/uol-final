@@ -16,15 +16,25 @@ pub async fn load_bars_from_parquet(
     symbol: &str,
     time_interval: &str,
 ) -> Result<Vec<Bar>> {
+    load_bars_from_parquet_with_end_ts(s3_uri, symbol, time_interval, i64::MAX).await
+}
+
+/// Load price bars from a parquet file, stopping at the given end timestamp
+pub async fn load_bars_from_parquet_with_end_ts(
+    s3_uri: &str,
+    symbol: &str,
+    time_interval: &str,
+    end_timestamp_ns: i64,
+) -> Result<Vec<Bar>> {
     // For now, only support local file:// URIs
     if s3_uri.starts_with("file://") {
         let local_path = s3_uri.strip_prefix("file://")
             .ok_or_else(|| anyhow!("Invalid file:// URI"))?;
-        return load_bars_from_local_file(local_path, symbol, time_interval).await;
+        return load_bars_from_local_file_with_end_ts(local_path, symbol, time_interval, end_timestamp_ns).await;
     }
     
     // For local testing, try as a local file path
-    load_bars_from_local_file(s3_uri, symbol, time_interval).await
+    load_bars_from_local_file_with_end_ts(s3_uri, symbol, time_interval, end_timestamp_ns).await
 }
 
 /// Load price bars from a local file
@@ -32,6 +42,16 @@ async fn load_bars_from_local_file(
     file_path: &str,
     symbol: &str,
     time_interval: &str,
+) -> Result<Vec<Bar>> {
+    load_bars_from_local_file_with_end_ts(file_path, symbol, time_interval, i64::MAX).await
+}
+
+/// Load price bars from a local file, stopping at the given end timestamp
+async fn load_bars_from_local_file_with_end_ts(
+    file_path: &str,
+    symbol: &str,
+    time_interval: &str,
+    end_timestamp_ns: i64,
 ) -> Result<Vec<Bar>> {
     // Read the entire file into memory first
     let bytes = tokio::fs::read(file_path).await
@@ -53,6 +73,12 @@ async fn load_bars_from_local_file(
         
         for i in 0..batch.num_rows() {
             let bar = parse_bar_from_batch(&batch, i)?;
+            
+            // Stop loading if we've passed the end timestamp
+            if bar.timestamp_ns > end_timestamp_ns {
+                return Ok(bars);
+            }
+            
             bars.push(bar);
         }
     }

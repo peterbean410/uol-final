@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use modelenv_proto::{Bar, BarList, Observation};
 
-use crate::data_loader::{load_bars_from_parquet, TIME_INTERVALS};
+use crate::data_loader::{load_bars_from_parquet_with_end_ts, TIME_INTERVALS};
 use crate::position::NANOS_PER_DAY;
 
 /// Represents a loaded episode with price bars for all time intervals
@@ -326,8 +326,8 @@ pub async fn initialize_episode(
         // Construct S3 URI for the parquet file
         let s3_uri = format!("{}/{}_{}/data.parquet", s3_prefix, symbol, interval);
         
-        // Load bars from S3
-        let mut bars = load_bars_from_parquet(&s3_uri, symbol, interval).await?;
+        // Load bars from S3, stopping at end timestamp
+        let mut bars = load_bars_from_parquet_with_end_ts(&s3_uri, symbol, interval, episode_end_ts).await?;
         
         // Validate that we have bars
         if bars.is_empty() {
@@ -347,7 +347,7 @@ pub async fn initialize_episode(
             episode_start_ts
         };
 
-        // Filter bars to only include those within the episode time range
+        // Filter bars to only include those within the episode time range [start_ts, episode_end_ts]
         bars = bars.into_iter()
             .filter(|b| b.timestamp_ns >= start_ts && b.timestamp_ns <= episode_end_ts)
             .collect();
