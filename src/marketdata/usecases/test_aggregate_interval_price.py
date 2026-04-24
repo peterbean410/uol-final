@@ -75,27 +75,30 @@ def test_iter_source_prefixes_hour_tier():
     start = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
     end = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
     prefixes = list(_iter_source_prefixes(FX_SYMBOL, "M1", start, end, 60))
-    assert len(prefixes) == 1
+    # Inclusive end: covers start-hour and end-hour (end-keyed storage)
+    assert len(prefixes) == 2
     assert prefixes[0].endswith("year=2026/month=01/day=01/hour=09/")
+    assert prefixes[-1].endswith("year=2026/month=01/day=01/hour=10/")
 
 
 def test_iter_source_prefixes_day_tier():
     start = datetime(2025, 12, 29, 0, 0, tzinfo=timezone.utc)
     end = datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)
     prefixes = list(_iter_source_prefixes(FX_SYMBOL, "D1", start, end, 1440))
-    assert len(prefixes) == 7
+    # 7 days in window + 1 end-keyed day
+    assert len(prefixes) == 8
     assert prefixes[0].endswith("year=2025/month=12/day=29/")
-    assert prefixes[-1].endswith("year=2026/month=01/day=04/")
+    assert prefixes[-1].endswith("year=2026/month=01/day=05/")
 
 
 def test_iter_source_prefixes_month_tier():
     start = datetime(2025, 11, 1, 0, 0, tzinfo=timezone.utc)
     end = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
     prefixes = list(_iter_source_prefixes(FX_SYMBOL, "W1", start, end, 10080))
-    # Nov, Dec, Jan
-    assert len(prefixes) == 3
+    # Nov, Dec, Jan + end-keyed Feb
+    assert len(prefixes) == 4
     assert prefixes[0].endswith("year=2025/month=11/")
-    assert prefixes[-1].endswith("year=2026/month=01/")
+    assert prefixes[-1].endswith("year=2026/month=02/")
 
 
 # ── M1 → M5 (hour tier source) ──────────────────────────────────────
@@ -175,6 +178,34 @@ def test_m1_to_d1_monthly_window():
     assert "year=2026/month=01" in key
     assert "day=" not in key
     assert "hour=" not in key
+
+
+# ── Boundary: data stored at end-of-range partition key ────────────
+
+def test_last_hour_stored_at_end_keyed_partition_is_captured():
+    """Real pipeline stores [23:00, 00:00) data under the 00:00 partition.
+
+    Without the inclusive-end iteration fix, the last hour of each day/month
+    would be silently dropped. This test stores data at the *end*-keyed
+    prefix (hour=00 of next day) matching the real download layout.
+    """
+    # Window: [Jan 31 00:00, Feb 1 00:00)
+    end = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
+    # Bars timestamped Jan 31 23:00 – 23:59 (last hour of Jan 31)
+    last_hour_start = datetime(2026, 1, 31, 23, 0, tzinfo=timezone.utc)
+    # Stored at Feb 1 00:00 hour partition (end-keyed, as real pipeline does)
+    prefix = (
+        f"marketdata/interval-price/symbol={FX_SYMBOL}/interval=M1"
+        f"/year=2026/month=02/day=01/hour=00/"
+    )
+    s3 = _mock_s3_with_partitions({prefix: _make_bars(last_hour_start, 60, "1min")})
+
+    result = aggregate(FX_SYMBOL, "M1", "H1", end, 1440, 60, s3, BUCKET)
+
+    # One H1 bar for the captured hour
+    assert len(result) == 1
+    assert result.iloc[0]["Timestamp"] == pd.Timestamp("2026-01-31 23:00", tz="UTC")
+    assert result.iloc[0]["Volume"] == 600  # 60 mins × 10
 
 
 # ── D1 → W1 over 7-day window (day-tier source → year/month output) ─

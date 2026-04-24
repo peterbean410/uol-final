@@ -74,7 +74,7 @@ def _iter_source_prefixes(
         cursor = start_dt.replace(minute=0, second=0, microsecond=0)
         step = timedelta(hours=1)
 
-    while cursor < end_dt:
+    while cursor <= end_dt:
         yield _prefix_for(fx_symbol, source_interval, cursor, tier)
         cursor = cursor + step
 
