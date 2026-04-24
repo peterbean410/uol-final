@@ -60,6 +60,11 @@ if __name__ == "__main__":
     execution_ts = os.environ.get("EXECUTION_TS")
     time_window = int(os.environ.get("TIME_WINDOW_IN_MINUTES", "60"))
 
+    print(f"FX_SYMBOL={fx_symbol}")
+    print(f"INTERVAL={interval}")
+    print(f"EXECUTION_TS={execution_ts}")
+    print(f"TIME_WINDOW_IN_MINUTES={time_window}")
+
     end_dt = (
         datetime.fromisoformat(execution_ts).astimezone(timezone.utc)
         if execution_ts

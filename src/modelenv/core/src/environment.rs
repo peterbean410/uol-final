@@ -1,21 +1,18 @@
 // Environment module
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use modelenv_proto::{Action, ObserveRequest, Observation, ResetRequest, StepResponse, ActionType};
 
+use crate::broker_gateway::BrokerGateway;
+use crate::config::Mode;
 use crate::data_loader::now_ns;
 use crate::episode::{initialize_episode, Episode};
 use crate::position::{Position, ClosedPositionWindow, Side};
 
-/// Operating mode for the environment
-#[derive(Debug, Clone, PartialEq)]
-pub enum Mode {
-    Training,
-    Live,
-}
-
 /// The main environment struct
+#[derive(Clone)]
 pub struct Environment {
     mode: Mode,
     symbol: String,
@@ -30,6 +27,8 @@ pub struct Environment {
     daily_swap_rates: HashMap<String, f64>,
     // Track the last timestamp when swap was accrued for day boundary detection
     last_swap_accrual_timestamp: i64,
+    // Broker gateway for Production Mode (Arc for cloneability)
+    broker_gateway: Option<Arc<dyn BrokerGateway + Send + Sync>>,
 }
 
 /// Represents a trade execution record
@@ -58,6 +57,7 @@ impl Environment {
             transaction_cost: 0.0, // Default no transaction cost
             daily_swap_rates: HashMap::new(),
             last_swap_accrual_timestamp: 0, // Will be set on reset
+            broker_gateway: None,
         }
     }
 
@@ -73,6 +73,12 @@ impl Environment {
         self
     }
 
+    /// Set the broker gateway for Production Mode
+    pub fn with_broker_gateway(mut self, broker_gateway: Arc<dyn BrokerGateway + Send + Sync>) -> Self {
+        self.broker_gateway = Some(broker_gateway);
+        self
+    }
+
     /// Get the current mode
     pub fn mode(&self) -> &Mode {
         &self.mode
@@ -81,6 +87,19 @@ impl Environment {
     /// Get the current swap rate for the symbol
     fn get_swap_rate(&self) -> f64 {
         *self.daily_swap_rates.get(&self.symbol).unwrap_or(&0.0)
+    }
+
+    /// Check if broker gateway is configured
+    pub fn has_broker_gateway(&self) -> bool {
+        self.broker_gateway.is_some()
+    }
+
+    /// Get the broker gateway (returns error if not configured in Production Mode)
+    fn get_broker_gateway(&self) -> Result<&(dyn BrokerGateway + Send + Sync)> {
+        self.broker_gateway
+            .as_ref()
+            .map(|bg| bg.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("Broker gateway not configured"))
     }
 
     /// Reset the environment and initialize a new episode
@@ -122,8 +141,21 @@ impl Environment {
             }
             Mode::Live => {
                 // Production mode - sync with broker
-                // TODO: Implement broker synchronization
-                Err(anyhow::anyhow!("Production mode not yet implemented"))
+                let broker = self.get_broker_gateway()?;
+                
+                // Synchronise positions with broker
+                let broker_positions = broker.sync_positions(&req.symbol).await?;
+                self.positions = broker_positions
+                    .iter()
+                    .map(|p| Position::from_proto(p))
+                    .collect();
+                
+                // Get current bar from broker
+                let _current_bar = broker.current_bar(&req.symbol).await?;
+                
+                // TODO: Initialize episode with broker data
+                // For now, return an error as we need to implement episode initialization from broker data
+                Err(anyhow::anyhow!("Production mode reset not fully implemented"))
             }
         }
     }
@@ -133,49 +165,74 @@ impl Environment {
         // Get current timestamp before mutable borrow
         let current_timestamp = self.current_timestamp();
         
-        // Check if episode exists
-        let episode = self
-            .episode
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?;
+        match self.mode {
+            Mode::Training => {
+                // Training mode - use episode
+                let episode = self
+                    .episode
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?;
 
-        // Get the timestamp at the current cursor before advancing
-        let prev_timestamp = episode.get_cursor_timestamp();
-        
-        // Advance the episode first to release the mutable borrow
-        let done = episode.advance(5_000_000_000); // 5 seconds in nanoseconds
+                // Get the timestamp at the current cursor before advancing
+                let prev_timestamp = episode.get_cursor_timestamp();
+                
+                // Advance the episode first to release the mutable borrow
+                let done = episode.advance(5_000_000_000); // 5 seconds in nanoseconds
 
-        // Calculate realised P/L before getting observation
-        let realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
+                // Calculate realised P/L before getting observation
+                let realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
 
-        // Convert positions to proto format
-        let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
-            .map(|p| p.to_proto())
-            .collect();
+                // Convert positions to proto format
+                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
+                    .map(|p| p.to_proto())
+                    .collect();
 
-        // Get observation
-        let observation = episode.get_observation(proto_positions.as_slice(), realised_pnl_12m);
+                // Get observation
+                let observation = episode.get_observation(proto_positions.as_slice(), realised_pnl_12m);
 
-        // Accrue swap if day boundary was crossed during advancement
-        // This must be done before apply_action to avoid borrow conflicts
-        if !self.positions.is_empty() {
-            if episode.has_day_boundary_crossed(prev_timestamp, current_timestamp) {
-                self.accrue_swap_on_positions()?;
+                // Accrue swap if day boundary was crossed during advancement
+                // This must be done before apply_action to avoid borrow conflicts
+                if !self.positions.is_empty() {
+                    if episode.has_day_boundary_crossed(prev_timestamp, current_timestamp) {
+                        self.accrue_swap_on_positions()?;
+                    }
+                }
+
+                // Apply the action
+                self.apply_action(&action)?;
+
+                // Calculate reward based on action (after releasing episode borrow)
+                let reward = self.calculate_reward(&action)?;
+
+                Ok(StepResponse {
+                    observation: Some(observation),
+                    reward,
+                    done,
+                    info: "".to_string(),
+                })
+            }
+            Mode::Live => {
+                // Production mode - submit action to broker
+                let broker = self.get_broker_gateway()?;
+                
+                // Submit action to broker
+                let fill = broker.submit(&action).await?;
+                
+                // Record the fill
+                self.recent_fills.push(Fill {
+                    order_id: fill.order_id,
+                    timestamp_ns: fill.timestamp_ns,
+                    price: fill.price,
+                    size: fill.size,
+                    side: ActionType::from_i32(fill.side).unwrap_or(ActionType::ActionHold),
+                    partial: fill.partial,
+                });
+                
+                // TODO: Update positions based on broker response
+                // For now, return an error as we need to implement position updates from broker
+                Err(anyhow::anyhow!("Production mode step not fully implemented"))
             }
         }
-
-        // Apply the action
-        self.apply_action(&action)?;
-
-        // Calculate reward based on action (after releasing episode borrow)
-        let reward = self.calculate_reward(&action)?;
-
-        Ok(StepResponse {
-            observation: Some(observation),
-            reward,
-            done,
-            info: "".to_string(),
-        })
     }
 
     /// Get current observation without advancing

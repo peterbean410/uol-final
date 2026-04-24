@@ -119,6 +119,20 @@ impl Position {
         }
     }
 
+    /// Create a Position from proto Position
+    pub fn from_proto(proto: &modelenv_proto::Position) -> Self {
+        Position {
+            position_id: proto.position_id.clone(),
+            entry_price: proto.entry_price,
+            unrealised_pnl: proto.unrealised_pnl,
+            swap: proto.swap,
+            open_timestamp_ns: proto.open_timestamp_ns,
+            volume: 1.0, // Default volume - should be stored in proto
+            side: Side::Buy, // Default side - should be stored in proto
+            last_swap_accrual_ns: proto.open_timestamp_ns,
+        }
+    }
+
     /// Convert position to closed position record
     pub fn to_closed_position(
         &self,

@@ -12,3 +12,4 @@ tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"
 modelenv-proto = { path = "../proto" }
 bytes = "1.0"
+log = "0.4"

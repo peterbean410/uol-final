@@ -1051,6 +1051,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
+ "log",
  "modelenv-proto",
  "parquet",
  "serde",

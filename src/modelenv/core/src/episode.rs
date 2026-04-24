@@ -8,6 +8,7 @@ use crate::data_loader::{load_bars_from_parquet_with_end_ts, TIME_INTERVALS};
 use crate::position::NANOS_PER_DAY;
 
 /// Represents a loaded episode with price bars for all time intervals
+#[derive(Clone)]
 pub struct Episode {
     pub symbol: String,
     pub bars: HashMap<String, Vec<Bar>>,
@@ -310,6 +311,107 @@ mod tests {
 
         let obs = episode.get_observation(&[], 0.0);
         assert_eq!(obs.timestamp_ns, 100_000_000_000);
+    }
+
+    #[test]
+    fn test_episode_state_with_multiple_intervals() {
+        // Create bars for multiple time intervals
+        let mut m1_bars = Vec::new();
+        let mut m5_bars = Vec::new();
+        
+        for i in 0..10 {
+            m1_bars.push(Bar {
+                timestamp_ns: i * 60_000_000_000, // 1 minute intervals
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            });
+            
+            // M5 bars are every 5th M1 bar (at 0 and 5 minutes)
+            m5_bars.push(Bar {
+                timestamp_ns: i * 5 * 60_000_000_000, // 5 minute intervals
+                open: 100.0 + (i * 5) as f64,
+                high: 101.0 + (i * 5) as f64,
+                low: 99.0 + (i * 5) as f64,
+                close: 100.5 + (i * 5) as f64,
+                volume: 5000.0,
+            });
+        }
+
+        let mut bars_map = HashMap::new();
+        bars_map.insert("M1".to_string(), m1_bars);
+        bars_map.insert("M5".to_string(), m5_bars);
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            bars_map,
+            0,
+            600_000_000_000,
+        );
+
+        // Initial cursor should be at 0
+        assert_eq!(episode.cursor, 0);
+        assert!(!episode.is_done());
+
+        // Advance by 5 minutes (300 seconds = 300_000_000_000 ns)
+        let still_running = episode.advance(300_000_000_000);
+        
+        // Should still be running
+        assert!(still_running);
+        
+        // Cursor should have moved to bar at or after 5 minutes
+        // For M1: index 5 (5 minutes)
+        // For M5: index 1 (5 minutes)
+        // The minimum cursor across all intervals is 1
+        assert_eq!(episode.cursor, 1);
+        
+        // Check that both intervals have bars at current cursor
+        let obs = episode.get_observation(&[], 0.0);
+        assert!(obs.live_bars.contains_key("M1"));
+        assert!(obs.live_bars.contains_key("M5"));
+    }
+
+    #[test]
+    fn test_episode_done_at_end() {
+        // Create bars with specific end timestamp
+        let bars = vec![
+            Bar {
+                timestamp_ns: 0,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                volume: 1000.0,
+            },
+            Bar {
+                timestamp_ns: 60_000_000_000,
+                open: 100.5,
+                high: 101.5,
+                low: 100.0,
+                close: 101.0,
+                volume: 1100.0,
+            },
+        ];
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            60_000_000_000, // episode ends at 60 seconds
+        );
+
+        // Initial state
+        assert!(!episode.is_done());
+
+        // Advance to end
+        assert!(episode.advance(60_000_000_000));
+        assert!(!episode.is_done());
+
+        // Next advance should be done
+        assert!(!episode.advance(60_000_000_000));
+        assert!(episode.is_done());
     }
 }
 
