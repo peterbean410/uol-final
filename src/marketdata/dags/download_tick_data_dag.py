@@ -33,7 +33,7 @@ with DAG(
     start_date=datetime(2021, 1, 1),
     catchup=True,
     max_active_runs=4,
-    tags=["marketdata", "tickdata"],
+    tags=["marketdata", "pricedata", "tickdata"],
 ) as dag:
 
     KubernetesPodOperator(
