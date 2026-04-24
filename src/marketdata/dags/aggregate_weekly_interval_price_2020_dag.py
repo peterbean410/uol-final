@@ -49,7 +49,7 @@ with DAG(
     schedule="0 0 * * 1",
     start_date=datetime(2020, 1, 6),
     catchup=True,
-    tags=["marketdata", "snapshot"],
+    tags=["marketdata", "pricedata", "aggregation", "bardata"],
 ) as dag:
 
     wait_for_last_D1 = ExternalTaskSensor(

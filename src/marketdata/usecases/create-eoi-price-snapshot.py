@@ -18,11 +18,15 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 from commons.python.appconfig import AppConfig
 
+HOUR_MINUTES = 60
 DAILY_MINUTES = 1440
-VALID_TIME_WINDOWS = {60, 1440, 43200}
+WEEK_MINUTES = 10080
+MONTH_MINUTES = 43200
+VALID_TIME_WINDOWS = {HOUR_MINUTES, DAILY_MINUTES, WEEK_MINUTES, MONTH_MINUTES}
 
 
 def _partition_prefix(fx_symbol: str, interval: str, dt: datetime, time_window_minutes: int) -> str:
@@ -44,7 +48,14 @@ def _partition_prefix(fx_symbol: str, interval: str, dt: datetime, time_window_m
 
 
 def _previous_partition_dt(dt: datetime, time_window_minutes: int) -> datetime:
-    """Return the datetime representing the previous partition."""
+    """Return the datetime representing the previous partition.
+
+    For MONTH_MINUTES we step back one calendar month instead of a fixed
+    30-day timedelta, so the prefix resolves to the prior month's
+    `year=/month=` tier (which is how MN1 aggregates are keyed).
+    """
+    if time_window_minutes == MONTH_MINUTES:
+        return dt - relativedelta(months=1)
     return dt - timedelta(minutes=time_window_minutes)
 
 
@@ -66,22 +77,31 @@ def _load_partition(s3, bucket: str, prefix: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _snapshot_root(time_window_minutes: int) -> str:
+    """Return the snapshot tree root keyed by partition granularity."""
+    if time_window_minutes == MONTH_MINUTES:
+        return "marketdata/eom-snapshot"
+    if time_window_minutes == WEEK_MINUTES:
+        return "marketdata/eow-snapshot"
+    return "marketdata/eod-snapshot"
+
+
 def _build_snapshot_key(fx_symbol: str, interval: str, dt: datetime, time_window_minutes: int) -> str:
     """Build the S3 key for the EOI snapshot.
 
-    - > 1440 min: marketdata/interval-price/.../year/month/{ts}.parquet
-    - == 1440 min: marketdata/eod-snapshot/.../year/month/day/{ts}.parquet
-    - < 1440 min: marketdata/eod-snapshot/.../year/month/day/hour/{ts}.parquet
+    - MONTH_MINUTES: marketdata/eom-snapshot/.../year/month/{ts}.parquet
+    - WEEK_MINUTES:  marketdata/eow-snapshot/.../year/month/{ts}.parquet
+    - DAILY_MINUTES: marketdata/eod-snapshot/.../year/month/day/{ts}.parquet
+    - HOUR_MINUTES:  marketdata/eod-snapshot/.../year/month/day/hour/{ts}.parquet
     """
     ts = dt.strftime("%Y%m%dT%H%M%SZ")
-    year_month = f"year={dt.year}/month={dt.month:02d}"
+    base = f"{_snapshot_root(time_window_minutes)}/symbol={fx_symbol}/interval={interval}"
+    key = f"{base}/year={dt.year}/month={dt.month:02d}"
 
     if time_window_minutes > DAILY_MINUTES:
-        base = f"marketdata/interval-price/symbol={fx_symbol}/interval={interval}"
-        return f"{base}/{year_month}/{ts}.parquet"
+        return f"{key}/{ts}.parquet"
 
-    base = f"marketdata/eod-snapshot/symbol={fx_symbol}/interval={interval}"
-    key = f"{base}/{year_month}/day={dt.day:02d}"
+    key += f"/day={dt.day:02d}"
     if time_window_minutes < DAILY_MINUTES:
         key += f"/hour={dt.hour:02d}"
     return f"{key}/{ts}.parquet"

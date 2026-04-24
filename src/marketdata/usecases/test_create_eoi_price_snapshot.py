@@ -103,12 +103,12 @@ def test_hourly_snapshot_path_contains_hour(mock_load, mock_upload):
     assert len(uploaded_df) == 3
 
 
-# ── Test Case 2b: Monthly snapshot (> 24h window) ───────────────────
+# ── Test Case 2b: Monthly snapshot (43200-min window) ───────────────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_partition")
-def test_monthly_snapshot_uses_interval_price_prefix(mock_load, mock_upload):
-    """> 24h window: S3 path uses interval-price prefix, year/month only."""
+def test_monthly_snapshot_uses_eom_prefix(mock_load, mock_upload):
+    """43200-min window: S3 path uses eom-snapshot prefix, year/month only."""
     mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 43200, MagicMock(), BUCKET)
@@ -116,10 +116,51 @@ def test_monthly_snapshot_uses_interval_price_prefix(mock_load, mock_upload):
     assert mock_upload.call_count == 1
     s3_key = mock_upload.call_args[0][2]
 
-    assert s3_key.startswith("marketdata/interval-price/")
+    assert s3_key.startswith("marketdata/eom-snapshot/")
     assert "year=2026/month=01" in s3_key
     assert "day=" not in s3_key
     assert "hour=" not in s3_key
+
+
+# ── Test Case 2c: Weekly snapshot (10080-min window) ────────────────
+
+@patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_partition")
+def test_weekly_snapshot_uses_eow_prefix(mock_load, mock_upload):
+    """10080-min window: S3 path uses eow-snapshot prefix, year/month only."""
+    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+
+    df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 10080, MagicMock(), BUCKET)
+
+    assert mock_upload.call_count == 1
+    s3_key = mock_upload.call_args[0][2]
+
+    assert s3_key.startswith("marketdata/eow-snapshot/")
+    assert "year=2026/month=01" in s3_key
+    assert "day=" not in s3_key
+    assert "hour=" not in s3_key
+
+
+# ── Test Case 2d: Monthly lookback steps one calendar month ─────────
+
+@patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_partition")
+def test_monthly_previous_partition_is_prior_calendar_month(mock_load, mock_upload):
+    """43200-min window: previous partition prefix resolves to the prior month.
+
+    With end_dt = 2026-03-01, the previous partition must land in Feb 2026
+    (not Jan, which a naive 30-day subtraction from March would produce).
+    """
+    end_dt = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+
+    create_snapshot(FX_SYMBOL, INTERVAL, end_dt, 43200, MagicMock(), BUCKET)
+
+    current_prefix = mock_load.call_args_list[0][0][2]
+    previous_prefix = mock_load.call_args_list[1][0][2]
+
+    assert "year=2026/month=03" in current_prefix
+    assert "year=2026/month=02" in previous_prefix
 
 
 # ── Test Case 3: Missing previous partition ──────────────────────────

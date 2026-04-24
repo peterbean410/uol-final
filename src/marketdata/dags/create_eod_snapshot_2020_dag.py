@@ -1,9 +1,9 @@
-"""DAG: Aggregate daily M1 bars into larger intervals (H1, H4, D1).
+"""DAG: Create end-of-day (EOD) price snapshots for H1, H4, D1, 2020 backfill.
 
-Runs once per trading day, waits for the final hourly M1 download of
-the day to complete, then runs the aggregate-interval-price script in
-parallel for each target interval to roll up 24 hours of M1 bars and
-publish the aggregated bars to S3.
+Runs once per trading day (Tue–Sat at 00:00 UTC), waits for the matching
+daily-aggregate task in `aggregate_daily_interval_price_2020`, then runs
+the create-eoi-price-snapshot script in parallel for each interval.
+Snapshots land under `marketdata/eod-snapshot/...`.
 """
 
 from datetime import datetime, timedelta
@@ -25,42 +25,41 @@ _ECR_IMAGE = (
     "/forex-marketdata-download-interval-price-data:latest"
 )
 
-_TARGET_INTERVALS = ["H1", "H4", "D1"]
+_INTERVALS = ["H1", "H4", "D1"]
+
 
 with DAG(
-    dag_id="aggregate_daily_interval_price",
+    dag_id="create_eod_snapshot_2020",
     default_args=default_args,
-    description="Aggregate 24h of M1 bars into H1/H4/D1 interval-price partitions using the marketdata Helm chart image",
+    description="Create FX end-of-day price snapshots (H1, H4, D1) from daily-aggregated bars",
     schedule="0 0 * * 2-6",
-    start_date=datetime(2012, 1, 1),
+    start_date=datetime(2020, 1, 2),
     catchup=True,
-    tags=["marketdata", "pricedata", "aggregation", "bardata"],
+    tags=["marketdata", "pricedata", "snapshot", "eod"],
 ) as dag:
 
-    wait_for_last_M1_download = ExternalTaskSensor(
-        task_id="wait_for_last_M1_download",
-        external_dag_id="download_price_bars_hourly",
-        external_task_id="download_M1_price_bars",
-        execution_date_fn=lambda dt: dt - timedelta(hours=1),
-        poke_interval=300,
-        timeout=7200,
-        mode="reschedule",
-    )
+    for interval in _INTERVALS:
+        wait_for_aggregate = ExternalTaskSensor(
+            task_id=f"wait_for_aggregate_{interval}",
+            external_dag_id="aggregate_daily_interval_price_2020",
+            external_task_id=f"aggregate_{interval}_interval_price",
+            poke_interval=300,
+            timeout=7200,
+            mode="reschedule",
+        )
 
-    for interval in _TARGET_INTERVALS:
-        aggregate_task = KubernetesPodOperator(
-            task_id=f"aggregate_{interval}_interval_price",
-            name=f"aggregate-{interval.lower()}-interval-price",
+        create_snapshot = KubernetesPodOperator(
+            task_id=f"create_{interval}_eod_snapshot",
+            name=f"create-{interval.lower()}-eod-snapshot",
             namespace="airflow",
             image=_ECR_IMAGE,
             image_pull_policy="IfNotPresent",
             image_pull_secrets=[k8s.V1LocalObjectReference(name="ecr-registry-credentials")],
             service_account_name="airflow-worker",
-            cmds=["python", "marketdata/usecases/aggregate-interval-price.py"],
+            cmds=["python", "marketdata/usecases/create-eoi-price-snapshot.py"],
             env_vars=[
                 k8s.V1EnvVar(name="FX_SYMBOL", value="USDJPY"),
-                k8s.V1EnvVar(name="SOURCE_INTERVAL", value="M1"),
-                k8s.V1EnvVar(name="TARGET_INTERVAL", value=interval),
+                k8s.V1EnvVar(name="INTERVAL", value=interval),
                 k8s.V1EnvVar(name="TIME_WINDOW_IN_MINUTES", value="1440"),
                 k8s.V1EnvVar(name="EXECUTION_TS", value="{{ data_interval_end.to_iso8601_string() }}"),
             ],
@@ -73,11 +72,11 @@ with DAG(
                 ),
             ],
             container_resources=k8s.V1ResourceRequirements(
-                requests={"cpu": "200m", "memory": "512Mi"},
-                limits={"cpu": "1000m", "memory": "2Gi"},
+                requests={"cpu": "100m", "memory": "256Mi"},
+                limits={"cpu": "500m", "memory": "512Mi"},
             ),
             is_delete_operator_pod=True,
             get_logs=True,
         )
 
-        wait_for_last_M1_download >> aggregate_task
+        wait_for_aggregate >> create_snapshot

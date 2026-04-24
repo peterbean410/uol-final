@@ -45,7 +45,7 @@ with DAG(
     schedule="0 0 * * 2-6",
     start_date=datetime(2020, 1, 2),
     catchup=True,
-    tags=["marketdata", "snapshot"],
+    tags=["marketdata", "pricedata", "aggregation", "bardata"],
 ) as dag:
 
     wait_for_last_M1_download = ExternalTaskSensor(
