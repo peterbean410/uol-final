@@ -1,17 +1,21 @@
 """DAG: Create end-of-day (EOD) tick snapshots via Kubernetes.
 
-Runs Tue–Sat at 00:00 UTC. Each run waits for the final hourly tick
-download of the just-completed trading day (Mon–Fri), then runs the
-create-eod-tick-snapshot script to merge that day's tick partitions
-with the prior day's and upload the cumulative snapshot to S3 under
-`marketdata/eod-tick-snapshot/...`.
+Runs daily at 00:00 UTC. On Tue–Sat the run waits for the final hourly
+tick download of the just-completed trading day (Mon–Fri). On Sun and
+Mon (when no download fires) the wait is bypassed so the snapshot
+chain stays unbroken, `create_snapshot` then re-emits the prior
+snapshot's contents under the weekend key.
+Snapshots land under `marketdata/eod-tick-snapshot/...`.
 """
 
 from datetime import datetime, timedelta
 
 from airflow.sdk import DAG
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import BranchPythonOperator
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from airflow.sensors.external_task import ExternalTaskSensor
+from airflow.utils.trigger_rule import TriggerRule
 from kubernetes.client import models as k8s
 
 default_args = {
@@ -26,6 +30,12 @@ _ECR_IMAGE = (
     "/forex-marketdata-download-interval-price-data:latest"
 )
 
+# download_tick_data runs Mon–Fri (cron "0 * * * 1-5"). The sensor looks at
+# the hourly download covering 23:00→00:00 of the prior calendar day. For a
+# Sun-midnight run that's Sat 23:00 (no download); for Mon-midnight it's
+# Sun 23:00 (no download). Python weekday(): Mon=0…Sun=6.
+_NO_UPSTREAM_WEEKDAYS = {6, 0}
+
 
 def _last_tick_hourly_logical_date(_dt, **context):
     """Logical date of the hourly tick download covering the final hour of the day.
@@ -39,15 +49,26 @@ def _last_tick_hourly_logical_date(_dt, **context):
     return context["data_interval_end"] - timedelta(hours=1)
 
 
+def _branch(data_interval_end, **_):
+    if data_interval_end.weekday() in _NO_UPSTREAM_WEEKDAYS:
+        return "skip_wait"
+    return "wait_for_last_tick_download"
+
+
 with DAG(
     dag_id="create_eod_tick_snapshot",
     default_args=default_args,
     description="Create FX end-of-day tick snapshots from per-hour tick partitions",
-    schedule="0 0 * * 2-6",
+    schedule="0 0 * * *",
     start_date=datetime(2021, 1, 2),
     catchup=True,
     tags=["marketdata", "tickdata", "snapshot", "eod"],
 ) as dag:
+
+    branch = BranchPythonOperator(
+        task_id="branch",
+        python_callable=_branch,
+    )
 
     wait_for_last_tick_download = ExternalTaskSensor(
         task_id="wait_for_last_tick_download",
@@ -58,6 +79,8 @@ with DAG(
         timeout=7200,
         mode="reschedule",
     )
+
+    skip_wait = EmptyOperator(task_id="skip_wait")
 
     create_snapshot = KubernetesPodOperator(
         task_id="create_eod_tick_snapshot",
@@ -86,6 +109,7 @@ with DAG(
         ),
         is_delete_operator_pod=True,
         get_logs=True,
+        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     )
 
-    wait_for_last_tick_download >> create_snapshot
+    branch >> [wait_for_last_tick_download, skip_wait] >> create_snapshot

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 import pandas as pd
+from botocore.exceptions import ClientError
 
 from commons.python.appconfig import AppConfig
 
@@ -51,6 +52,22 @@ def _load_partition(s3, bucket: str, prefix: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _load_snapshot_file(s3, bucket: str, key: str) -> pd.DataFrame:
+    """Load a single snapshot Parquet file by exact key.
+
+    Returns an empty DataFrame if the object does not exist (e.g. very
+    first run in the chain). Any other S3 error is re-raised.
+    """
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            print(f"No previous snapshot at s3://{bucket}/{key}")
+            return pd.DataFrame()
+        raise
+    return pd.read_parquet(io.BytesIO(obj["Body"].read()))
+
+
 def _build_snapshot_key(fx_symbol: str, dt: datetime) -> str:
     """Snapshot key at `marketdata/eod-tick-snapshot/.../year/month/day/{ts}.parquet`."""
     ts = dt.strftime("%Y%m%dT%H%M%SZ")
@@ -70,15 +87,15 @@ def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str, s3) -> None:
 
 
 def create_snapshot(fx_symbol: str, end_dt: datetime, s3, bucket: str) -> pd.DataFrame:
-    """Merge the previous day's and current day's tick partitions and upload."""
+    """Merge the current day's raw tick partition with the previous EOD tick
+    snapshot so each snapshot accumulates history (snapshot[N] = raw[N] ∪ snapshot[N-1])."""
     current_prefix = _partition_prefix(fx_symbol, end_dt)
-    prev_prefix = _partition_prefix(fx_symbol, end_dt - timedelta(days=1))
-
     print(f"Loading current partition: {current_prefix}")
     df_current = _load_partition(s3, bucket, current_prefix)
 
-    print(f"Loading previous partition: {prev_prefix}")
-    df_previous = _load_partition(s3, bucket, prev_prefix)
+    prev_snapshot_key = _build_snapshot_key(fx_symbol, end_dt - timedelta(days=1))
+    print(f"Loading previous snapshot: {prev_snapshot_key}")
+    df_previous = _load_snapshot_file(s3, bucket, prev_snapshot_key)
 
     df = pd.concat([df_previous, df_current], ignore_index=True)
 
