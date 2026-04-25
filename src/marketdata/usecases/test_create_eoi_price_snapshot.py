@@ -21,6 +21,7 @@ import importlib
 _mod = importlib.import_module("marketdata.usecases.create-eoi-price-snapshot")
 create_snapshot = _mod.create_snapshot
 _load_partition = _mod._load_partition
+_load_snapshot_file = _mod._load_snapshot_file
 _upload_to_s3 = _mod._upload_to_s3
 
 BUCKET = "prod-fintech-forex-sg-731833471586"
@@ -53,10 +54,12 @@ PREVIOUS_DATA = [
 # ── Test Case 1: Daily snapshot (24h window) ────────────────────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_daily_snapshot_merge_and_path(mock_load, mock_upload):
-    """24h window: merges partitions, current takes precedence, correct S3 path."""
-    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+def test_daily_snapshot_merge_and_path(mock_load, mock_load_prev, mock_upload):
+    """24h window: merges current raw partition with previous snapshot, correct S3 path."""
+    mock_load.return_value = _make_df(CURRENT_DATA)
+    mock_load_prev.return_value = _make_df(PREVIOUS_DATA)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 1440, MagicMock(), BUCKET)
 
@@ -86,10 +89,12 @@ def test_daily_snapshot_merge_and_path(mock_load, mock_upload):
 # ── Test Case 2: Hourly snapshot (1h window) ────────────────────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_hourly_snapshot_path_contains_hour(mock_load, mock_upload):
+def test_hourly_snapshot_path_contains_hour(mock_load, mock_load_prev, mock_upload):
     """1h window: S3 path includes hour component and uses eod-snapshot prefix."""
-    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+    mock_load.return_value = _make_df(CURRENT_DATA)
+    mock_load_prev.return_value = _make_df(PREVIOUS_DATA)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 60, MagicMock(), BUCKET)
 
@@ -106,10 +111,12 @@ def test_hourly_snapshot_path_contains_hour(mock_load, mock_upload):
 # ── Test Case 2b: Monthly snapshot (43200-min window) ───────────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_monthly_snapshot_uses_eom_prefix(mock_load, mock_upload):
+def test_monthly_snapshot_uses_eom_prefix(mock_load, mock_load_prev, mock_upload):
     """43200-min window: S3 path uses eom-snapshot prefix, year/month only."""
-    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+    mock_load.return_value = _make_df(CURRENT_DATA)
+    mock_load_prev.return_value = _make_df(PREVIOUS_DATA)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 43200, MagicMock(), BUCKET)
 
@@ -125,10 +132,12 @@ def test_monthly_snapshot_uses_eom_prefix(mock_load, mock_upload):
 # ── Test Case 2c: Weekly snapshot (10080-min window) ────────────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_weekly_snapshot_uses_eow_prefix(mock_load, mock_upload):
+def test_weekly_snapshot_uses_eow_prefix(mock_load, mock_load_prev, mock_upload):
     """10080-min window: S3 path uses eow-snapshot prefix, year/month only."""
-    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+    mock_load.return_value = _make_df(CURRENT_DATA)
+    mock_load_prev.return_value = _make_df(PREVIOUS_DATA)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 10080, MagicMock(), BUCKET)
 
@@ -144,33 +153,38 @@ def test_weekly_snapshot_uses_eow_prefix(mock_load, mock_upload):
 # ── Test Case 2d: Monthly lookback steps one calendar month ─────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_monthly_previous_partition_is_prior_calendar_month(mock_load, mock_upload):
-    """43200-min window: previous partition prefix resolves to the prior month.
+def test_monthly_previous_snapshot_is_prior_calendar_month(mock_load, mock_load_prev, mock_upload):
+    """43200-min window: previous snapshot key resolves to the prior month.
 
-    With end_dt = 2026-03-01, the previous partition must land in Feb 2026
+    With end_dt = 2026-03-01, the previous snapshot must land in Feb 2026
     (not Jan, which a naive 30-day subtraction from March would produce).
     """
     end_dt = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
-    mock_load.side_effect = [_make_df(CURRENT_DATA), _make_df(PREVIOUS_DATA)]
+    mock_load.return_value = _make_df(CURRENT_DATA)
+    mock_load_prev.return_value = _make_df(PREVIOUS_DATA)
 
     create_snapshot(FX_SYMBOL, INTERVAL, end_dt, 43200, MagicMock(), BUCKET)
 
-    current_prefix = mock_load.call_args_list[0][0][2]
-    previous_prefix = mock_load.call_args_list[1][0][2]
+    current_prefix = mock_load.call_args[0][2]
+    previous_snapshot_key = mock_load_prev.call_args[0][2]
 
     assert "year=2026/month=03" in current_prefix
-    assert "year=2026/month=02" in previous_prefix
+    assert previous_snapshot_key.startswith("marketdata/eom-snapshot/")
+    assert "year=2026/month=02" in previous_snapshot_key
 
 
-# ── Test Case 3: Missing previous partition ──────────────────────────
+# ── Test Case 3: Missing previous snapshot (first run in chain) ─────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_missing_previous_partition(mock_load, mock_upload):
-    """When previous partition is empty, output contains only current data."""
+def test_missing_previous_snapshot(mock_load, mock_load_prev, mock_upload):
+    """When previous snapshot is empty (first run), output contains only current data."""
     current_only = [{"Timestamp": TS, "Symbol": "EURUSD", "price": 1.10}]
-    mock_load.side_effect = [_make_df(current_only), _make_df(None)]
+    mock_load.return_value = _make_df(current_only)
+    mock_load_prev.return_value = _make_df(None)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 60, MagicMock(), BUCKET)
 
@@ -182,14 +196,16 @@ def test_missing_previous_partition(mock_load, mock_upload):
 # ── Test Case 4: Empty current data ─────────────────────────────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_empty_current_falls_back_to_previous(mock_load, mock_upload):
-    """When current partition is empty, falls back to previous data."""
+def test_empty_current_falls_back_to_previous(mock_load, mock_load_prev, mock_upload):
+    """When current partition is empty, falls back to previous snapshot."""
     previous_only = [
         {"Timestamp": TS, "Symbol": "EURUSD", "price": 1.00},
         {"Timestamp": TS, "Symbol": "GBPUSD", "price": 1.30},
     ]
-    mock_load.side_effect = [_make_df(None), _make_df(previous_only)]
+    mock_load.return_value = _make_df(None)
+    mock_load_prev.return_value = _make_df(previous_only)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 60, MagicMock(), BUCKET)
 
@@ -210,8 +226,9 @@ def test_invalid_time_window_raises_value_error():
 # ── Test Case 6: Correct merge of current and previous partitions ────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_merge_current_overrides_previous_preserves_unique(mock_load, mock_upload):
+def test_merge_current_overrides_previous_preserves_unique(mock_load, mock_load_prev, mock_upload):
     """Verifies merge: current overrides previous for duplicates, unique rows kept."""
     prev = [
         {"Timestamp": TS, "Symbol": "EURUSD", "price": 1.00},
@@ -223,8 +240,8 @@ def test_merge_current_overrides_previous_preserves_unique(mock_load, mock_uploa
         {"Timestamp": TS, "Symbol": "USDJPY", "price": 110},
         {"Timestamp": TS, "Symbol": "GBPUSD", "price": 1.35},
     ]
-    # create_snapshot loads current first, then previous
-    mock_load.side_effect = [_make_df(curr), _make_df(prev)]
+    mock_load.return_value = _make_df(curr)
+    mock_load_prev.return_value = _make_df(prev)
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 60, MagicMock(), BUCKET)
 
@@ -249,8 +266,9 @@ def test_merge_current_overrides_previous_preserves_unique(mock_load, mock_uploa
 # ── Test Case 7: Large data volume and memory management ─────────────
 
 @patch.object(_mod, "_upload_to_s3")
+@patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
-def test_large_data_volume_merge(mock_load, mock_upload):
+def test_large_data_volume_merge(mock_load, mock_load_prev, mock_upload):
     """Verifies correct handling of large DataFrames during merge."""
     n = 50_000
     rng = np.random.default_rng(42)
@@ -277,7 +295,8 @@ def test_large_data_volume_merge(mock_load, mock_upload):
         "price": rng.uniform(1.0, 200.0, size=overlap + new_count),
     })
 
-    mock_load.side_effect = [curr_df, prev_df]
+    mock_load.return_value = curr_df
+    mock_load_prev.return_value = prev_df
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 60, MagicMock(), BUCKET)
 

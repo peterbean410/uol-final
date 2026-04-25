@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 import pandas as pd
+from botocore.exceptions import ClientError
 from dateutil.relativedelta import relativedelta
 
 from commons.python.appconfig import AppConfig
@@ -77,6 +78,22 @@ def _load_partition(s3, bucket: str, prefix: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _load_snapshot_file(s3, bucket: str, key: str) -> pd.DataFrame:
+    """Load a single snapshot Parquet file by exact key.
+
+    Returns an empty DataFrame if the object does not exist (e.g. very first
+    run in the chain). Any other S3 error is re-raised.
+    """
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            print(f"No previous snapshot at s3://{bucket}/{key}")
+            return pd.DataFrame()
+        raise
+    return pd.read_parquet(io.BytesIO(obj["Body"].read()))
+
+
 def _snapshot_root(time_window_minutes: int) -> str:
     """Return the snapshot tree root keyed by partition granularity."""
     if time_window_minutes == MONTH_MINUTES:
@@ -118,10 +135,11 @@ def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str, s3) -> None:
 
 def create_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
                     time_window_minutes: int, s3, bucket: str) -> pd.DataFrame:
-    """Create an EOI snapshot by merging current and previous partitions.
+    """Create an EOI snapshot by merging the current raw partition with the
+    previously-written snapshot, so each snapshot accumulates history.
 
     Raises:
-        ValueError: If time_window_minutes is not 60 or 1440 or 43200.
+        ValueError: If time_window_minutes is not 60 or 1440 or 10080 or 43200.
     """
     if time_window_minutes not in VALID_TIME_WINDOWS:
         raise ValueError(
@@ -129,14 +147,13 @@ def create_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
         )
 
     current_prefix = _partition_prefix(fx_symbol, interval, end_dt, time_window_minutes)
-    prev_dt = _previous_partition_dt(end_dt, time_window_minutes)
-    prev_prefix = _partition_prefix(fx_symbol, interval, prev_dt, time_window_minutes)
-
     print(f"Loading current partition: {current_prefix}")
     df_current = _load_partition(s3, bucket, current_prefix)
 
-    print(f"Loading previous partition: {prev_prefix}")
-    df_previous = _load_partition(s3, bucket, prev_prefix)
+    prev_dt = _previous_partition_dt(end_dt, time_window_minutes)
+    prev_snapshot_key = _build_snapshot_key(fx_symbol, interval, prev_dt, time_window_minutes)
+    print(f"Loading previous snapshot: {prev_snapshot_key}")
+    df_previous = _load_snapshot_file(s3, bucket, prev_snapshot_key)
 
     df = pd.concat([df_previous, df_current], ignore_index=True)
 

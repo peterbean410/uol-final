@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use log::info;
-use modelenv_proto::{Action, ObserveRequest, Observation, ResetRequest, StepResponse, ActionType};
+use modelenv_proto::{Action, Bar, ObserveRequest, Observation, ResetRequest, StepResponse, ActionType};
 
 use crate::broker_gateway::BrokerGateway;
 use crate::config::Mode;
@@ -31,6 +31,16 @@ pub struct Environment {
     last_swap_accrual_timestamp: i64,
     // Broker gateway for Production Mode (Arc for cloneability)
     broker_gateway: Option<Arc<dyn BrokerGateway + Send + Sync>>,
+    // Reward function configuration
+    reward_lambda: f64,
+    reward_action_penalty: f64,
+    reward_holding_penalty: f64,
+    // Track previous step's total equity for delta_V_t calculation
+    prev_total_equity: Option<f64>,
+    // Running statistics for reward normalisation
+    reward_running_sum: f64,
+    reward_running_sum_sq: f64,
+    reward_count: u64,
 }
 
 /// Represents a trade execution record
@@ -60,6 +70,13 @@ impl Environment {
             daily_swap_rates: HashMap::new(),
             last_swap_accrual_timestamp: 0, // Will be set on reset
             broker_gateway: None,
+            reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
+            reward_action_penalty: 0.001, // Default action penalty (scaled to USD/JPY spread)
+            reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
+            prev_total_equity: None,
+            reward_running_sum: 0.0,
+            reward_running_sum_sq: 0.0,
+            reward_count: 0,
         }
     }
 
@@ -142,15 +159,14 @@ impl Environment {
                 .await
             }
             Mode::Live => {
-                // Production mode - sync with broker
-                // First, get the broker gateway reference
+                // Production mode - synchronise with broker's current positions
+                info!("Production mode: synchronising with broker positions");
+                
+                // Get broker gateway reference
                 let broker = self.get_broker_gateway()?;
                 
-                // Sync positions with broker - clone the positions to avoid borrow conflicts
+                // Sync positions with broker
                 let broker_positions = broker.sync_positions(&req.symbol).await?;
-                
-                // Drop the broker reference before mutating self
-                let _ = broker;
                 
                 // Clear all existing internal positions, unrealised P/L, and accumulated swap
                 self.positions.clear();
@@ -168,7 +184,13 @@ impl Environment {
                     self.positions.push(position);
                 }
                 
-                // Get current bar from broker - get a new reference
+                // Log synchronisation summary
+                info!(
+                    "Synchronised {} positions from broker",
+                    self.positions.len()
+                );
+                
+                // Get current bar from broker
                 let broker = self.get_broker_gateway()?;
                 let current_bar = broker.current_bar(&req.symbol).await?;
                 
@@ -232,6 +254,12 @@ impl Environment {
 
                 // Apply the action
                 self.apply_action(&action)?;
+                
+                // Update last_action before calculating reward
+                self.last_action = match ActionType::try_from(action.action) {
+                    Ok(action_type) => Some(action_type),
+                    Err(_) => None,
+                };
 
                 // Calculate reward based on action (after releasing episode borrow)
                 let reward = self.calculate_reward(&action)?;
@@ -244,27 +272,40 @@ impl Environment {
                 })
             }
             Mode::Live => {
-                // Production mode - submit action to broker
+                // Production mode - submit action to broker and return execution results
+                info!("Production mode: submitting action to broker");
+                
+                // Get broker gateway reference
                 let broker = self.get_broker_gateway()?;
                 
                 // Submit action to broker
                 let fill = broker.submit(&action).await?;
                 
-                // Record the fill with all required fields
+                // Record the fill with all required fields including partial flag
+                let order_id = fill.order_id.clone();
+                let price = fill.price;
+                let size = fill.size;
+                let partial = fill.partial;
+                
                 self.recent_fills.push(Fill {
-                    order_id: fill.order_id,
+                    order_id: order_id.clone(),
                     timestamp_ns: fill.timestamp_ns,
-                    price: fill.price,
-                    size: fill.size,
+                    price,
+                    size,
                     side: match ActionType::try_from(fill.side) {
                         Ok(action_type) => action_type,
                         Err(_) => ActionType::ActionHold,
                     },
-                    partial: fill.partial,
+                    partial,
                 });
                 
+                info!(
+                    "Recorded fill: order_id={}, price={}, size={}, partial={}",
+                    order_id, price, size, partial
+                );
+                
                 // Update positions based on broker response
-                // For now, we need to get the current bar to calculate P/L
+                // Get current bar to calculate P/L
                 let broker = self.get_broker_gateway()?;
                 let current_bar = broker.current_bar(&self.symbol).await?;
                 
@@ -281,7 +322,7 @@ impl Environment {
                 let realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
                 
                 // Reconcile with broker positions
-                // First, get broker positions for reconciliation
+                // Get broker positions for reconciliation
                 let broker = self.get_broker_gateway()?;
                 let broker_positions = broker.sync_positions(&self.symbol).await?;
                 
@@ -290,7 +331,7 @@ impl Environment {
                 // For now, we'll use 0.0 as a placeholder and log if reconciliation shows discrepancy
                 let broker_realised_pnl = 0.0; // TODO: Add method to get broker realised P/L
                 
-                // Perform reconciliation
+                // Perform reconciliation - this logs warnings for discrepancies
                 reconcile_positions(
                     &self.positions.iter().map(|p| p.to_proto()).collect::<Vec<_>>(),
                     &broker_positions,
@@ -304,10 +345,14 @@ impl Environment {
                     .collect();
                 
                 // Get observation (without episode - use current state)
+                // Create live bars map with current bar
+                let mut live_bars = HashMap::new();
+                live_bars.insert("M1".to_string(), current_bar.clone());
+                
                 let observation = Observation {
                     timestamp_ns: current_timestamp,
                     symbol: self.symbol.clone(),
-                    live_bars: HashMap::new(), // TODO: Populate with current bar
+                    live_bars,
                     recent_bars: HashMap::new(), // TODO: Populate with historical bars
                     positions: proto_positions,
                     realised_pnl_12m,
@@ -331,6 +376,12 @@ impl Environment {
                 // Calculate reward
                 let reward = self.calculate_reward(&action)?;
                 
+                // Update last_action after calculating reward
+                self.last_action = match ActionType::try_from(action.action) {
+                    Ok(action_type) => Some(action_type),
+                    Err(_) => None,
+                };
+                
                 Ok(StepResponse {
                     observation: Some(observation),
                     reward,
@@ -342,18 +393,77 @@ impl Environment {
     }
 
     /// Get current observation without advancing
-    pub async fn observe(&self, _req: ObserveRequest) -> Result<Observation> {
-        let episode = self
-            .episode
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?;
+    pub async fn observe(&self, req: ObserveRequest) -> Result<Observation> {
+        let current_timestamp = now_ns();
+        
+        match self.mode {
+            Mode::Training => {
+                let episode = self
+                    .episode
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?;
 
-        // Convert positions to proto format
-        let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
-            .map(|p| p.to_proto())
-            .collect();
+                // Convert positions to proto format
+                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
+                    .map(|p| p.to_proto())
+                    .collect();
 
-        Ok(episode.get_observation(proto_positions.as_slice(), self.realised_pnl_12m()))
+                Ok(episode.get_observation(proto_positions.as_slice(), self.realised_pnl_12m()))
+            }
+            Mode::Live => {
+                // Production mode - get current state from broker
+                // Get current bar from broker
+                let current_bar = if let Some(broker) = &self.broker_gateway {
+                    broker.current_bar(&req.symbol).await?
+                } else {
+                    // Fallback if broker gateway not available
+                    Bar {
+                        timestamp_ns: current_timestamp,
+                        open: 0.0,
+                        high: 0.0,
+                        low: 0.0,
+                        close: 0.0,
+                        volume: 0.0,
+                    }
+                };
+                
+                // Create live bars map with current bar
+                let mut live_bars = HashMap::new();
+                live_bars.insert("M1".to_string(), current_bar.clone());
+                
+                // Convert positions to proto format
+                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
+                    .map(|p| p.to_proto())
+                    .collect();
+                
+                // Get recent fills
+                let recent_fills = self.recent_fills.iter()
+                    .map(|f| modelenv_proto::Fill {
+                        order_id: f.order_id.clone(),
+                        timestamp_ns: f.timestamp_ns,
+                        price: f.price,
+                        size: f.size,
+                        side: f.side as i32,
+                        partial: f.partial,
+                    })
+                    .collect();
+                
+                Ok(Observation {
+                    timestamp_ns: current_timestamp,
+                    symbol: req.symbol,
+                    live_bars,
+                    recent_bars: HashMap::new(), // TODO: Populate with historical bars
+                    positions: proto_positions,
+                    realised_pnl_12m: self.realised_pnl_12m(),
+                    recent_fills,
+                    indicators: vec![], // TODO: Implement technical indicators
+                    recent_ticks: vec![], // TODO: Populate with recent ticks
+                    live_ticks: vec![], // TODO: Populate with live ticks
+                    recent_news: vec![], // TODO: Populate with recent news
+                    done: false,
+                })
+            }
+        }
     }
 
     /// Calculate the rolling 12-month realised P/L
@@ -372,10 +482,89 @@ impl Environment {
     }
 
     /// Calculate reward based on action
-    fn calculate_reward(&self, _action: &Action) -> Result<f64> {
-        // Placeholder reward calculation
-        // TODO: Implement proper reward calculation
-        Ok(0.0)
+    fn calculate_reward(&mut self, action: &Action) -> Result<f64> {
+        // Get current timestamp
+        let current_timestamp = self.current_timestamp();
+        
+        // Calculate current total equity (unrealised_pnl + realised_pnl_12m)
+        let current_unrealised_pnl: f64 = self.positions.iter()
+            .map(|p| p.unrealised_pnl)
+            .sum();
+        let current_realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
+        let current_total_equity = current_unrealised_pnl + current_realised_pnl_12m;
+        
+        // Calculate delta_V_t (change in total equity)
+        let delta_v_t = if let Some(prev_equity) = self.prev_total_equity {
+            current_total_equity - prev_equity
+        } else {
+            // First step - no previous equity to compare
+            0.0
+        };
+        
+        // Update previous total equity for next step
+        self.prev_total_equity = Some(current_total_equity);
+        
+        // Calculate asymmetric drawdown penalty
+        // Only apply penalty when delta_V_t is negative
+        let asymmetric_penalty = if delta_v_t < 0.0 {
+            self.reward_lambda * (delta_v_t.abs()).powf(2.0)
+        } else {
+            0.0
+        };
+        
+        // Calculate action penalty (c_a) for action toggling
+        let current_action = match ActionType::try_from(action.action) {
+            Ok(action_type) => action_type,
+            Err(_) => return Err(anyhow::anyhow!("Invalid action type")),
+        };
+        let action_penalty = if let Some(last_action) = self.last_action {
+            if last_action != current_action {
+                self.reward_action_penalty
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        
+        // Calculate holding penalty (c_h) for position duration
+        // Sum the duration of each open position
+        let holding_penalty = if !self.positions.is_empty() {
+            let total_duration_ns: i64 = self.positions.iter()
+                .map(|p| current_timestamp - p.open_timestamp_ns)
+                .sum();
+            // Convert nanoseconds to a reasonable time unit and apply penalty
+            // Using 1e-6 as the holding penalty coefficient
+            self.reward_holding_penalty * (total_duration_ns as f64)
+        } else {
+            0.0
+        };
+        
+        // Calculate final reward
+        let reward = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
+        
+        // Update running statistics for reward normalisation
+        self.reward_running_sum += reward;
+        self.reward_running_sum_sq += reward * reward;
+        self.reward_count += 1;
+        
+        // Calculate running mean and standard deviation
+        let mean = self.reward_running_sum / self.reward_count as f64;
+        let variance = (self.reward_running_sum_sq / self.reward_count as f64) - (mean * mean);
+        let std_dev = variance.max(0.0).sqrt();
+        
+        // Normalise reward using running statistics
+        // Keep signal between -1.0 and 1.0
+        let normalised_reward = if std_dev > 1e-8 {
+            (reward - mean) / std_dev
+        } else {
+            reward
+        };
+        
+        // Clip to [-1.0, 1.0]
+        let clipped_reward = normalised_reward.clamp(-1.0, 1.0);
+        
+        Ok(clipped_reward)
     }
 
     /// Apply an action to the environment
