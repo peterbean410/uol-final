@@ -33,7 +33,7 @@ with DAG(
     schedule="0 * * * 1-5",
     start_date=datetime(2020, 1, 1),
     catchup=True,
-    tags=["marketdata", "pricedata"],
+    tags=["marketdata", "pricedata", "bardata", "download"],
 ) as dag:
 
     for interval in _INTERVALS:
