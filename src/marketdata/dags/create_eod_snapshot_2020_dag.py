@@ -1,16 +1,21 @@
 """DAG: Create end-of-day (EOD) price snapshots for H1, H4, D1, 2020 backfill.
 
-Runs once per trading day (Tue–Sat at 00:00 UTC), waits for the matching
-daily-aggregate task in `aggregate_daily_interval_price_2020`, then runs
-the create-eoi-price-snapshot script in parallel for each interval.
+Runs daily at 00:00 UTC. On Tue–Sat the run waits for the matching
+daily-aggregate task in `aggregate_daily_interval_price_2020`. On Sun
+and Mon (when no aggregate fires) the wait is bypassed so the snapshot
+chain stays unbroken, `create_snapshot` then re-emits the prior
+snapshot's contents under the weekend key.
 Snapshots land under `marketdata/eod-snapshot/...`.
 """
 
 from datetime import datetime, timedelta
 
 from airflow.sdk import DAG
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import BranchPythonOperator
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from airflow.sensors.external_task import ExternalTaskSensor
+from airflow.utils.trigger_rule import TriggerRule
 from kubernetes.client import models as k8s
 
 default_args = {
@@ -26,27 +31,48 @@ _ECR_IMAGE = (
 )
 
 _INTERVALS = ["H1", "H4", "D1"]
+# aggregate_daily_interval_price_2020 runs Tue–Sat (cron "0 0 * * 2-6").
+# Python weekday(): Mon=0…Sun=6. Skip the wait on Sun and Mon.
+_NO_UPSTREAM_WEEKDAYS = {6, 0}
+
+
+def _make_branch(wait_task_id: str, skip_task_id: str):
+    def _branch(data_interval_end, **_):
+        if data_interval_end.weekday() in _NO_UPSTREAM_WEEKDAYS:
+            return skip_task_id
+        return wait_task_id
+    return _branch
 
 
 with DAG(
     dag_id="create_eod_snapshot_2020",
     default_args=default_args,
     description="Create FX end-of-day price snapshots (H1, H4, D1) from daily-aggregated bars",
-    schedule="0 0 * * 2-6",
+    schedule="0 0 * * *",
     start_date=datetime(2020, 1, 2),
     catchup=True,
     tags=["marketdata", "pricedata", "snapshot", "eod"],
 ) as dag:
 
     for interval in _INTERVALS:
+        wait_id = f"wait_for_aggregate_{interval}"
+        skip_id = f"skip_wait_{interval}"
+
+        branch = BranchPythonOperator(
+            task_id=f"branch_{interval}",
+            python_callable=_make_branch(wait_id, skip_id),
+        )
+
         wait_for_aggregate = ExternalTaskSensor(
-            task_id=f"wait_for_aggregate_{interval}",
+            task_id=wait_id,
             external_dag_id="aggregate_daily_interval_price_2020",
             external_task_id=f"aggregate_{interval}_interval_price",
             poke_interval=300,
             timeout=7200,
             mode="reschedule",
         )
+
+        skip_wait = EmptyOperator(task_id=skip_id)
 
         create_snapshot = KubernetesPodOperator(
             task_id=f"create_{interval}_eod_snapshot",
@@ -77,6 +103,7 @@ with DAG(
             ),
             is_delete_operator_pod=True,
             get_logs=True,
+            trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
         )
 
-        wait_for_aggregate >> create_snapshot
+        branch >> [wait_for_aggregate, skip_wait] >> create_snapshot
