@@ -100,6 +100,8 @@ def _snapshot_root(time_window_minutes: int) -> str:
         return "marketdata/eom-snapshot"
     if time_window_minutes == WEEK_MINUTES:
         return "marketdata/eow-snapshot"
+    if time_window_minutes == HOUR_MINUTES:
+        return "marketdata/eoh-snapshot"
     return "marketdata/eod-snapshot"
 
 
@@ -109,7 +111,7 @@ def _build_snapshot_key(fx_symbol: str, interval: str, dt: datetime, time_window
     - MONTH_MINUTES: marketdata/eom-snapshot/.../year/month/{ts}.parquet
     - WEEK_MINUTES:  marketdata/eow-snapshot/.../year/month/{ts}.parquet
     - DAILY_MINUTES: marketdata/eod-snapshot/.../year/month/day/{ts}.parquet
-    - HOUR_MINUTES:  marketdata/eod-snapshot/.../year/month/day/hour/{ts}.parquet
+    - HOUR_MINUTES:  marketdata/eoh-snapshot/.../year/month/day/hour/{ts}.parquet
     """
     ts = dt.strftime("%Y%m%dT%H%M%SZ")
     base = f"{_snapshot_root(time_window_minutes)}/symbol={fx_symbol}/interval={interval}"

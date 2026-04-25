@@ -103,7 +103,7 @@ def test_hourly_snapshot_path_contains_hour(mock_load, mock_load_prev, mock_uplo
     uploaded_df = mock_upload.call_args[0][0]
     s3_key = mock_upload.call_args[0][2]
 
-    assert s3_key.startswith("marketdata/eod-snapshot/")
+    assert s3_key.startswith("marketdata/eoh-snapshot/")
     assert "year=2026/month=01/day=01/hour=10" in s3_key
     assert len(uploaded_df) == 3
 
