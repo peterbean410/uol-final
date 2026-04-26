@@ -37,7 +37,11 @@ impl Episode {
     }
 
     /// Get the current observation for the episode
-    pub fn get_observation(&self, positions: &[modelenv_proto::Position], realised_pnl_12m: f64) -> Observation {
+    pub fn get_observation(
+        &self,
+        positions: &[modelenv_proto::Position],
+        realised_pnl_12m: f64,
+    ) -> Observation {
         let mut live_bars = HashMap::new();
         let mut recent_bars = HashMap::new();
 
@@ -54,17 +58,18 @@ impl Episode {
                 }
 
                 // Get recent bars (up to 64) ending at current cursor
-                let start_idx = if self.cursor >= 64 { self.cursor - 63 } else { 0 };
+                let start_idx = if self.cursor >= 64 {
+                    self.cursor - 63
+                } else {
+                    0
+                };
                 let end_idx = self.cursor + 1;
                 let recent: Vec<Bar> = bars
                     .get(start_idx..end_idx)
                     .map(|slice| slice.to_vec())
                     .unwrap_or_default();
-                
-                recent_bars.insert(
-                    interval.to_string(),
-                    BarList { bars: recent },
-                );
+
+                recent_bars.insert(interval.to_string(), BarList { bars: recent });
             }
         }
 
@@ -93,20 +98,20 @@ impl Episode {
 
         // Get the current timestamp at the cursor position
         let current_timestamp = self.get_cursor_timestamp();
-        
+
         // Calculate the target timestamp (current + 5 seconds)
         let target_timestamp = current_timestamp + step_size_ns;
-        
+
         // Check if target timestamp exceeds episode end
         if target_timestamp > self.episode_end_ts {
             self.done = true;
             return false;
         }
-        
+
         // Find the minimum cursor position across all intervals that satisfies the target timestamp
         let mut new_cursor = usize::MAX;
         let mut found_any = false;
-        
+
         for interval in TIME_INTERVALS {
             if let Some(bars) = self.bars.get(*interval) {
                 // Find the first bar with timestamp >= target_timestamp
@@ -123,12 +128,12 @@ impl Episode {
                 }
             }
         }
-        
+
         if !found_any || new_cursor == usize::MAX {
             self.done = true;
             return false;
         }
-        
+
         self.cursor = new_cursor;
         true
     }
@@ -188,13 +193,13 @@ mod tests {
 
         // Advance by 5 seconds (5_000_000_000 ns)
         let still_running = episode.advance(5_000_000_000);
-        
+
         // Should still be running
         assert!(still_running);
-        
+
         // Cursor should have moved to bar at or after 5 seconds (index 5)
         assert_eq!(episode.cursor, 5);
-        
+
         // Timestamp should be at 5 seconds
         let obs = episode.get_observation(&[], 0.0);
         assert_eq!(obs.timestamp_ns, 5_000_000_000);
@@ -229,11 +234,11 @@ mod tests {
         // First advance: 0 -> 6 seconds (bar at index 2)
         assert!(episode.advance(5_000_000_000));
         assert_eq!(episode.cursor, 2);
-        
+
         // Second advance: 6 -> 11 seconds (no bar at 9s >= 11s, so use bar at 12s index 4)
         assert!(episode.advance(5_000_000_000));
         assert_eq!(episode.cursor, 4);
-        
+
         // Third advance: 12 -> 17 seconds, but no bar at 17 seconds
         // So this should be done
         let still_running = episode.advance(5_000_000_000);
@@ -318,7 +323,7 @@ mod tests {
         // Create bars for multiple time intervals
         let mut m1_bars = Vec::new();
         let mut m5_bars = Vec::new();
-        
+
         for i in 0..10 {
             m1_bars.push(Bar {
                 timestamp_ns: i * 60_000_000_000, // 1 minute intervals
@@ -328,7 +333,7 @@ mod tests {
                 close: 100.5 + i as f64,
                 volume: 1000.0,
             });
-            
+
             // M5 bars are every 5th M1 bar (at 0 and 5 minutes)
             m5_bars.push(Bar {
                 timestamp_ns: i * 5 * 60_000_000_000, // 5 minute intervals
@@ -344,12 +349,7 @@ mod tests {
         bars_map.insert("M1".to_string(), m1_bars);
         bars_map.insert("M5".to_string(), m5_bars);
 
-        let mut episode = Episode::new(
-            "USDJPY".to_string(),
-            bars_map,
-            0,
-            600_000_000_000,
-        );
+        let mut episode = Episode::new("USDJPY".to_string(), bars_map, 0, 600_000_000_000);
 
         // Initial cursor should be at 0
         assert_eq!(episode.cursor, 0);
@@ -357,16 +357,16 @@ mod tests {
 
         // Advance by 5 minutes (300 seconds = 300_000_000_000 ns)
         let still_running = episode.advance(300_000_000_000);
-        
+
         // Should still be running
         assert!(still_running);
-        
+
         // Cursor should have moved to bar at or after 5 minutes
         // For M1: index 5 (5 minutes)
         // For M5: index 1 (5 minutes)
         // The minimum cursor across all intervals is 1
         assert_eq!(episode.cursor, 1);
-        
+
         // Check that both intervals have bars at current cursor
         let obs = episode.get_observation(&[], 0.0);
         assert!(obs.live_bars.contains_key("M1"));
@@ -427,10 +427,11 @@ pub async fn initialize_episode(
     for interval in TIME_INTERVALS {
         // Construct S3 URI for the parquet file
         let s3_uri = format!("{}/{}_{}/data.parquet", s3_prefix, symbol, interval);
-        
+
         // Load bars from S3, stopping at end timestamp
-        let mut bars = load_bars_from_parquet_with_end_ts(&s3_uri, symbol, interval, episode_end_ts).await?;
-        
+        let mut bars =
+            load_bars_from_parquet_with_end_ts(&s3_uri, symbol, interval, episode_end_ts).await?;
+
         // Validate that we have bars
         if bars.is_empty() {
             return Err(anyhow::anyhow!(
@@ -450,7 +451,8 @@ pub async fn initialize_episode(
         };
 
         // Filter bars to only include those within the episode time range [start_ts, episode_end_ts]
-        bars = bars.into_iter()
+        bars = bars
+            .into_iter()
             .filter(|b| b.timestamp_ns >= start_ts && b.timestamp_ns <= episode_end_ts)
             .collect();
 

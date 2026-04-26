@@ -1,4 +1,6 @@
 // Broker Gateway module for Production Mode operation
+pub mod ctrader;
+
 use anyhow::Result;
 
 use modelenv_proto::{Action, Bar, Fill, Position};
@@ -45,4 +47,44 @@ pub trait BrokerGateway {
     /// # Returns
     /// The Fill message representing the execution result
     async fn submit(&self, action: &Action) -> Result<Fill>;
+}
+
+/// Factory function to create a broker gateway instance
+///
+/// # Arguments
+/// * `broker_type` - The broker gateway type (e.g., "ctrader", "metatrader", "ib")
+/// * `username` - Optional broker username
+/// * `password` - Optional broker password
+/// * `account` - Optional broker account
+/// * `symbol` - Trading symbol
+///
+/// # Returns
+/// A boxed BrokerGateway implementation
+pub fn create_broker_gateway_instance(
+    broker_type: &str,
+    username: Option<String>,
+    password: Option<String>,
+    account: Option<String>,
+    symbol: &str,
+) -> Result<Box<dyn BrokerGateway + Send + Sync>> {
+    match broker_type.to_lowercase().as_str() {
+        "ctrader" => {
+            let username = username.ok_or_else(|| anyhow::anyhow!("cTrader username required"))?;
+            let password = password.ok_or_else(|| anyhow::anyhow!("cTrader password required"))?;
+            let account = account.ok_or_else(|| anyhow::anyhow!("cTrader account required"))?;
+
+            let client = ctrader::client::CtraderClient::new(
+                username,
+                password,
+                account,
+                symbol.to_string(),
+            );
+            let gateway = ctrader::gateway::CtraderBrokerGateway::new(client, symbol.to_string());
+            Ok(Box::new(gateway))
+        }
+        _ => Err(anyhow::anyhow!(
+            "Unknown broker type '{}'. Supported types: ctrader",
+            broker_type
+        )),
+    }
 }

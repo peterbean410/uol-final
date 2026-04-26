@@ -1,15 +1,15 @@
 // gRPC server implementation for FX RL Model Environment
 use anyhow::Result;
+use futures::stream::{self, Stream};
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
-use futures::stream::{self, Stream};
 
 use modelenv_proto::{
-    environment_server::Environment, ResetRequest, ObserveRequest, Action, StepResponse,
-    Observation,
+    environment_server::Environment, Action, Observation, ObserveRequest, ResetRequest,
+    StepResponse,
 };
 
 use modelenv_core::environment::Environment as CoreEnvironment;
@@ -22,8 +22,8 @@ pub struct EnvironmentService {
 impl EnvironmentService {
     /// Create a new EnvironmentService
     pub fn new(environment: CoreEnvironment) -> Self {
-        EnvironmentService { 
-            environment: Arc::new(Mutex::new(environment)) 
+        EnvironmentService {
+            environment: Arc::new(Mutex::new(environment)),
         }
     }
 }
@@ -37,37 +37,40 @@ impl Environment for EnvironmentService {
 
     async fn reset(&self, req: Request<ResetRequest>) -> Result<Response<Observation>, Status> {
         let reset_req = req.into_inner();
-        
+
         // Call the environment reset method
         let mut env = self.environment.lock().await;
-        let observation = env.reset(reset_req)
+        let observation = env
+            .reset(reset_req)
             .await
             .map_err(|e| Status::internal(format!("Reset failed: {}", e)))?;
-        
+
         Ok(Response::new(observation))
     }
 
     async fn step(&self, req: Request<Action>) -> Result<Response<StepResponse>, Status> {
         let action = req.into_inner();
-        
+
         // Call the environment step method
         let mut env = self.environment.lock().await;
-        let step_response = env.step(action)
+        let step_response = env
+            .step(action)
             .await
             .map_err(|e| Status::internal(format!("Step failed: {}", e)))?;
-        
+
         Ok(Response::new(step_response))
     }
 
     async fn observe(&self, req: Request<ObserveRequest>) -> Result<Response<Observation>, Status> {
         let observe_req = req.into_inner();
-        
+
         // Call the environment observe method
         let env = self.environment.lock().await;
-        let observation = env.observe(observe_req)
+        let observation = env
+            .observe(observe_req)
             .await
             .map_err(|e| Status::internal(format!("Observe failed: {}", e)))?;
-        
+
         Ok(Response::new(observation))
     }
 
@@ -76,41 +79,43 @@ impl Environment for EnvironmentService {
         req: Request<ObserveRequest>,
     ) -> Result<Response<StreamObservationsResponse>, Status> {
         let observe_req = req.into_inner();
-        
+
         // Create a channel for streaming observations
         let (tx, rx) = mpsc::channel(16);
-        
+
         // Clone the environment for the streaming task
         let env = self.environment.clone();
         let symbol = observe_req.symbol;
-        
+
         // Spawn a task to generate observations
         tokio::spawn(async move {
             // TODO: Implement streaming for Production Mode
             // For now, just send a single observation and close the stream
-            
+
             // Get initial observation
             let observation = {
                 let env = env.lock().await;
                 env.observe(ObserveRequest { symbol }).await
             };
-            
+
             let observation = match observation {
                 Ok(obs) => obs,
                 Err(e) => {
-                    let _ = tx.send(Err(Status::internal(format!("Observe failed: {}", e)))).await;
+                    let _ = tx
+                        .send(Err(Status::internal(format!("Observe failed: {}", e))))
+                        .await;
                     return;
                 }
             };
-            
+
             // Send the observation
             if tx.send(Ok(observation)).await.is_err() {
                 return;
             }
-            
+
             // Close the channel
         });
-        
+
         let stream = stream::unfold(rx, |mut rx| async move {
             match rx.recv().await {
                 Some(item) => Some((item, rx)),

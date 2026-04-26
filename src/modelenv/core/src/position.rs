@@ -53,7 +53,7 @@ impl Position {
     ) -> Self {
         // Entry price = mid_price + half the spread
         let entry_price = mid_price + (spread / 2.0);
-        
+
         Position {
             position_id,
             entry_price,
@@ -94,8 +94,9 @@ impl Position {
     /// Swap = swap_rate * days_elapsed * volume
     /// Only accrues when a day boundary is crossed
     pub fn accrue_swap(&mut self, current_timestamp_ns: i64, daily_swap_rate: f64) -> bool {
-        let elapsed_days = (current_timestamp_ns - self.last_swap_accrual_ns) as f64 / NANOS_PER_DAY as f64;
-        
+        let elapsed_days =
+            (current_timestamp_ns - self.last_swap_accrual_ns) as f64 / NANOS_PER_DAY as f64;
+
         if elapsed_days >= 1.0 {
             // Only accrue if at least one day has elapsed
             // Use floor to get the number of full days elapsed
@@ -132,7 +133,7 @@ impl Position {
             1 => Side::Sell,
             _ => Side::Buy, // Default to Buy if unknown
         };
-        
+
         Position {
             position_id: proto.position_id.clone(),
             entry_price: proto.entry_price,
@@ -153,7 +154,7 @@ impl Position {
         transaction_cost: f64,
     ) -> ClosedPosition {
         let realised_pnl = self.calculate_realised_pnl(close_price, transaction_cost);
-        
+
         ClosedPosition {
             position_id: self.position_id.clone(),
             entry_price: self.entry_price,
@@ -176,7 +177,8 @@ impl ClosedPosition {
 
     /// Check if the closed position is within the 12-month window
     pub fn is_within_12_months(&self, current_timestamp_ns: i64) -> bool {
-        let age_days = (current_timestamp_ns - self.close_timestamp_ns) as f64 / NANOS_PER_DAY as f64;
+        let age_days =
+            (current_timestamp_ns - self.close_timestamp_ns) as f64 / NANOS_PER_DAY as f64;
         age_days <= DAYS_IN_12_MONTHS as f64
     }
 }
@@ -211,7 +213,8 @@ impl ClosedPositionWindow {
 
     /// Remove closed positions older than 12 months
     pub fn prune_old_positions(&mut self, current_timestamp_ns: i64) {
-        self.closed_positions.retain(|p| p.is_within_12_months(current_timestamp_ns));
+        self.closed_positions
+            .retain(|p| p.is_within_12_months(current_timestamp_ns));
     }
 
     /// Get the number of closed positions in the window
@@ -232,9 +235,9 @@ mod tests {
     fn test_position_creation() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -249,9 +252,9 @@ mod tests {
     fn test_unrealised_pnl_buy() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -267,9 +270,9 @@ mod tests {
     fn test_unrealised_pnl_sell() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Sell,
             1000000000000,
         );
@@ -285,9 +288,9 @@ mod tests {
     fn test_realised_pnl() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -303,9 +306,9 @@ mod tests {
     fn test_realised_pnl_with_transaction_cost() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );

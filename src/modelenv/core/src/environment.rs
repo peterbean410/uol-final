@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use log::info;
-use modelenv_proto::{Action, Bar, ObserveRequest, Observation, ResetRequest, StepResponse, ActionType};
+use modelenv_proto::{
+    Action, ActionType, Bar, Observation, ObserveRequest, ResetRequest, StepResponse,
+};
 
 use crate::broker_gateway::BrokerGateway;
 use crate::config::Mode;
 use crate::data_loader::now_ns;
 use crate::episode::{initialize_episode, Episode};
-use crate::position::{Position, ClosedPositionWindow, Side};
+use crate::position::{ClosedPositionWindow, Position, Side};
 use crate::reconciliation::reconcile_positions;
 
 /// The main environment struct
@@ -93,7 +95,10 @@ impl Environment {
     }
 
     /// Set the broker gateway for Production Mode
-    pub fn with_broker_gateway(mut self, broker_gateway: Arc<dyn BrokerGateway + Send + Sync>) -> Self {
+    pub fn with_broker_gateway(
+        mut self,
+        broker_gateway: Arc<dyn BrokerGateway + Send + Sync>,
+    ) -> Self {
         self.broker_gateway = Some(broker_gateway);
         self
     }
@@ -153,24 +158,21 @@ impl Environment {
                 );
 
                 // Get initial observation
-                self.observe(ObserveRequest {
-                    symbol: req.symbol,
-                })
-                .await
+                self.observe(ObserveRequest { symbol: req.symbol }).await
             }
             Mode::Live => {
                 // Production mode - synchronise with broker's current positions
                 info!("Production mode: synchronising with broker positions");
-                
+
                 // Get broker gateway reference
                 let broker = self.get_broker_gateway()?;
-                
+
                 // Sync positions with broker
                 let broker_positions = broker.sync_positions(&req.symbol).await?;
-                
+
                 // Clear all existing internal positions, unrealised P/L, and accumulated swap
                 self.positions.clear();
-                
+
                 // Load synchronised positions into environment state
                 for p in &broker_positions {
                     let position = Position::from_proto(p);
@@ -183,17 +185,17 @@ impl Environment {
                     );
                     self.positions.push(position);
                 }
-                
+
                 // Log synchronisation summary
                 info!(
                     "Synchronised {} positions from broker",
                     self.positions.len()
                 );
-                
+
                 // Get current bar from broker
                 let broker = self.get_broker_gateway()?;
                 let current_bar = broker.current_bar(&req.symbol).await?;
-                
+
                 // Log the current bar
                 info!(
                     "Fetched current bar: timestamp={}, open={}, high={}, low={}, close={}, volume={}",
@@ -204,12 +206,9 @@ impl Environment {
                     current_bar.close,
                     current_bar.volume
                 );
-                
+
                 // Get initial observation
-                self.observe(ObserveRequest {
-                    symbol: req.symbol,
-                })
-                .await
+                self.observe(ObserveRequest { symbol: req.symbol }).await
             }
         }
     }
@@ -218,31 +217,32 @@ impl Environment {
     pub async fn step(&mut self, action: Action) -> Result<StepResponse> {
         // Get current timestamp before mutable borrow
         let current_timestamp = self.current_timestamp();
-        
+
         match self.mode {
             Mode::Training => {
                 // Training mode - use episode
-                let episode = self
-                    .episode
-                    .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?;
+                let episode = self.episode.as_mut().ok_or_else(|| {
+                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                })?;
 
                 // Get the timestamp at the current cursor before advancing
                 let prev_timestamp = episode.get_cursor_timestamp();
-                
+
                 // Advance the episode first to release the mutable borrow
                 let done = episode.advance(5_000_000_000); // 5 seconds in nanoseconds
 
                 // Calculate realised P/L before getting observation
-                let realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
+                let realised_pnl_12m = self
+                    .closed_position_window
+                    .total_realised_pnl_12m(current_timestamp);
 
                 // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
-                    .map(|p| p.to_proto())
-                    .collect();
+                let proto_positions: Vec<modelenv_proto::Position> =
+                    self.positions.iter().map(|p| p.to_proto()).collect();
 
                 // Get observation
-                let observation = episode.get_observation(proto_positions.as_slice(), realised_pnl_12m);
+                let observation =
+                    episode.get_observation(proto_positions.as_slice(), realised_pnl_12m);
 
                 // Accrue swap if day boundary was crossed during advancement
                 // This must be done before apply_action to avoid borrow conflicts
@@ -254,7 +254,7 @@ impl Environment {
 
                 // Apply the action
                 self.apply_action(&action)?;
-                
+
                 // Update last_action before calculating reward
                 self.last_action = match ActionType::try_from(action.action) {
                     Ok(action_type) => Some(action_type),
@@ -274,81 +274,92 @@ impl Environment {
             Mode::Live => {
                 // Production mode - submit action to broker and return execution results
                 info!("Production mode: submitting action to broker");
-                
-                // Get broker gateway reference
-                let broker = self.get_broker_gateway()?;
-                
-                // Submit action to broker
-                let fill = broker.submit(&action).await?;
-                
-                // Record the fill with all required fields including partial flag
-                let order_id = fill.order_id.clone();
-                let price = fill.price;
-                let size = fill.size;
-                let partial = fill.partial;
-                
-                self.recent_fills.push(Fill {
-                    order_id: order_id.clone(),
-                    timestamp_ns: fill.timestamp_ns,
-                    price,
-                    size,
-                    side: match ActionType::try_from(fill.side) {
-                        Ok(action_type) => action_type,
-                        Err(_) => ActionType::ActionHold,
-                    },
-                    partial,
-                });
-                
-                info!(
-                    "Recorded fill: order_id={}, price={}, size={}, partial={}",
-                    order_id, price, size, partial
-                );
-                
+
+                let action_type = ActionType::try_from(action.action).map_err(|_| {
+                    anyhow::anyhow!("Unsupported action type {} in live mode", action.action)
+                })?;
+
+                if action_type != ActionType::ActionHold {
+                    // Get broker gateway reference
+                    let broker = self.get_broker_gateway()?;
+
+                    // Submit action to broker
+                    let fill = broker.submit(&action).await?;
+
+                    // Record the fill with all required fields including partial flag
+                    let order_id = fill.order_id.clone();
+                    let price = fill.price;
+                    let size = fill.size;
+                    let partial = fill.partial;
+
+                    self.recent_fills.push(Fill {
+                        order_id: order_id.clone(),
+                        timestamp_ns: fill.timestamp_ns,
+                        price,
+                        size,
+                        side: match ActionType::try_from(fill.side) {
+                            Ok(action_type) => action_type,
+                            Err(_) => ActionType::ActionHold,
+                        },
+                        partial,
+                    });
+
+                    info!(
+                        "Recorded fill: order_id={}, price={}, size={}, partial={}",
+                        order_id, price, size, partial
+                    );
+                }
+
                 // Update positions based on broker response
                 // Get current bar to calculate P/L
                 let broker = self.get_broker_gateway()?;
                 let current_bar = broker.current_bar(&self.symbol).await?;
-                
+
                 // Update unrealised P/L for all positions based on current bar
                 let current_mid_price = (current_bar.open + current_bar.close) / 2.0;
                 for position in &mut self.positions {
                     position.unrealised_pnl = position.calculate_unrealised_pnl(current_mid_price);
                 }
-                
+
                 // Get current timestamp for observation
                 let current_timestamp = now_ns();
-                
+
                 // Calculate realised P/L before getting observation
-                let realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
-                
+                let realised_pnl_12m = self
+                    .closed_position_window
+                    .total_realised_pnl_12m(current_timestamp);
+
                 // Reconcile with broker positions
                 // Get broker positions for reconciliation
                 let broker = self.get_broker_gateway()?;
                 let broker_positions = broker.sync_positions(&self.symbol).await?;
-                
+
                 // Get broker's reported realised P/L
                 // Note: The broker gateway doesn't currently provide realised P/L
                 // For now, we'll use 0.0 as a placeholder and log if reconciliation shows discrepancy
                 let broker_realised_pnl = 0.0; // TODO: Add method to get broker realised P/L
-                
+
                 // Perform reconciliation - this logs warnings for discrepancies
                 reconcile_positions(
-                    &self.positions.iter().map(|p| p.to_proto()).collect::<Vec<_>>(),
+                    &self
+                        .positions
+                        .iter()
+                        .map(|p| p.to_proto())
+                        .collect::<Vec<_>>(),
                     &broker_positions,
                     realised_pnl_12m,
                     broker_realised_pnl,
                 );
-                
+
                 // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
-                    .map(|p| p.to_proto())
-                    .collect();
-                
+                let proto_positions: Vec<modelenv_proto::Position> =
+                    self.positions.iter().map(|p| p.to_proto()).collect();
+
                 // Get observation (without episode - use current state)
                 // Create live bars map with current bar
                 let mut live_bars = HashMap::new();
                 live_bars.insert("M1".to_string(), current_bar.clone());
-                
+
                 let observation = Observation {
                     timestamp_ns: current_timestamp,
                     symbol: self.symbol.clone(),
@@ -356,7 +367,9 @@ impl Environment {
                     recent_bars: HashMap::new(), // TODO: Populate with historical bars
                     positions: proto_positions,
                     realised_pnl_12m,
-                    recent_fills: self.recent_fills.iter()
+                    recent_fills: self
+                        .recent_fills
+                        .iter()
                         .map(|f| modelenv_proto::Fill {
                             order_id: f.order_id.clone(),
                             timestamp_ns: f.timestamp_ns,
@@ -366,22 +379,22 @@ impl Environment {
                             partial: f.partial,
                         })
                         .collect(),
-                    indicators: vec![], // TODO: Implement technical indicators
+                    indicators: vec![],   // TODO: Implement technical indicators
                     recent_ticks: vec![], // TODO: Populate with recent ticks
-                    live_ticks: vec![], // TODO: Populate with live ticks
-                    recent_news: vec![], // TODO: Populate with recent news
+                    live_ticks: vec![],   // TODO: Populate with live ticks
+                    recent_news: vec![],  // TODO: Populate with recent news
                     done: false,
                 };
-                
+
                 // Calculate reward
                 let reward = self.calculate_reward(&action)?;
-                
+
                 // Update last_action after calculating reward
                 self.last_action = match ActionType::try_from(action.action) {
                     Ok(action_type) => Some(action_type),
                     Err(_) => None,
                 };
-                
+
                 Ok(StepResponse {
                     observation: Some(observation),
                     reward,
@@ -395,18 +408,16 @@ impl Environment {
     /// Get current observation without advancing
     pub async fn observe(&self, req: ObserveRequest) -> Result<Observation> {
         let current_timestamp = now_ns();
-        
+
         match self.mode {
             Mode::Training => {
-                let episode = self
-                    .episode
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?;
+                let episode = self.episode.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                })?;
 
                 // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
-                    .map(|p| p.to_proto())
-                    .collect();
+                let proto_positions: Vec<modelenv_proto::Position> =
+                    self.positions.iter().map(|p| p.to_proto()).collect();
 
                 Ok(episode.get_observation(proto_positions.as_slice(), self.realised_pnl_12m()))
             }
@@ -426,18 +437,19 @@ impl Environment {
                         volume: 0.0,
                     }
                 };
-                
+
                 // Create live bars map with current bar
                 let mut live_bars = HashMap::new();
                 live_bars.insert("M1".to_string(), current_bar.clone());
-                
+
                 // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> = self.positions.iter()
-                    .map(|p| p.to_proto())
-                    .collect();
-                
+                let proto_positions: Vec<modelenv_proto::Position> =
+                    self.positions.iter().map(|p| p.to_proto()).collect();
+
                 // Get recent fills
-                let recent_fills = self.recent_fills.iter()
+                let recent_fills = self
+                    .recent_fills
+                    .iter()
                     .map(|f| modelenv_proto::Fill {
                         order_id: f.order_id.clone(),
                         timestamp_ns: f.timestamp_ns,
@@ -447,7 +459,7 @@ impl Environment {
                         partial: f.partial,
                     })
                     .collect();
-                
+
                 Ok(Observation {
                     timestamp_ns: current_timestamp,
                     symbol: req.symbol,
@@ -456,10 +468,10 @@ impl Environment {
                     positions: proto_positions,
                     realised_pnl_12m: self.realised_pnl_12m(),
                     recent_fills,
-                    indicators: vec![], // TODO: Implement technical indicators
+                    indicators: vec![],   // TODO: Implement technical indicators
                     recent_ticks: vec![], // TODO: Populate with recent ticks
-                    live_ticks: vec![], // TODO: Populate with live ticks
-                    recent_news: vec![], // TODO: Populate with recent news
+                    live_ticks: vec![],   // TODO: Populate with live ticks
+                    recent_news: vec![],  // TODO: Populate with recent news
                     done: false,
                 })
             }
@@ -469,7 +481,8 @@ impl Environment {
     /// Calculate the rolling 12-month realised P/L
     fn realised_pnl_12m(&self) -> f64 {
         let current_timestamp = self.current_timestamp();
-        self.closed_position_window.total_realised_pnl_12m(current_timestamp)
+        self.closed_position_window
+            .total_realised_pnl_12m(current_timestamp)
     }
 
     /// Get the current timestamp from the episode
@@ -485,14 +498,14 @@ impl Environment {
     fn calculate_reward(&mut self, action: &Action) -> Result<f64> {
         // Get current timestamp
         let current_timestamp = self.current_timestamp();
-        
+
         // Calculate current total equity (unrealised_pnl + realised_pnl_12m)
-        let current_unrealised_pnl: f64 = self.positions.iter()
-            .map(|p| p.unrealised_pnl)
-            .sum();
-        let current_realised_pnl_12m = self.closed_position_window.total_realised_pnl_12m(current_timestamp);
+        let current_unrealised_pnl: f64 = self.positions.iter().map(|p| p.unrealised_pnl).sum();
+        let current_realised_pnl_12m = self
+            .closed_position_window
+            .total_realised_pnl_12m(current_timestamp);
         let current_total_equity = current_unrealised_pnl + current_realised_pnl_12m;
-        
+
         // Calculate delta_V_t (change in total equity)
         let delta_v_t = if let Some(prev_equity) = self.prev_total_equity {
             current_total_equity - prev_equity
@@ -500,10 +513,10 @@ impl Environment {
             // First step - no previous equity to compare
             0.0
         };
-        
+
         // Update previous total equity for next step
         self.prev_total_equity = Some(current_total_equity);
-        
+
         // Calculate asymmetric drawdown penalty
         // Only apply penalty when delta_V_t is negative
         let asymmetric_penalty = if delta_v_t < 0.0 {
@@ -511,7 +524,7 @@ impl Environment {
         } else {
             0.0
         };
-        
+
         // Calculate action penalty (c_a) for action toggling
         let current_action = match ActionType::try_from(action.action) {
             Ok(action_type) => action_type,
@@ -526,11 +539,13 @@ impl Environment {
         } else {
             0.0
         };
-        
+
         // Calculate holding penalty (c_h) for position duration
         // Sum the duration of each open position
         let holding_penalty = if !self.positions.is_empty() {
-            let total_duration_ns: i64 = self.positions.iter()
+            let total_duration_ns: i64 = self
+                .positions
+                .iter()
                 .map(|p| current_timestamp - p.open_timestamp_ns)
                 .sum();
             // Convert nanoseconds to a reasonable time unit and apply penalty
@@ -539,20 +554,20 @@ impl Environment {
         } else {
             0.0
         };
-        
+
         // Calculate final reward
         let reward = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
-        
+
         // Update running statistics for reward normalisation
         self.reward_running_sum += reward;
         self.reward_running_sum_sq += reward * reward;
         self.reward_count += 1;
-        
+
         // Calculate running mean and standard deviation
         let mean = self.reward_running_sum / self.reward_count as f64;
         let variance = (self.reward_running_sum_sq / self.reward_count as f64) - (mean * mean);
         let std_dev = variance.max(0.0).sqrt();
-        
+
         // Normalise reward using running statistics
         // Keep signal between -1.0 and 1.0
         let normalised_reward = if std_dev > 1e-8 {
@@ -560,10 +575,10 @@ impl Environment {
         } else {
             reward
         };
-        
+
         // Clip to [-1.0, 1.0]
         let clipped_reward = normalised_reward.clamp(-1.0, 1.0);
-        
+
         Ok(clipped_reward)
     }
 
@@ -604,26 +619,26 @@ impl Environment {
     fn accrue_swap_on_positions(&mut self) -> Result<bool> {
         let current_timestamp = self.current_timestamp();
         let swap_rate = self.get_swap_rate();
-        
+
         let mut swap_accrued = false;
         for position in &mut self.positions {
             if position.accrue_swap(current_timestamp, swap_rate) {
                 swap_accrued = true;
             }
         }
-        
+
         // Update the last swap accrual timestamp only if swap was actually accrued
         if swap_accrued {
             self.last_swap_accrual_timestamp = current_timestamp;
         }
-        
+
         Ok(swap_accrued)
     }
 
     /// Open a new position
     fn open_position(&mut self, volume: f64, side: Side) -> Result<()> {
         let current_timestamp = self.current_timestamp();
-        
+
         // Get the current bar to calculate mid_price and spread
         let mid_price = self.get_current_mid_price()?;
         let spread = self.get_current_spread()?;
@@ -636,7 +651,7 @@ impl Environment {
             side,
             current_timestamp,
         );
-        
+
         self.positions.push(position);
         Ok(())
     }
@@ -647,7 +662,7 @@ impl Environment {
             .episode
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Episode not initialized"))?;
-        
+
         // Get the current bar for M1 interval (or any available)
         if let Some(bars) = episode.bars.get("M1") {
             if let Some(bar) = bars.get(episode.cursor) {
@@ -656,7 +671,7 @@ impl Environment {
                 return Ok((bar.open + bar.close) / 2.0);
             }
         }
-        
+
         Err(anyhow::anyhow!("No current price available"))
     }
 
@@ -678,22 +693,27 @@ impl Environment {
         }
 
         // Find the position with the largest unrealised loss
-        let positions_to_close: Vec<Position> = self.positions.iter()
+        let positions_to_close: Vec<Position> = self
+            .positions
+            .iter()
             .filter(|p| p.unrealised_pnl < 0.0)
             .cloned()
             .collect();
-        
+
         if positions_to_close.is_empty() {
             return Ok(()); // No positions at a loss
         }
 
         // Find the minimum unrealised P/L
-        let min_pnl = positions_to_close.iter()
+        let min_pnl = positions_to_close
+            .iter()
             .map(|p| p.unrealised_pnl)
             .fold(f64::INFINITY, f64::min);
-        
+
         // Close all positions with the minimum P/L
-        let positions_to_close: Vec<Position> = self.positions.iter()
+        let positions_to_close: Vec<Position> = self
+            .positions
+            .iter()
             .filter(|p| p.unrealised_pnl == min_pnl)
             .cloned()
             .collect();
@@ -712,22 +732,27 @@ impl Environment {
         }
 
         // Find the position with the largest unrealised profit
-        let positions_to_close: Vec<Position> = self.positions.iter()
+        let positions_to_close: Vec<Position> = self
+            .positions
+            .iter()
             .filter(|p| p.unrealised_pnl > 0.0)
             .cloned()
             .collect();
-        
+
         if positions_to_close.is_empty() {
             return Ok(()); // No positions at a profit
         }
 
         // Find the maximum unrealised P/L
-        let max_pnl = positions_to_close.iter()
+        let max_pnl = positions_to_close
+            .iter()
             .map(|p| p.unrealised_pnl)
             .fold(f64::NEG_INFINITY, f64::max);
-        
+
         // Close all positions with the maximum P/L
-        let positions_to_close: Vec<Position> = self.positions.iter()
+        let positions_to_close: Vec<Position> = self
+            .positions
+            .iter()
             .filter(|p| p.unrealised_pnl == max_pnl)
             .cloned()
             .collect();
@@ -741,7 +766,9 @@ impl Environment {
 
     /// Close all positions at a loss
     fn close_all_loss(&mut self) -> Result<()> {
-        let positions_to_close: Vec<Position> = self.positions.iter()
+        let positions_to_close: Vec<Position> = self
+            .positions
+            .iter()
             .filter(|p| p.unrealised_pnl < 0.0)
             .cloned()
             .collect();
@@ -755,7 +782,9 @@ impl Environment {
 
     /// Close all positions that are profitable
     fn close_all_profit(&mut self) -> Result<()> {
-        let positions_to_close: Vec<Position> = self.positions.iter()
+        let positions_to_close: Vec<Position> = self
+            .positions
+            .iter()
             .filter(|p| p.unrealised_pnl > 0.0)
             .cloned()
             .collect();
@@ -771,23 +800,22 @@ impl Environment {
     fn close_position(&mut self, position: &Position) -> Result<()> {
         let current_timestamp = self.current_timestamp();
         let close_price = self.get_current_mid_price()?;
-        
+
         // Calculate realised P/L
         let _realised_pnl = position.calculate_realised_pnl(close_price, self.transaction_cost);
-        
+
         // Create closed position record
-        let closed_position = position.to_closed_position(
-            close_price,
-            current_timestamp,
-            self.transaction_cost,
-        );
-        
+        let closed_position =
+            position.to_closed_position(close_price, current_timestamp, self.transaction_cost);
+
         // Add to closed position window
-        self.closed_position_window.add_closed_position(closed_position);
-        
+        self.closed_position_window
+            .add_closed_position(closed_position);
+
         // Remove from open positions
-        self.positions.retain(|p| p.position_id != position.position_id);
-        
+        self.positions
+            .retain(|p| p.position_id != position.position_id);
+
         // Record the fill
         self.recent_fills.push(Fill {
             order_id: format!("fill_{}", current_timestamp),
@@ -808,15 +836,53 @@ impl Environment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::position::{Position, ClosedPosition, NANOS_PER_DAY};
+    use crate::position::{ClosedPosition, Position, NANOS_PER_DAY};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct MockBrokerGateway {
+        submit_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl BrokerGateway for MockBrokerGateway {
+        async fn sync_positions(&self, _symbol: &str) -> Result<Vec<modelenv_proto::Position>> {
+            Ok(vec![])
+        }
+
+        async fn current_bar(&self, _symbol: &str) -> Result<Bar> {
+            Ok(Bar {
+                timestamp_ns: 1,
+                open: 155.20,
+                high: 155.23,
+                low: 155.18,
+                close: 155.21,
+                volume: 100.0,
+            })
+        }
+
+        async fn submit(&self, _action: &Action) -> Result<modelenv_proto::Fill> {
+            self.submit_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(modelenv_proto::Fill {
+                order_id: "mock-order".to_string(),
+                timestamp_ns: 1,
+                price: 155.21,
+                size: 1.0,
+                side: ActionType::ActionOpenBuy as i32,
+                partial: false,
+            })
+        }
+    }
 
     #[test]
     fn test_position_creation() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -831,9 +897,9 @@ mod tests {
     fn test_unrealised_pnl_buy() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -849,9 +915,9 @@ mod tests {
     fn test_unrealised_pnl_sell() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Sell,
             1000000000000,
         );
@@ -867,9 +933,9 @@ mod tests {
     fn test_realised_pnl() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -885,9 +951,9 @@ mod tests {
     fn test_realised_pnl_with_transaction_cost() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0, // mid_price
+            150.0,  // mid_price
             0.0001, // spread
-            1.0, // volume
+            1.0,    // volume
             Side::Buy,
             1000000000000,
         );
@@ -940,5 +1006,29 @@ mod tests {
         // Total P/L should be 1.0 + 0.01 = 1.01
         let current_timestamp = 3000000000000;
         assert_eq!(window.total_realised_pnl_12m(current_timestamp), 1.01);
+    }
+
+    #[tokio::test]
+    async fn test_live_hold_action_skips_broker_submission() {
+        let submit_calls = Arc::new(AtomicUsize::new(0));
+        let broker_gateway = Arc::new(MockBrokerGateway {
+            submit_calls: Arc::clone(&submit_calls),
+        });
+
+        let mut environment =
+            Environment::new(Mode::Live, "USDJPY".to_string(), "s3://unused".to_string())
+                .with_broker_gateway(broker_gateway);
+
+        let response = environment
+            .step(Action {
+                action: ActionType::ActionHold as i32,
+                client_order_id: "hold-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
+        assert!(response.observation.is_some());
+        assert!(environment.recent_fills.is_empty());
     }
 }
