@@ -50,6 +50,7 @@ class AppConfig:
         self.default_mode: str = os.getenv("DEFAULT_MODE", "demo")
         self.s3_bucket: str = os.getenv("S3_BUCKET", "")
         self.token_expiry: float = float(os.getenv("TOKEN_EXPIRY", "0"))
+        self.fxnews_api_key: str = os.getenv("FXNEWS_API_KEY", "")
 
         self._env_path = env_path
 

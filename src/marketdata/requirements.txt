@@ -7,3 +7,4 @@ pytest
 pyarrow
 boto3
 python-dateutil
+requests
