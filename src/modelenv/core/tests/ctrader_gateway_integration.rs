@@ -10,8 +10,10 @@ fn create_mock_ctrader_gateway(
 ) -> Result<Arc<dyn modelenv_core::broker_gateway::BrokerGateway + Send + Sync>> {
     let gateway = create_broker_gateway_instance(
         "ctrader",
-        Some("user".to_string()),
-        Some("password".to_string()),
+        Some("app-client-id".to_string()),
+        Some("app-client-secret".to_string()),
+        Some("access-token".to_string()),
+        Some("refresh-token".to_string()),
         Some("account".to_string()),
         "USDJPY",
     )?;

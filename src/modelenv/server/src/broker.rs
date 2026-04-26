@@ -13,9 +13,11 @@ use modelenv_core::broker_gateway::BrokerGateway;
 /// # Arguments
 /// * `broker_gateway` - The broker gateway type (e.g., "ctrader", "metatrader", "ib")
 /// * `broker_addr` - Optional broker gateway address (host:port)
-/// * `broker_username` - Optional broker username
-/// * `broker_password` - Optional broker password
-/// * `broker_account` - Optional broker account
+/// * `ctrader_app_client_id` - Optional cTrader Open API app client ID
+/// * `ctrader_app_client_secret` - Optional cTrader Open API app client secret
+/// * `ctrader_access_token` - Optional cTrader Open API access token
+/// * `ctrader_refresh_token` - Optional cTrader Open API refresh token
+/// * `ctrader_account` - Optional cTrader trader account ID
 /// * `symbol` - Trading symbol
 ///
 /// # Returns
@@ -23,9 +25,11 @@ use modelenv_core::broker_gateway::BrokerGateway;
 pub async fn create_broker_gateway(
     broker_gateway: &str,
     broker_addr: Option<&str>,
-    broker_username: Option<&str>,
-    broker_password: Option<&str>,
-    broker_account: Option<&str>,
+    ctrader_app_client_id: Option<&str>,
+    ctrader_app_client_secret: Option<&str>,
+    ctrader_access_token: Option<&str>,
+    ctrader_refresh_token: Option<&str>,
+    ctrader_account: Option<&str>,
     symbol: &str,
 ) -> Result<Arc<dyn BrokerGateway + Send + Sync>> {
     info!(
@@ -35,14 +39,18 @@ pub async fn create_broker_gateway(
 
     match broker_gateway.to_lowercase().as_str() {
         "ctrader" => {
-            let username = broker_username.map(|s| s.to_string());
-            let password = broker_password.map(|s| s.to_string());
-            let account = broker_account.map(|s| s.to_string());
+            let app_client_id = ctrader_app_client_id.map(|s| s.to_string());
+            let app_client_secret = ctrader_app_client_secret.map(|s| s.to_string());
+            let access_token = ctrader_access_token.map(|s| s.to_string());
+            let refresh_token = ctrader_refresh_token.map(|s| s.to_string());
+            let account = ctrader_account.map(|s| s.to_string());
 
             let gateway = modelenv_core::broker_gateway::create_broker_gateway_instance(
                 broker_gateway,
-                username,
-                password,
+                app_client_id,
+                app_client_secret,
+                access_token,
+                refresh_token,
                 account,
                 symbol,
             )?;
@@ -92,9 +100,11 @@ pub async fn create_broker_gateway(
 /// # Arguments
 /// * `broker_gateway` - Optional broker gateway type
 /// * `broker_addr` - Optional broker gateway address
-/// * `broker_username` - Optional broker username
-/// * `broker_password` - Optional broker password
-/// * `broker_account` - Optional broker account
+/// * `ctrader_app_client_id` - Optional cTrader Open API app client ID
+/// * `ctrader_app_client_secret` - Optional cTrader Open API app client secret
+/// * `ctrader_access_token` - Optional cTrader Open API access token
+/// * `ctrader_refresh_token` - Optional cTrader Open API refresh token
+/// * `ctrader_account` - Optional cTrader trader account ID
 /// * `symbol` - Trading symbol
 ///
 /// # Returns
@@ -104,9 +114,11 @@ pub async fn create_broker_gateway(
 pub async fn try_create_broker_gateway(
     broker_gateway: Option<&str>,
     broker_addr: Option<&str>,
-    broker_username: Option<&str>,
-    broker_password: Option<&str>,
-    broker_account: Option<&str>,
+    ctrader_app_client_id: Option<&str>,
+    ctrader_app_client_secret: Option<&str>,
+    ctrader_access_token: Option<&str>,
+    ctrader_refresh_token: Option<&str>,
+    ctrader_account: Option<&str>,
     symbol: &str,
 ) -> Result<Option<Arc<dyn BrokerGateway + Send + Sync>>> {
     match broker_gateway {
@@ -114,9 +126,11 @@ pub async fn try_create_broker_gateway(
             let gateway = create_broker_gateway(
                 gateway,
                 broker_addr,
-                broker_username,
-                broker_password,
-                broker_account,
+                ctrader_app_client_id,
+                ctrader_app_client_secret,
+                ctrader_access_token,
+                ctrader_refresh_token,
+                ctrader_account,
                 symbol,
             )
             .await?;
@@ -144,8 +158,10 @@ mod tests {
         let gateway = try_create_broker_gateway(
             Some("ctrader"),
             None,
-            Some("user"),
-            Some("password"),
+            Some("app-client-id"),
+            Some("app-client-secret"),
+            Some("access-token"),
+            Some("refresh-token"),
             Some("account"),
             "USDJPY",
         )
@@ -157,8 +173,17 @@ mod tests {
 
     #[tokio::test]
     async fn non_ctrader_gateway_requires_broker_addr() {
-        let result =
-            try_create_broker_gateway(Some("metatrader"), None, None, None, None, "USDJPY").await;
+        let result = try_create_broker_gateway(
+            Some("metatrader"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "USDJPY",
+        )
+        .await;
 
         match result {
             Ok(_) => panic!("expected broker gateway creation to fail without broker address"),

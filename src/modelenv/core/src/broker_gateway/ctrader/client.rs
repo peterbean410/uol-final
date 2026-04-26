@@ -46,9 +46,11 @@ pub struct CtraderClient {
     /// cTrader API client secret (from OAuth application)
     client_secret: String,
     /// cTrader API access token
-    access_token: Option<String>,
+    access_token: String,
     /// cTrader API refresh token
     refresh_token: Option<String>,
+    /// cTrader trader account ID
+    account_id: String,
     /// Trading symbol
     symbol: String,
     /// Current session ID
@@ -190,23 +192,33 @@ impl CtraderClient {
     /// Create a new cTrader API client
     ///
     /// # Arguments
-    /// * `username` - cTrader API username (used as client_id for OAuth)
-    /// * `password` - cTrader API password (used as client_secret for OAuth)
-    /// * `account` - cTrader API account ID (ctidTraderAccountId)
+    /// * `app_client_id` - cTrader Open API app client ID
+    /// * `app_client_secret` - cTrader Open API app client secret
+    /// * `access_token` - cTrader Open API access token
+    /// * `refresh_token` - cTrader Open API refresh token
+    /// * `account_id` - cTrader trader account ID (ctidTraderAccountId)
     /// * `symbol` - Trading symbol
     ///
     /// # Returns
     /// New CtraderClient instance
-    pub fn new(username: String, password: String, account: String, symbol: String) -> Self {
+    pub fn new(
+        app_client_id: String,
+        app_client_secret: String,
+        access_token: String,
+        refresh_token: Option<String>,
+        account_id: String,
+        symbol: String,
+    ) -> Self {
         CtraderClient {
             host: "demo.ctraderapi.com".to_string(),
             port: 5035,
-            client_id: username,
-            client_secret: password,
-            access_token: None,
-            refresh_token: None,
+            client_id: app_client_id,
+            client_secret: app_client_secret,
+            access_token,
+            refresh_token,
+            account_id,
             symbol,
-            session_id: Some(account),
+            session_id: None,
             reconnect_attempts: 0,
             max_reconnect_attempts: MAX_RECONNECT_ATTEMPTS,
             swap_rates: Arc::new(Mutex::new(None)),
@@ -223,20 +235,32 @@ impl CtraderClient {
     pub async fn connect(&mut self) -> Result<()> {
         info!(
             "Connecting to cTrader API: host={}, port={}, account={}",
-            self.host,
-            self.port,
-            self.session_id.clone().unwrap_or_default()
+            self.host, self.port, self.account_id
         );
 
         if self.client_id.trim().is_empty() {
             return Err(anyhow!(
-                "AuthenticationError {{ username: <empty>, details: username is required }}"
+                "AuthenticationError {{ client_id: <empty>, details: app client ID is required }}"
             ));
         }
 
         if self.client_secret.trim().is_empty() {
             return Err(anyhow!(
-                "AuthenticationError {{ username: {}, details: password is required }}",
+                "AuthenticationError {{ client_id: {}, details: app client secret is required }}",
+                self.client_id
+            ));
+        }
+
+        if self.access_token.trim().is_empty() {
+            return Err(anyhow!(
+                "AuthenticationError {{ client_id: {}, details: access token is required }}",
+                self.client_id
+            ));
+        }
+
+        if self.account_id.trim().is_empty() {
+            return Err(anyhow!(
+                "AuthenticationError {{ client_id: {}, details: trader account ID is required }}",
                 self.client_id
             ));
         }
@@ -245,13 +269,17 @@ impl CtraderClient {
         // In a real implementation, this would:
         // 1. Establish WebSocket connection to the cTrader API
         // 2. Send ProtoOAApplicationAuthReq with client_id and client_secret
-        // 3. Send ProtoOAAccountAuthReq with access_token and account ID
+        // 3. Send ProtoOAAccountAuthReq with access_token and trader account ID
         // 4. Store the session ID
 
+        let refresh_token_available = self.refresh_token.is_some();
+        debug!(
+            "Authenticating cTrader session: client_id={}, account_id={}, refresh_token_available={}",
+            self.client_id, self.account_id, refresh_token_available
+        );
+
         // Simulate successful authentication
-        self.access_token = Some("access-token-placeholder".to_string());
-        self.refresh_token = Some("refresh-token-placeholder".to_string());
-        self.session_id = Some(format!("session-{}", self.client_id));
+        self.session_id = Some(format!("session-{}", self.account_id));
         self.reconnect_attempts = 0;
 
         info!(
@@ -266,8 +294,6 @@ impl CtraderClient {
     /// # Returns
     /// Ok(()) if disconnection successful, Err otherwise
     pub async fn disconnect(&mut self) -> Result<()> {
-        self.access_token = None;
-        self.refresh_token = None;
         self.session_id = None;
         info!("Disconnected from cTrader API");
         Ok(())
@@ -278,7 +304,7 @@ impl CtraderClient {
     /// # Returns
     /// true if connected, false otherwise
     pub fn is_connected(&self) -> bool {
-        self.session_id.is_some() && self.access_token.is_some()
+        self.session_id.is_some()
     }
 
     /// Retrieve positions from cTrader API
@@ -731,8 +757,10 @@ mod tests {
 
     fn test_client(symbol: &str) -> CtraderClient {
         CtraderClient::new(
-            "user".to_string(),
-            "password".to_string(),
+            "app-client-id".to_string(),
+            "app-client-secret".to_string(),
+            "access-token".to_string(),
+            Some("refresh-token".to_string()),
             "account".to_string(),
             symbol.to_string(),
         )
@@ -815,7 +843,7 @@ mod tests {
 
         client.connect().await.unwrap();
         assert!(client.is_connected());
-        assert_eq!(client.session_id.as_deref(), Some("session-user"));
+        assert_eq!(client.session_id.as_deref(), Some("session-account"));
 
         client.disconnect().await.unwrap();
         assert!(!client.is_connected());
@@ -823,17 +851,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_rejects_missing_password() {
+    async fn connect_rejects_missing_access_token() {
         let mut client = CtraderClient::new(
-            "user".to_string(),
+            "app-client-id".to_string(),
+            "app-client-secret".to_string(),
             "   ".to_string(),
+            None,
             "account".to_string(),
             "USDJPY".to_string(),
         );
 
         let err = client.connect().await.unwrap_err();
 
-        assert!(err.to_string().contains("password is required"));
+        assert!(err.to_string().contains("access token is required"));
     }
 
     #[tokio::test]

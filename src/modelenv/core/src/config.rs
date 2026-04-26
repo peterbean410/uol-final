@@ -47,12 +47,16 @@ pub struct BrokerGatewayConfig {
     pub broker_gateway: Option<String>,
     /// Broker gateway address (host:port)
     pub broker_addr: Option<String>,
-    /// Broker gateway username
-    pub broker_username: Option<String>,
-    /// Broker gateway password
-    pub broker_password: Option<String>,
-    /// Broker gateway account
-    pub broker_account: Option<String>,
+    /// cTrader Open API application client ID
+    pub ctrader_app_client_id: Option<String>,
+    /// cTrader Open API application client secret
+    pub ctrader_app_client_secret: Option<String>,
+    /// cTrader Open API access token
+    pub ctrader_access_token: Option<String>,
+    /// cTrader Open API refresh token
+    pub ctrader_refresh_token: Option<String>,
+    /// cTrader trader account ID
+    pub ctrader_account: Option<String>,
 }
 
 impl Default for BrokerGatewayConfig {
@@ -60,9 +64,11 @@ impl Default for BrokerGatewayConfig {
         BrokerGatewayConfig {
             broker_gateway: None,
             broker_addr: None,
-            broker_username: None,
-            broker_password: None,
-            broker_account: None,
+            ctrader_app_client_id: None,
+            ctrader_app_client_secret: None,
+            ctrader_access_token: None,
+            ctrader_refresh_token: None,
+            ctrader_account: None,
         }
     }
 }
@@ -85,22 +91,36 @@ impl BrokerGatewayConfig {
         }
     }
 
-    fn username(&self) -> Option<&str> {
-        self.broker_username
+    fn app_client_id(&self) -> Option<&str> {
+        self.ctrader_app_client_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }
 
-    fn password(&self) -> Option<&str> {
-        self.broker_password
+    fn app_client_secret(&self) -> Option<&str> {
+        self.ctrader_app_client_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn access_token(&self) -> Option<&str> {
+        self.ctrader_access_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn refresh_token(&self) -> Option<&str> {
+        self.ctrader_refresh_token
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }
 
     fn account(&self) -> Option<&str> {
-        self.broker_account
+        self.ctrader_account
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -226,52 +246,48 @@ impl Config {
                         return Err(anyhow::anyhow!("--broker-addr requires a value"));
                     }
                 }
-                "--broker-username" => {
-                    if i + 1 < args.len() {
-                        self.broker_gateway.broker_username = Some(args[i + 1].clone());
-                        i += 2;
-                    } else {
-                        return Err(anyhow::anyhow!("--broker-username requires a value"));
-                    }
-                }
-                "--broker-password" => {
-                    if i + 1 < args.len() {
-                        self.broker_gateway.broker_password = Some(args[i + 1].clone());
-                        i += 2;
-                    } else {
-                        return Err(anyhow::anyhow!("--broker-password requires a value"));
-                    }
-                }
-                "--broker-account" => {
-                    if i + 1 < args.len() {
-                        self.broker_gateway.broker_account = Some(args[i + 1].clone());
-                        i += 2;
-                    } else {
-                        return Err(anyhow::anyhow!("--broker-account requires a value"));
-                    }
-                }
-                "--ctrader-username" => {
+                "--ctrader-app-client-id" => {
                     if i + 1 < args.len() {
                         self.broker_gateway.set_ctrader_gateway_if_unset();
-                        self.broker_gateway.broker_username = Some(args[i + 1].clone());
+                        self.broker_gateway.ctrader_app_client_id = Some(args[i + 1].clone());
                         i += 2;
                     } else {
-                        return Err(anyhow::anyhow!("--ctrader-username requires a value"));
+                        return Err(anyhow::anyhow!("--ctrader-app-client-id requires a value"));
                     }
                 }
-                "--ctrader-password" => {
+                "--ctrader-app-client-secret" => {
                     if i + 1 < args.len() {
                         self.broker_gateway.set_ctrader_gateway_if_unset();
-                        self.broker_gateway.broker_password = Some(args[i + 1].clone());
+                        self.broker_gateway.ctrader_app_client_secret = Some(args[i + 1].clone());
                         i += 2;
                     } else {
-                        return Err(anyhow::anyhow!("--ctrader-password requires a value"));
+                        return Err(anyhow::anyhow!(
+                            "--ctrader-app-client-secret requires a value"
+                        ));
+                    }
+                }
+                "--ctrader-access-token" => {
+                    if i + 1 < args.len() {
+                        self.broker_gateway.set_ctrader_gateway_if_unset();
+                        self.broker_gateway.ctrader_access_token = Some(args[i + 1].clone());
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--ctrader-access-token requires a value"));
+                    }
+                }
+                "--ctrader-refresh-token" => {
+                    if i + 1 < args.len() {
+                        self.broker_gateway.set_ctrader_gateway_if_unset();
+                        self.broker_gateway.ctrader_refresh_token = Some(args[i + 1].clone());
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--ctrader-refresh-token requires a value"));
                     }
                 }
                 "--ctrader-account" => {
                     if i + 1 < args.len() {
                         self.broker_gateway.set_ctrader_gateway_if_unset();
-                        self.broker_gateway.broker_account = Some(args[i + 1].clone());
+                        self.broker_gateway.ctrader_account = Some(args[i + 1].clone());
                         i += 2;
                     } else {
                         return Err(anyhow::anyhow!("--ctrader-account requires a value"));
@@ -351,27 +367,35 @@ impl Config {
             self.broker_gateway.broker_addr = Some(broker_addr_env);
         }
 
-        if let Some(ctrader_username) =
-            Self::first_non_empty_env(env_get, &["CTRADER_USERNAME", "MODELENV_BROKER_USERNAME"])
-        {
-            self.broker_gateway.broker_username = Some(ctrader_username);
+        if let Some(app_client_id) = Self::non_empty_env(env_get, "APP_CLIENT_ID") {
+            self.broker_gateway.ctrader_app_client_id = Some(app_client_id);
         }
 
-        if let Some(ctrader_password) =
-            Self::first_non_empty_env(env_get, &["CTRADER_PASSWORD", "MODELENV_BROKER_PASSWORD"])
-        {
-            self.broker_gateway.broker_password = Some(ctrader_password);
+        if let Some(app_client_secret) = Self::non_empty_env(env_get, "APP_CLIENT_SECRET") {
+            self.broker_gateway.ctrader_app_client_secret = Some(app_client_secret);
         }
 
-        if let Some(ctrader_account) =
-            Self::first_non_empty_env(env_get, &["CTRADER_ACCOUNT", "MODELENV_BROKER_ACCOUNT"])
-        {
-            self.broker_gateway.broker_account = Some(ctrader_account);
+        if let Some(access_token) = Self::non_empty_env(env_get, "ACCESS_TOKEN") {
+            self.broker_gateway.ctrader_access_token = Some(access_token);
+        }
+
+        if let Some(refresh_token) = Self::non_empty_env(env_get, "REFRESH_TOKEN") {
+            self.broker_gateway.ctrader_refresh_token = Some(refresh_token);
+        }
+
+        if let Some(ctrader_account) = Self::non_empty_env(env_get, "CTRADER_ACCOUNT") {
+            self.broker_gateway.ctrader_account = Some(ctrader_account);
         }
 
         if Self::first_non_empty_env(
             env_get,
-            &["CTRADER_USERNAME", "CTRADER_PASSWORD", "CTRADER_ACCOUNT"],
+            &[
+                "APP_CLIENT_ID",
+                "APP_CLIENT_SECRET",
+                "ACCESS_TOKEN",
+                "REFRESH_TOKEN",
+                "CTRADER_ACCOUNT",
+            ],
         )
         .is_some()
         {
@@ -433,11 +457,14 @@ impl Config {
         if self.broker_gateway.is_ctrader() {
             let mut missing = Vec::new();
 
-            if self.broker_gateway.username().is_none() {
-                missing.push("--ctrader-username or CTRADER_USERNAME");
+            if self.broker_gateway.app_client_id().is_none() {
+                missing.push("--ctrader-app-client-id or APP_CLIENT_ID");
             }
-            if self.broker_gateway.password().is_none() {
-                missing.push("--ctrader-password or CTRADER_PASSWORD");
+            if self.broker_gateway.app_client_secret().is_none() {
+                missing.push("--ctrader-app-client-secret or APP_CLIENT_SECRET");
+            }
+            if self.broker_gateway.access_token().is_none() {
+                missing.push("--ctrader-access-token or ACCESS_TOKEN");
             }
             if self.broker_gateway.account().is_none() {
                 missing.push("--ctrader-account or CTRADER_ACCOUNT");
@@ -486,19 +513,20 @@ impl Config {
             } else if self.broker_gateway.is_ctrader() {
                 info!("Broker Address: default cTrader endpoint");
             }
-            if let Some(ref broker_username) = self.broker_gateway.broker_username {
-                if self.broker_gateway.is_ctrader() {
-                    info!("cTrader Username: {}", broker_username);
-                } else {
-                    info!("Broker Username: {}", broker_username);
-                }
+            if let Some(ref app_client_id) = self.broker_gateway.ctrader_app_client_id {
+                info!("cTrader App Client ID: {}", app_client_id);
             }
-            if self.broker_gateway.broker_account.is_some() {
-                if self.broker_gateway.is_ctrader() {
-                    info!("cTrader Account: [set]");
-                } else {
-                    info!("Broker Account: [set]");
-                }
+            if self.broker_gateway.ctrader_app_client_secret.is_some() {
+                info!("cTrader App Client Secret: [set]");
+            }
+            if self.broker_gateway.ctrader_access_token.is_some() {
+                info!("cTrader Access Token: [set]");
+            }
+            if self.broker_gateway.refresh_token().is_some() {
+                info!("cTrader Refresh Token: [set]");
+            }
+            if self.broker_gateway.ctrader_account.is_some() {
+                info!("cTrader Account: [set]");
             }
         } else {
             info!("Broker Gateway: not configured");
@@ -522,12 +550,11 @@ fn print_help() {
         "  --broker-gateway <TYPE>    Broker gateway type (e.g., 'ctrader', 'metatrader', 'ib')"
     );
     println!("  --broker-addr <ADDRESS>    Broker gateway address (host:port)");
-    println!("  --broker-username <USER>   Broker gateway username");
-    println!("  --broker-password <PASS>   Broker gateway password");
-    println!("  --broker-account <ACCOUNT> Broker gateway account");
-    println!("  --ctrader-username <USER>  cTrader API username");
-    println!("  --ctrader-password <PASS>  cTrader API password");
-    println!("  --ctrader-account <ACCOUNT> cTrader API account");
+    println!("  --ctrader-app-client-id <ID>      cTrader Open API app client ID");
+    println!("  --ctrader-app-client-secret <SECRET> cTrader Open API app client secret");
+    println!("  --ctrader-access-token <TOKEN>    cTrader Open API access token");
+    println!("  --ctrader-refresh-token <TOKEN>   cTrader Open API refresh token");
+    println!("  --ctrader-account <ACCOUNT>       cTrader trader account ID");
     println!("  --reward-lambda <LAMBDA>   Asymmetric drawdown penalty coefficient (default: 1.0)");
     println!("  --reward-action-penalty <C_A>    Action penalty coefficient (default: 0.001)");
     println!("  --reward-holding-penalty <C_H>   Holding penalty coefficient (default: 1e-6)");
@@ -540,11 +567,10 @@ fn print_help() {
     println!("  MODELENV_SYMBOL            Same as --symbol");
     println!("  MODELENV_BROKER_GATEWAY    Same as --broker-gateway");
     println!("  MODELENV_BROKER_ADDR       Same as --broker-addr");
-    println!("  MODELENV_BROKER_USERNAME   Same as --broker-username");
-    println!("  MODELENV_BROKER_PASSWORD   Same as --broker-password");
-    println!("  MODELENV_BROKER_ACCOUNT    Same as --broker-account");
-    println!("  CTRADER_USERNAME           Same as --ctrader-username");
-    println!("  CTRADER_PASSWORD           Same as --ctrader-password");
+    println!("  APP_CLIENT_ID              Same as --ctrader-app-client-id");
+    println!("  APP_CLIENT_SECRET          Same as --ctrader-app-client-secret");
+    println!("  ACCESS_TOKEN               Same as --ctrader-access-token");
+    println!("  REFRESH_TOKEN              Same as --ctrader-refresh-token");
     println!("  CTRADER_ACCOUNT            Same as --ctrader-account");
     println!("  MODELENV_REWARD_LAMBDA     Same as --reward-lambda");
     println!("  MODELENV_REWARD_ACTION_PENALTY   Same as --reward-action-penalty");
@@ -574,8 +600,10 @@ mod tests {
         let config = load_test_config(
             &["modelenv-server", "--mode", "live"],
             &[
-                ("CTRADER_USERNAME", "env-user"),
-                ("CTRADER_PASSWORD", "env-pass"),
+                ("APP_CLIENT_ID", "env-client-id"),
+                ("APP_CLIENT_SECRET", "env-client-secret"),
+                ("ACCESS_TOKEN", "env-access-token"),
+                ("REFRESH_TOKEN", "env-refresh-token"),
                 ("CTRADER_ACCOUNT", "env-account"),
             ],
         )
@@ -586,15 +614,23 @@ mod tests {
             Some("ctrader")
         );
         assert_eq!(
-            config.broker_gateway.broker_username.as_deref(),
-            Some("env-user")
+            config.broker_gateway.ctrader_app_client_id.as_deref(),
+            Some("env-client-id")
         );
         assert_eq!(
-            config.broker_gateway.broker_password.as_deref(),
-            Some("env-pass")
+            config.broker_gateway.ctrader_app_client_secret.as_deref(),
+            Some("env-client-secret")
         );
         assert_eq!(
-            config.broker_gateway.broker_account.as_deref(),
+            config.broker_gateway.ctrader_access_token.as_deref(),
+            Some("env-access-token")
+        );
+        assert_eq!(
+            config.broker_gateway.ctrader_refresh_token.as_deref(),
+            Some("env-refresh-token")
+        );
+        assert_eq!(
+            config.broker_gateway.ctrader_account.as_deref(),
             Some("env-account")
         );
     }
@@ -608,31 +644,45 @@ mod tests {
                 "live",
                 "--broker-gateway",
                 "ctrader",
-                "--ctrader-username",
-                "cli-user",
-                "--ctrader-password",
-                "cli-pass",
+                "--ctrader-app-client-id",
+                "cli-client-id",
+                "--ctrader-app-client-secret",
+                "cli-client-secret",
+                "--ctrader-access-token",
+                "cli-access-token",
+                "--ctrader-refresh-token",
+                "cli-refresh-token",
                 "--ctrader-account",
                 "cli-account",
             ],
             &[
-                ("CTRADER_USERNAME", "env-user"),
-                ("CTRADER_PASSWORD", "env-pass"),
+                ("APP_CLIENT_ID", "env-client-id"),
+                ("APP_CLIENT_SECRET", "env-client-secret"),
+                ("ACCESS_TOKEN", "env-access-token"),
+                ("REFRESH_TOKEN", "env-refresh-token"),
                 ("CTRADER_ACCOUNT", "env-account"),
             ],
         )
         .unwrap();
 
         assert_eq!(
-            config.broker_gateway.broker_username.as_deref(),
-            Some("cli-user")
+            config.broker_gateway.ctrader_app_client_id.as_deref(),
+            Some("cli-client-id")
         );
         assert_eq!(
-            config.broker_gateway.broker_password.as_deref(),
-            Some("cli-pass")
+            config.broker_gateway.ctrader_app_client_secret.as_deref(),
+            Some("cli-client-secret")
         );
         assert_eq!(
-            config.broker_gateway.broker_account.as_deref(),
+            config.broker_gateway.ctrader_access_token.as_deref(),
+            Some("cli-access-token")
+        );
+        assert_eq!(
+            config.broker_gateway.ctrader_refresh_token.as_deref(),
+            Some("cli-refresh-token")
+        );
+        assert_eq!(
+            config.broker_gateway.ctrader_account.as_deref(),
             Some("cli-account")
         );
     }
@@ -652,7 +702,7 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("cTrader configuration incomplete"));
-        assert!(err.to_string().contains("CTRADER_USERNAME"));
+        assert!(err.to_string().contains("APP_CLIENT_ID"));
     }
 
     #[test]
@@ -664,10 +714,12 @@ mod tests {
                 "live",
                 "--broker-gateway",
                 "ctrader",
-                "--ctrader-username",
-                "user",
-                "--ctrader-password",
-                "pass",
+                "--ctrader-app-client-id",
+                "client-id",
+                "--ctrader-app-client-secret",
+                "client-secret",
+                "--ctrader-access-token",
+                "access-token",
                 "--ctrader-account",
                 "account",
             ],

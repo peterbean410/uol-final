@@ -53,30 +53,41 @@ pub trait BrokerGateway {
 ///
 /// # Arguments
 /// * `broker_type` - The broker gateway type (e.g., "ctrader", "metatrader", "ib")
-/// * `username` - Optional broker username
-/// * `password` - Optional broker password
-/// * `account` - Optional broker account
+/// * `app_client_id` - Optional cTrader Open API app client ID
+/// * `app_client_secret` - Optional cTrader Open API app client secret
+/// * `access_token` - Optional cTrader Open API access token
+/// * `refresh_token` - Optional cTrader Open API refresh token
+/// * `account_id` - Optional cTrader trader account ID
 /// * `symbol` - Trading symbol
 ///
 /// # Returns
 /// A boxed BrokerGateway implementation
 pub fn create_broker_gateway_instance(
     broker_type: &str,
-    username: Option<String>,
-    password: Option<String>,
-    account: Option<String>,
+    app_client_id: Option<String>,
+    app_client_secret: Option<String>,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    account_id: Option<String>,
     symbol: &str,
 ) -> Result<Box<dyn BrokerGateway + Send + Sync>> {
     match broker_type.to_lowercase().as_str() {
         "ctrader" => {
-            let username = username.ok_or_else(|| anyhow::anyhow!("cTrader username required"))?;
-            let password = password.ok_or_else(|| anyhow::anyhow!("cTrader password required"))?;
-            let account = account.ok_or_else(|| anyhow::anyhow!("cTrader account required"))?;
+            let app_client_id =
+                app_client_id.ok_or_else(|| anyhow::anyhow!("cTrader app client ID required"))?;
+            let app_client_secret = app_client_secret
+                .ok_or_else(|| anyhow::anyhow!("cTrader app client secret required"))?;
+            let access_token =
+                access_token.ok_or_else(|| anyhow::anyhow!("cTrader access token required"))?;
+            let account_id =
+                account_id.ok_or_else(|| anyhow::anyhow!("cTrader account ID required"))?;
 
             let client = ctrader::client::CtraderClient::new(
-                username,
-                password,
-                account,
+                app_client_id,
+                app_client_secret,
+                access_token,
+                refresh_token,
+                account_id,
                 symbol.to_string(),
             );
             let gateway = ctrader::gateway::CtraderBrokerGateway::new(client, symbol.to_string());

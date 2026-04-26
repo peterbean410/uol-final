@@ -342,8 +342,10 @@ mod tests {
     fn test_gateway(symbol: &str) -> CtraderBrokerGateway {
         CtraderBrokerGateway::new(
             CtraderClient::new(
-                "user".to_string(),
-                "password".to_string(),
+                "app-client-id".to_string(),
+                "app-client-secret".to_string(),
+                "access-token".to_string(),
+                Some("refresh-token".to_string()),
                 "account".to_string(),
                 symbol.to_string(),
             ),

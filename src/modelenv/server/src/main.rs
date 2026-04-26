@@ -48,9 +48,11 @@ async fn main() -> Result<()> {
         let broker_gateway = broker::try_create_broker_gateway(
             config.broker_gateway.broker_gateway.as_deref(),
             config.broker_gateway.broker_addr.as_deref(),
-            config.broker_gateway.broker_username.as_deref(),
-            config.broker_gateway.broker_password.as_deref(),
-            config.broker_gateway.broker_account.as_deref(),
+            config.broker_gateway.ctrader_app_client_id.as_deref(),
+            config.broker_gateway.ctrader_app_client_secret.as_deref(),
+            config.broker_gateway.ctrader_access_token.as_deref(),
+            config.broker_gateway.ctrader_refresh_token.as_deref(),
+            config.broker_gateway.ctrader_account.as_deref(),
             config.symbol.as_str(),
         )
         .await
