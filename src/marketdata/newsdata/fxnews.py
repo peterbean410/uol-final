@@ -53,7 +53,7 @@ def get_news_data(
         )
 
     params = {
-        "fx_currency_pair": fx_currency_pair,
+        "currencypair": fx_currency_pair,
         "items": items,
         "page": page,
         "token": api_key,
