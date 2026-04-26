@@ -29,7 +29,31 @@ INTERVAL_TO_PERIOD = {
     10080: 13,
 }
 
-PRICE_DIVISOR = 100_000
+DEFAULT_PRICE_SCALE = 5
+
+
+def _symbol_price_scale(symbol) -> int:
+    """Return number of decimal places for a cTrader symbol."""
+    digits = getattr(symbol, "digits", None)
+    if isinstance(digits, int) and digits >= 0:
+        return digits
+    return DEFAULT_PRICE_SCALE
+
+
+def _decode_bar_ohlc(
+    low_units: int,
+    delta_open_units: int,
+    delta_high_units: int,
+    delta_close_units: int,
+    scale: int,
+) -> tuple[float, float, float, float]:
+    """Decode trendbar integer price units into scaled OHLC floats."""
+    divisor = 10 ** scale
+    low = round(low_units / divisor, scale)
+    open_price = round((low_units + delta_open_units) / divisor, scale)
+    high = round((low_units + delta_high_units) / divisor, scale)
+    close = round((low_units + delta_close_units) / divisor, scale)
+    return open_price, high, low, close
 
 
 class _PriceBarFetcher:
@@ -47,6 +71,7 @@ class _PriceBarFetcher:
         self.from_ts = from_ts
         self.to_ts = to_ts
         self.symbol_id = None
+        self.price_scale = DEFAULT_PRICE_SCALE
         self.result_df = None
         self.error = None
 
@@ -101,6 +126,7 @@ class _PriceBarFetcher:
                 self._fail(f"Symbol not found: {self.symbol_name}")
                 return
             self.symbol_id = sym.symbolId
+            self.price_scale = _symbol_price_scale(sym)
             req = ProtoOAGetTrendbarsReq()
             req.ctidTraderAccountId = self.account_id
             req.symbolId = self.symbol_id
@@ -126,15 +152,21 @@ class _PriceBarFetcher:
 
         rows = []
         for bar in bars:
-            low = bar.low / PRICE_DIVISOR
+            open_price, high, low, close = _decode_bar_ohlc(
+                low_units=bar.low,
+                delta_open_units=bar.deltaOpen,
+                delta_high_units=bar.deltaHigh,
+                delta_close_units=bar.deltaClose,
+                scale=self.price_scale,
+            )
             rows.append({
                 "Timestamp": datetime.fromtimestamp(
                     bar.utcTimestampInMinutes * 60, tz=timezone.utc
                 ),
-                "Open": low + bar.deltaOpen / PRICE_DIVISOR,
-                "High": low + bar.deltaHigh / PRICE_DIVISOR,
+                "Open": open_price,
+                "High": high,
                 "Low": low,
-                "Close": low + bar.deltaClose / PRICE_DIVISOR,
+                "Close": close,
                 "Volume": bar.volume,
             })
 
