@@ -278,45 +278,40 @@ impl Environment {
 
     /// Take a step in the environment
     pub async fn step(&mut self, action: Action) -> Result<StepResponse> {
-        // Get current timestamp before mutable borrow
-        let current_timestamp = self.current_timestamp();
-
         match self.mode {
             Mode::Training => {
-                // Training mode - use episode
-                let episode = self.episode.as_mut().ok_or_else(|| {
-                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
-                })?;
+                let (prev_timestamp, current_timestamp, still_running) = {
+                    let episode = self.episode.as_mut().ok_or_else(|| {
+                        anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                    })?;
+                    let prev_timestamp = episode.get_cursor_timestamp();
+                    let still_running = episode.advance(self.step_size_ns);
+                    let current_timestamp = episode.get_cursor_timestamp();
+                    (prev_timestamp, current_timestamp, still_running)
+                };
 
-                // Get the timestamp at the current cursor before advancing
-                let prev_timestamp = episode.get_cursor_timestamp();
-
-                // Advance the episode first to release the mutable borrow
-                let still_running = episode.advance(self.step_size_ns);
-
-                // Calculate realised P/L before getting observation
-                let realised_pnl_12m = self
-                    .closed_position_window
-                    .total_realised_pnl_12m(current_timestamp);
-
-                // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> =
-                    self.positions.iter().map(|p| p.to_proto()).collect();
-
-                // Get observation
-                let observation =
-                    episode.get_observation(proto_positions.as_slice(), realised_pnl_12m);
-
-                // Accrue swap if day boundary was crossed during advancement
-                // This must be done before apply_action to avoid borrow conflicts
                 if !self.positions.is_empty() {
+                    let episode = self.episode.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                    })?;
                     if episode.has_day_boundary_crossed(prev_timestamp, current_timestamp) {
                         self.accrue_swap_on_positions()?;
                     }
                 }
 
-                // Apply the action
+                self.mark_positions_to_market()?;
                 self.apply_action(&action)?;
+
+                let realised_pnl_12m = self
+                    .closed_position_window
+                    .total_realised_pnl_12m(current_timestamp);
+                let proto_positions: Vec<modelenv_proto::Position> =
+                    self.positions.iter().map(|p| p.to_proto()).collect();
+                let observation = self
+                    .episode
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?
+                    .get_observation(proto_positions.as_slice(), realised_pnl_12m);
 
                 // Update last_action before calculating reward
                 self.last_action = match ActionType::try_from(action.action) {
@@ -698,6 +693,19 @@ impl Environment {
         Ok(swap_accrued)
     }
 
+    fn mark_positions_to_market(&mut self) -> Result<()> {
+        if self.positions.is_empty() {
+            return Ok(());
+        }
+
+        let current_mid_price = self.get_current_mid_price()?;
+        for position in &mut self.positions {
+            position.unrealised_pnl = position.calculate_unrealised_pnl(current_mid_price);
+        }
+
+        Ok(())
+    }
+
     /// Open a new position
     fn open_position(&mut self, volume: f64, side: Side) -> Result<()> {
         let current_timestamp = self.current_timestamp();
@@ -726,13 +734,8 @@ impl Environment {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Episode not initialized"))?;
 
-        // Get the current bar for M1 interval (or any available)
-        if let Some(bars) = episode.bars.get("M1") {
-            if let Some(bar) = bars.get(episode.cursor) {
-                // Mid price = (open + close) / 2 for simplicity
-                // Could also use (high + low) / 2 or just close
-                return Ok((bar.open + bar.close) / 2.0);
-            }
+        if let Some(bar) = episode.current_bar("M1") {
+            return Ok((bar.open + bar.close) / 2.0);
         }
 
         Err(anyhow::anyhow!("No current price available"))
@@ -1193,6 +1196,81 @@ mod tests {
 
         assert!(response.done);
         assert!(response.observation.unwrap().done);
+    }
+
+    #[tokio::test]
+    async fn test_training_step_advances_timestamp_and_returns_opened_position() {
+        let m1_bars = (0..6)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+        let m5_bars = vec![
+            Bar {
+                timestamp_ns: 0,
+                open: 200.0,
+                high: 201.0,
+                low: 199.0,
+                close: 200.5,
+                volume: 5000.0,
+            },
+            Bar {
+                timestamp_ns: 300_000_000_000,
+                open: 205.0,
+                high: 206.0,
+                low: 204.0,
+                close: 205.5,
+                volume: 5000.0,
+            },
+        ];
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars), ("M5".to_string(), m5_bars)]
+                .into_iter()
+                .collect(),
+            0,
+            300_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        );
+        environment.step_size_ns = 60_000_000_000;
+        environment.episode = Some(episode);
+
+        let first = environment
+            .step(Action {
+                action: ActionType::ActionHold as i32,
+                client_order_id: "hold-1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            first.observation.as_ref().unwrap().timestamp_ns,
+            60_000_000_000
+        );
+
+        let second = environment
+            .step(Action {
+                action: ActionType::ActionOpenBuy as i32,
+                client_order_id: "buy-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let observation = second.observation.unwrap();
+        assert_eq!(observation.timestamp_ns, 120_000_000_000);
+        assert_eq!(observation.live_bars["M5"].timestamp_ns, 0);
+        assert_eq!(observation.positions.len(), 1);
+        assert_eq!(observation.positions[0].open_timestamp_ns, 120_000_000_000);
     }
 
     #[test]

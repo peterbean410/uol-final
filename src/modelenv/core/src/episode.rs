@@ -49,6 +49,28 @@ impl Episode {
         self
     }
 
+    fn interval_cursor_at_or_before(
+        &self,
+        interval: &str,
+        current_timestamp: i64,
+    ) -> Option<usize> {
+        let bars = self.bars.get(interval)?;
+        if bars.is_empty() {
+            return None;
+        }
+
+        let upper_bound = bars.partition_point(|bar| bar.timestamp_ns <= current_timestamp);
+        Some(upper_bound.saturating_sub(1))
+    }
+
+    pub fn current_bar(&self, interval: &str) -> Option<&Bar> {
+        let current_timestamp = self.get_cursor_timestamp();
+        let interval_cursor = self.interval_cursor_at_or_before(interval, current_timestamp)?;
+        self.bars
+            .get(interval)
+            .and_then(|bars| bars.get(interval_cursor))
+    }
+
     /// Get the current observation for the episode
     pub fn get_observation(
         &self,
@@ -63,26 +85,22 @@ impl Episode {
 
         for interval in TIME_INTERVALS {
             if let Some(bars) = self.bars.get(*interval) {
-                if let Some(latest_bar) = bars.get(self.cursor) {
-                    live_bars.insert(interval.to_string(), latest_bar.clone());
-                } else if let Some(latest_bar) = bars.last() {
-                    // Use the most recent available bar if cursor is beyond available bars
-                    live_bars.insert(interval.to_string(), latest_bar.clone());
+                if let Some(interval_cursor) =
+                    self.interval_cursor_at_or_before(interval, current_timestamp)
+                {
+                    if let Some(latest_bar) = bars.get(interval_cursor) {
+                        live_bars.insert(interval.to_string(), latest_bar.clone());
+                    }
+
+                    let start_idx = interval_cursor.saturating_sub(63);
+                    let end_idx = interval_cursor + 1;
+                    let recent: Vec<Bar> = bars
+                        .get(start_idx..end_idx)
+                        .map(|slice| slice.to_vec())
+                        .unwrap_or_default();
+
+                    recent_bars.insert(interval.to_string(), BarList { bars: recent });
                 }
-
-                // Get recent bars (up to 64) ending at current cursor
-                let start_idx = if self.cursor >= 64 {
-                    self.cursor - 63
-                } else {
-                    0
-                };
-                let end_idx = self.cursor + 1;
-                let recent: Vec<Bar> = bars
-                    .get(start_idx..end_idx)
-                    .map(|slice| slice.to_vec())
-                    .unwrap_or_default();
-
-                recent_bars.insert(interval.to_string(), BarList { bars: recent });
             }
         }
 
@@ -134,34 +152,22 @@ impl Episode {
             return false;
         }
 
-        // Find the minimum cursor position across all intervals that satisfies the target timestamp
-        let mut new_cursor = usize::MAX;
-        let mut found_any = false;
-
-        for interval in TIME_INTERVALS {
-            if let Some(bars) = self.bars.get(*interval) {
-                // Find the first bar with timestamp >= target_timestamp
-                if let Some(pos) = bars.iter().position(|b| b.timestamp_ns >= target_timestamp) {
-                    found_any = true;
-                    // Use the minimum cursor position across all intervals
-                    if pos < new_cursor {
-                        new_cursor = pos;
-                    }
-                } else {
-                    // No bar found at target timestamp - episode is done
-                    self.done = true;
-                    return false;
-                }
-            }
-        }
-
-        if !found_any || new_cursor == usize::MAX {
+        let Some(reference_bars) = self.bars.get(TIME_INTERVALS[0]) else {
             self.done = true;
             return false;
-        }
+        };
 
-        self.cursor = new_cursor;
-        true
+        let search_start = (self.cursor + 1).min(reference_bars.len());
+        if let Some(offset) = reference_bars[search_start..]
+            .iter()
+            .position(|bar| bar.timestamp_ns >= target_timestamp)
+        {
+            self.cursor = search_start + offset;
+            true
+        } else {
+            self.done = true;
+            false
+        }
     }
 
     /// Check if a day boundary has been crossed between two timestamps
@@ -387,16 +393,61 @@ mod tests {
         // Should still be running
         assert!(still_running);
 
-        // Cursor should have moved to bar at or after 5 minutes
-        // For M1: index 5 (5 minutes)
-        // For M5: index 1 (5 minutes)
-        // The minimum cursor across all intervals is 1
-        assert_eq!(episode.cursor, 1);
+        // Cursor should track the reference M1 interval.
+        assert_eq!(episode.cursor, 5);
 
-        // Check that both intervals have bars at current cursor
         let obs = episode.get_observation(&[], 0.0);
-        assert!(obs.live_bars.contains_key("M1"));
-        assert!(obs.live_bars.contains_key("M5"));
+        assert_eq!(obs.timestamp_ns, 300_000_000_000);
+        assert_eq!(obs.live_bars["M1"].timestamp_ns, 300_000_000_000);
+        assert_eq!(obs.live_bars["M5"].timestamp_ns, 300_000_000_000);
+    }
+
+    #[test]
+    fn test_observation_uses_latest_slower_interval_bar_at_or_before_reference_time() {
+        let m1_bars = (0..7)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+        let m5_bars = vec![
+            Bar {
+                timestamp_ns: 0,
+                open: 200.0,
+                high: 201.0,
+                low: 199.0,
+                close: 200.5,
+                volume: 5000.0,
+            },
+            Bar {
+                timestamp_ns: 300_000_000_000,
+                open: 205.0,
+                high: 206.0,
+                low: 204.0,
+                close: 205.5,
+                volume: 5000.0,
+            },
+        ];
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars), ("M5".to_string(), m5_bars)]
+                .into_iter()
+                .collect(),
+            0,
+            360_000_000_000,
+        );
+
+        assert!(episode.advance(360_000_000_000));
+
+        let obs = episode.get_observation(&[], 0.0);
+        assert_eq!(obs.timestamp_ns, 360_000_000_000);
+        assert_eq!(obs.live_bars["M1"].timestamp_ns, 360_000_000_000);
+        assert_eq!(obs.live_bars["M5"].timestamp_ns, 300_000_000_000);
     }
 
     #[test]
