@@ -115,6 +115,29 @@ impl Environment {
         self
     }
 
+    pub fn with_reward_lambda(mut self, reward_lambda: f64) -> Self {
+        self.reward_lambda = reward_lambda;
+        self
+    }
+
+    pub fn with_reward_action_penalty(mut self, reward_action_penalty: f64) -> Self {
+        self.reward_action_penalty = reward_action_penalty;
+        self
+    }
+
+    pub fn with_reward_holding_penalty(mut self, reward_holding_penalty: f64) -> Self {
+        self.reward_holding_penalty = reward_holding_penalty;
+        self
+    }
+
+    pub fn reward_parameters(&self) -> (f64, f64, f64) {
+        (
+            self.reward_lambda,
+            self.reward_action_penalty,
+            self.reward_holding_penalty,
+        )
+    }
+
     pub async fn preload_training_data(&self) -> Result<()> {
         if self.mode != Mode::Training {
             return Ok(());
@@ -313,14 +336,15 @@ impl Environment {
                     .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?
                     .get_observation(proto_positions.as_slice(), realised_pnl_12m);
 
-                // Update last_action before calculating reward
+                // Calculate reward based on the previous step's action state.
+                let reward = self.calculate_reward(&action)?;
+
+                // Update last_action after calculating reward so action-switch penalties
+                // compare the current action against the previous step's action.
                 self.last_action = match ActionType::try_from(action.action) {
                     Ok(action_type) => Some(action_type),
                     Err(_) => None,
                 };
-
-                // Calculate reward based on action (after releasing episode borrow)
-                let reward = self.calculate_reward(&action)?;
 
                 Ok(StepResponse {
                     observation: Some(observation),
@@ -1273,6 +1297,58 @@ mod tests {
         assert_eq!(observation.positions[0].open_timestamp_ns, 120_000_000_000);
     }
 
+    #[tokio::test]
+    async fn test_training_action_switch_applies_reward_penalty() {
+        let bars = (0..3)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0,
+                high: 100.0,
+                low: 100.0,
+                close: 100.0,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            120_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        );
+        environment.step_size_ns = 60_000_000_000;
+        environment.reward_lambda = 0.0;
+        environment.reward_holding_penalty = 0.0;
+        environment.reward_action_penalty = 0.25;
+        environment.episode = Some(episode);
+
+        let first = environment
+            .step(Action {
+                action: ActionType::ActionHold as i32,
+                client_order_id: "hold-1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(first.reward, 0.0);
+
+        let second = environment
+            .step(Action {
+                action: ActionType::ActionOpenBuy as i32,
+                client_order_id: "buy-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(second.reward < -0.9);
+        assert_eq!(environment.last_action, Some(ActionType::ActionOpenBuy));
+    }
+
     #[test]
     fn test_server_price_snapshot_ts_is_stored_on_environment() {
         let environment = Environment::new(
@@ -1295,6 +1371,20 @@ mod tests {
         .with_local_cache_dir("/cache/modelenv".to_string());
 
         assert_eq!(environment.local_cache_dir, "/cache/modelenv");
+    }
+
+    #[test]
+    fn test_reward_parameter_setters_are_stored_on_environment() {
+        let environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_reward_lambda(2.5)
+        .with_reward_action_penalty(0.05)
+        .with_reward_holding_penalty(0.0002);
+
+        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002));
     }
 
     #[tokio::test]

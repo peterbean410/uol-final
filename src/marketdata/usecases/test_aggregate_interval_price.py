@@ -270,6 +270,33 @@ def test_d1_to_mn1_calendar_month():
     assert "day=" not in key
 
 
+def test_d1_to_mn1_ignores_zero_window_and_uses_calendar_month():
+    end = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    partitions = {}
+    for day in range(1, 32):
+        day_dt = datetime(2025, 12, day, tzinfo=timezone.utc)
+        prefix = (
+            f"marketdata/interval-price/symbol={FX_SYMBOL}/interval=D1"
+            f"/year=2025/month=12/day={day:02d}/"
+        )
+        partitions[prefix] = _make_bars(day_dt, 1, "1D")
+
+    s3 = _mock_s3_with_partitions(partitions)
+    result = aggregate(
+        FX_SYMBOL, "D1", "MN1", end, 0, 1440, s3, BUCKET,
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["Timestamp"] == pd.Timestamp("2025-12-01", tz="UTC")
+    assert result.iloc[0]["Volume"] == 310  # 31 days × 10
+
+    key = s3.put_object.call_args.kwargs["Key"]
+    assert "interval=MN1" in key
+    assert "year=2026/month=01" in key
+    assert "day=" not in key
+    assert "hour=" not in key
+
+
 # ── Interval validation ─────────────────────────────────────────────
 
 def test_target_not_multiple_of_source_raises():

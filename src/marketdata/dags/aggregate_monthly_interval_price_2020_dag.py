@@ -78,10 +78,7 @@ with DAG(
             k8s.V1EnvVar(name="SOURCE_INTERVAL", value="D1"),
             k8s.V1EnvVar(name="TARGET_INTERVAL", value="MN1"),
             k8s.V1EnvVar(name="SOURCE_PARTITION_MINUTES", value="1440"),
-            k8s.V1EnvVar(
-                name="TIME_WINDOW_IN_MINUTES",
-                value="{{ ((data_interval_end - data_interval_start).total_seconds() // 60) | int }}",
-            ),
+            k8s.V1EnvVar(name="TIME_WINDOW_IN_MINUTES", value="43200"),
             k8s.V1EnvVar(name="EXECUTION_TS", value="{{ data_interval_end.to_iso8601_string() }}"),
         ],
         env_from=[

@@ -20,6 +20,24 @@ fn init_logging() {
         .try_init();
 }
 
+fn build_environment(config: &Config) -> Environment {
+    let mut environment = Environment::new(
+        config.mode.clone(),
+        config.symbol.clone(),
+        config.s3_prefix.clone(),
+    )
+    .with_local_cache_dir(config.local_cache_dir.clone())
+    .with_reward_lambda(config.reward_lambda)
+    .with_reward_action_penalty(config.reward_action_penalty)
+    .with_reward_holding_penalty(config.reward_holding_penalty);
+
+    if let Some(price_snapshot_ts) = config.price_snapshot_ts {
+        environment = environment.with_price_snapshot_ts(price_snapshot_ts);
+    }
+
+    environment
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_logging();
@@ -34,15 +52,7 @@ async fn main() -> Result<()> {
     config.log();
 
     // Create the environment
-    let mode = config.mode.clone();
-    let symbol = config.symbol.clone();
-    let s3_prefix = config.s3_prefix.clone();
-
-    let mut environment = Environment::new(mode, symbol, s3_prefix)
-        .with_local_cache_dir(config.local_cache_dir.clone());
-    if let Some(price_snapshot_ts) = config.price_snapshot_ts {
-        environment = environment.with_price_snapshot_ts(price_snapshot_ts);
-    }
+    let mut environment = build_environment(&config);
     if config.mode == Mode::Training {
         info!("Preloading training market data on startup...");
         environment.preload_training_data().await.map_err(|err| {
@@ -107,4 +117,21 @@ async fn main() -> Result<()> {
         })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_environment_applies_reward_config() {
+        let mut config = Config::default();
+        config.reward_lambda = 2.5;
+        config.reward_action_penalty = 0.05;
+        config.reward_holding_penalty = 0.0002;
+
+        let environment = build_environment(&config);
+
+        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002));
+    }
 }

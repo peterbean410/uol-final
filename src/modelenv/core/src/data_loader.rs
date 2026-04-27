@@ -266,7 +266,24 @@ pub(crate) async fn load_bars_from_parquet_with_range_cached_from_local_cache_di
     start_timestamp_ns: Option<i64>,
     end_timestamp_ns: Option<i64>,
 ) -> Result<Vec<Bar>> {
-    let sources = if let Some(cached_sources) =
+    let local_cached_sources =
+        if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
+            list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
+        } else {
+            None
+        };
+    let sources = if let Some(local_sources) = local_cached_sources {
+        let selected =
+            select_price_snapshot_sources(local_sources, snapshot_selection_timestamp_ns)?;
+        cache_price_snapshot_selection(
+            cache,
+            source_uri,
+            snapshot_selection_timestamp_ns,
+            &selected,
+        )
+        .await;
+        selected
+    } else if let Some(cached_sources) =
         cached_price_snapshot_sources(cache, source_uri, snapshot_selection_timestamp_ns).await?
     {
         cached_sources
@@ -274,6 +291,7 @@ pub(crate) async fn load_bars_from_parquet_with_range_cached_from_local_cache_di
         vec![source_uri.to_string()]
     } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
         determine_price_snapshot_s3_sources_cached(
+            local_cache_dir,
             Some(cache),
             source_uri,
             interval_schedule(time_interval)?,
@@ -341,6 +359,7 @@ pub(crate) async fn load_bars_from_parquet_with_range_from_local_cache_dir(
         vec![source_uri.to_string()]
     } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
         determine_price_snapshot_s3_sources_cached(
+            local_cache_dir,
             None,
             source_uri,
             interval_schedule(time_interval)?,
@@ -444,12 +463,54 @@ pub(crate) async fn load_news_from_parquet_with_range_cached_from_local_cache_di
         partition_tier: PartitionTier::Day,
         cadence: ExecutionCadence::Daily,
     };
-    let sources = if let Some(cached_sources) =
+    let local_cached_sources =
+        if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
+            list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
+        } else {
+            None
+        };
+    let sources = if let Some(local_sources) = local_cached_sources {
+        let selected = if let Some(start_timestamp_ns) = start_timestamp_ns {
+            let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
+            if effective_end_ns < start_timestamp_ns {
+                return Err(anyhow!(
+                    "Invalid time range for {}: start {} is after end {}",
+                    source_uri,
+                    start_timestamp_ns,
+                    effective_end_ns
+                ));
+            }
+            select_candidate_sources(
+                local_sources,
+                "D1",
+                Some(start_timestamp_ns),
+                Some(effective_end_ns),
+            )?
+        } else if let Some(end_timestamp_ns) = end_timestamp_ns {
+            let selected =
+                select_candidate_sources(local_sources, "D1", None, Some(end_timestamp_ns))?;
+            vec![selected.last().cloned().ok_or_else(|| {
+                anyhow!("No parquet sources matched the requested time range for D1")
+            })?]
+        } else {
+            select_candidate_sources(local_sources, "D1", None, None)?
+        };
+        cache_latest_selection(
+            cache,
+            source_uri,
+            start_timestamp_ns,
+            end_timestamp_ns,
+            &selected,
+        )
+        .await;
+        selected
+    } else if let Some(cached_sources) =
         cached_latest_sources(cache, source_uri, start_timestamp_ns, end_timestamp_ns).await?
     {
         cached_sources
     } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
         determine_s3_sources_cached(
+            local_cache_dir,
             Some(cache),
             source_uri,
             schedule,
@@ -644,6 +705,28 @@ async fn list_parquet_sources(source_uri: &str) -> Result<Vec<String>> {
     list_local_parquet_sources(Path::new(local_path))
 }
 
+fn list_existing_local_cached_s3_sources(
+    local_cache_dir: &str,
+    source_uri: &str,
+) -> Result<Option<Vec<String>>> {
+    let local_path = local_cache_path_for_s3_source(local_cache_dir, source_uri)?;
+    if local_path.is_file() {
+        return Ok(Some(vec![local_path.to_string_lossy().to_string()]));
+    }
+
+    if !local_path.exists() {
+        return Ok(None);
+    }
+
+    let mut files = Vec::new();
+    collect_local_parquet_files(&local_path, &mut files)?;
+    if files.is_empty() {
+        return Ok(None);
+    }
+    files.sort();
+    Ok(Some(files))
+}
+
 fn list_local_parquet_sources(path: &Path) -> Result<Vec<String>> {
     if path.is_file() {
         return Ok(vec![path.to_string_lossy().to_string()]);
@@ -688,12 +771,29 @@ fn collect_local_parquet_files(path: &Path, files: &mut Vec<String>) -> Result<(
 }
 
 async fn determine_price_snapshot_s3_sources_cached(
+    local_cache_dir: &str,
     cache: Option<&MarketDataCache>,
     source_uri: &str,
     schedule: IntervalSchedule,
     snapshot_selection_timestamp_ns: Option<i64>,
 ) -> Result<Vec<String>> {
     let cache_key = price_snapshot_cache_key(source_uri, snapshot_selection_timestamp_ns);
+
+    if let Some(local_sources) = list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
+    {
+        let selected =
+            select_price_snapshot_sources(local_sources, snapshot_selection_timestamp_ns)?;
+        if let Some(cache) = cache {
+            cache_price_snapshot_selection(
+                cache,
+                source_uri,
+                snapshot_selection_timestamp_ns,
+                &selected,
+            )
+            .await;
+        }
+        return Ok(selected);
+    }
 
     if let Some(cache) = cache {
         if let Some(cached_latest) = cache.latest_source(&cache_key).await {
@@ -722,6 +822,7 @@ async fn determine_price_snapshot_s3_sources_cached(
 }
 
 async fn determine_s3_sources_cached(
+    local_cache_dir: &str,
     cache: Option<&MarketDataCache>,
     source_uri: &str,
     schedule: IntervalSchedule,
@@ -730,6 +831,38 @@ async fn determine_s3_sources_cached(
 ) -> Result<Vec<String>> {
     if source_uri.ends_with(".parquet") {
         return Ok(vec![source_uri.to_string()]);
+    }
+
+    if let Some(local_sources) = list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
+    {
+        if let Some(start_timestamp_ns) = start_timestamp_ns {
+            let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
+            if effective_end_ns < start_timestamp_ns {
+                return Err(anyhow!(
+                    "Invalid time range for {}: start {} is after end {}",
+                    source_uri,
+                    start_timestamp_ns,
+                    effective_end_ns
+                ));
+            }
+
+            return select_candidate_sources(
+                local_sources,
+                "D1",
+                Some(start_timestamp_ns),
+                Some(effective_end_ns),
+            );
+        }
+
+        if let Some(end_timestamp_ns) = end_timestamp_ns {
+            let selected =
+                select_candidate_sources(local_sources, "D1", None, Some(end_timestamp_ns))?;
+            return Ok(vec![selected.last().cloned().ok_or_else(|| {
+                anyhow!("No parquet sources matched the requested time range for D1")
+            })?]);
+        }
+
+        return select_candidate_sources(local_sources, "D1", None, None);
     }
 
     if let Some(start_timestamp_ns) = start_timestamp_ns {
@@ -2035,6 +2168,89 @@ mod tests {
         .unwrap();
 
         assert_eq!(bytes, Bytes::from_static(b"cached parquet bytes"));
+    }
+
+    #[tokio::test]
+    async fn prefers_local_cached_price_snapshot_sources_over_stale_latest_cache() {
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().to_string_lossy().to_string();
+        let source_uri = "s3://bucket/marketdata/eoh-snapshot/symbol=USDJPY/interval=M1";
+        let cached_file = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/eoh-snapshot/symbol=USDJPY/interval=M1/year=2012/month=01/day=02/hour=06/20120102T060000Z.parquet",
+        )
+        .unwrap();
+        std::fs::create_dir_all(cached_file.parent().unwrap()).unwrap();
+        write_test_parquet(
+            &cached_file,
+            &[1_325_484_000_000_000_000, 1_325_484_060_000_000_000],
+            &[102.0, 103.0],
+        )
+        .unwrap();
+
+        let cache = MarketDataCache::new();
+        cache
+            .put_latest_source(
+                price_snapshot_cache_key(source_uri, None),
+                CachedLatestSource::Missing("stale missing cache entry".to_string()),
+            )
+            .await;
+
+        let bars = load_bars_from_parquet_with_range_cached_from_local_cache_dir(
+            &cache_dir, &cache, source_uri, "USDJPY", "M1", None, None, None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0].open, 102.0);
+        assert_eq!(bars[1].open, 103.0);
+    }
+
+    #[tokio::test]
+    async fn loads_news_from_local_cached_s3_prefix_without_hitting_s3() {
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().to_string_lossy().to_string();
+        let source_uri = "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1";
+        let day_one = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1/year=2026/month=01/day=01/20260101T000000Z.parquet",
+        )
+        .unwrap();
+        let day_two = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1/year=2026/month=01/day=02/20260102T000000Z.parquet",
+        )
+        .unwrap();
+        std::fs::create_dir_all(day_one.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(day_two.parent().unwrap()).unwrap();
+        write_news_parquet(
+            &day_one,
+            &["Thu, 01 Jan 2026 09:00:00 -0400"],
+            &["Headline A"],
+        )
+        .unwrap();
+        write_news_parquet(
+            &day_two,
+            &["Fri, 02 Jan 2026 09:00:00 -0400"],
+            &["Headline B"],
+        )
+        .unwrap();
+
+        let cache = MarketDataCache::new();
+        let news = load_news_from_parquet_with_range_cached_from_local_cache_dir(
+            &cache_dir,
+            &cache,
+            source_uri,
+            Some(1_767_254_400_000_000_000),
+            Some(1_767_427_199_000_000_000),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(news.len(), 2);
+        assert_eq!(news[0].headline, "Headline A");
+        assert_eq!(news[1].headline, "Headline B");
     }
 
     #[tokio::test]

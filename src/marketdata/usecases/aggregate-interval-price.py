@@ -12,7 +12,8 @@ Environment variables:
     SOURCE_INTERVAL: Source interval string. Defaults to 'M1'.
     TARGET_INTERVAL: Target interval string (e.g. 'M5', 'H1', 'D1', 'W1', 'MN1')
     EXECUTION_TS: ISO-8601 end timestamp of the scheduled window (UTC)
-    TIME_WINDOW_IN_MINUTES: Output partition granularity (also the lookback window)
+    TIME_WINDOW_IN_MINUTES: Output partition granularity (also the fixed-minute
+        lookback window for non-MN1 targets)
     SOURCE_PARTITION_MINUTES: Partition cadence at which source bars were uploaded
         (60 for hour-tier, 1440 for day-tier, >1440 for year/month-tier). Defaults to 60.
 """
@@ -37,6 +38,7 @@ INTERVAL_TO_MINUTES = {
 CALENDAR_MONTH = "MN1"  # variable-length, not in INTERVAL_TO_MINUTES
 WEEK_MINUTES = 10080
 DAILY_MINUTES = 1440
+MONTH_PARTITION_MINUTES = 43200
 
 
 def _partition_tier(minutes: int) -> str:
@@ -151,6 +153,20 @@ def _build_output_key(
     return f"{base}/{ym}/day={end_dt.day:02d}/hour={end_dt.hour:02d}/{ts}.parquet"
 
 
+def _window_start(end_dt: datetime, target_interval: str, time_window_minutes: int) -> datetime:
+    """Return the inclusive window start for the aggregation run."""
+    if target_interval == CALENDAR_MONTH:
+        return end_dt - relativedelta(months=1)
+    return end_dt - timedelta(minutes=time_window_minutes)
+
+
+def _output_partition_minutes(target_interval: str, time_window_minutes: int) -> int:
+    """Return the partition granularity used for the output key."""
+    if target_interval == CALENDAR_MONTH:
+        return MONTH_PARTITION_MINUTES
+    return time_window_minutes
+
+
 def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str, s3) -> None:
     """Upload a DataFrame as a Parquet file to S3."""
     buf = io.BytesIO()
@@ -210,7 +226,7 @@ def aggregate(
     """Aggregate source bars into target interval and upload to S3."""
     _validate_intervals(source_interval, target_interval)
 
-    start_dt = end_dt - timedelta(minutes=time_window_minutes)
+    start_dt = _window_start(end_dt, target_interval, time_window_minutes)
     prefixes = list(_iter_source_prefixes(
         fx_symbol, source_interval, start_dt, end_dt, source_partition_minutes,
     ))
@@ -228,7 +244,12 @@ def aggregate(
         print("No data to aggregate.")
         return aggregated
 
-    key = _build_output_key(fx_symbol, target_interval, end_dt, time_window_minutes)
+    key = _build_output_key(
+        fx_symbol,
+        target_interval,
+        end_dt,
+        _output_partition_minutes(target_interval, time_window_minutes),
+    )
     _upload_to_s3(aggregated, bucket, key, s3)
     print(f"Aggregated {len(aggregated)} rows")
     print(aggregated.tail(15).to_string(index=False))
