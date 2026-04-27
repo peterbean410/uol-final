@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Multi-stage build for modelenv-server (Rust + tonic gRPC)
 
-FROM rust:1.83-slim-bookworm AS builder
+FROM rust:1.85-slim-bookworm AS builder
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -15,7 +15,7 @@ WORKDIR /build
 COPY modelenv ./modelenv
 
 WORKDIR /build/modelenv
-RUN cargo build --release --bin modelenv-server \
+RUN cargo build --locked --release --bin modelenv-server \
  && strip target/release/modelenv-server
 
 FROM debian:bookworm-slim AS runtime
