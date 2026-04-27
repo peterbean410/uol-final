@@ -38,7 +38,19 @@ async fn main() -> Result<()> {
     let symbol = config.symbol.clone();
     let s3_prefix = config.s3_prefix.clone();
 
-    let mut environment = Environment::new(mode, symbol, s3_prefix);
+    let mut environment = Environment::new(mode, symbol, s3_prefix)
+        .with_local_cache_dir(config.local_cache_dir.clone());
+    if let Some(price_snapshot_ts) = config.price_snapshot_ts {
+        environment = environment.with_price_snapshot_ts(price_snapshot_ts);
+    }
+    if config.mode == Mode::Training {
+        info!("Preloading training market data on startup...");
+        environment.preload_training_data().await.map_err(|err| {
+            error!("Failed to preload training market data: {}", err);
+            err
+        })?;
+        info!("Training market data preload complete");
+    }
 
     // Configure broker gateway if in Production Mode
     if config.mode == Mode::Live {

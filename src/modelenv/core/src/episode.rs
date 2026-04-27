@@ -1,10 +1,16 @@
 // Episode management module
 use anyhow::Result;
+use log::warn;
 use std::collections::HashMap;
 
-use modelenv_proto::{Bar, BarList, Observation};
+use modelenv_proto::{Bar, BarList, News, Observation};
 
-use crate::data_loader::{load_bars_from_parquet_with_end_ts, TIME_INTERVALS};
+use crate::data_loader::{
+    build_interval_data_source, build_news_data_source,
+    load_bars_from_parquet_with_range_cached_from_local_cache_dir,
+    load_news_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
+};
+use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
 
 /// Represents a loaded episode with price bars for all time intervals
@@ -12,6 +18,7 @@ use crate::position::NANOS_PER_DAY;
 pub struct Episode {
     pub symbol: String,
     pub bars: HashMap<String, Vec<Bar>>,
+    pub news: Vec<News>,
     pub cursor: usize,
     pub episode_start_ts: i64,
     pub episode_end_ts: i64,
@@ -29,11 +36,17 @@ impl Episode {
         Episode {
             symbol,
             bars,
+            news: Vec::new(),
             cursor: 0,
             episode_start_ts,
             episode_end_ts,
             done: false,
         }
+    }
+
+    pub fn with_news(mut self, news: Vec<News>) -> Self {
+        self.news = news;
+        self
     }
 
     /// Get the current observation for the episode
@@ -84,9 +97,22 @@ impl Episode {
             indicators: Vec::new(),
             recent_ticks: Vec::new(),
             live_ticks: Vec::new(),
-            recent_news: Vec::new(),
+            recent_news: self.recent_news(current_timestamp),
             done: self.done,
         }
+    }
+
+    fn recent_news(&self, current_timestamp: i64) -> Vec<News> {
+        let mut recent: Vec<News> = self
+            .news
+            .iter()
+            .filter(|item| item.timestamp_ns <= current_timestamp)
+            .cloned()
+            .collect();
+        if recent.len() > 16 {
+            recent.drain(0..recent.len() - 16);
+        }
+        recent
     }
 
     /// Advance the episode cursor by one step (5 seconds = 5,000,000,000 nanoseconds)
@@ -413,67 +439,239 @@ mod tests {
         assert!(!episode.advance(60_000_000_000));
         assert!(episode.is_done());
     }
+
+    #[test]
+    fn test_advance_with_custom_step_size() {
+        let mut bars = Vec::new();
+        for i in 0..10 {
+            bars.push(Bar {
+                timestamp_ns: i * 1_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            });
+        }
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            10_000_000_000,
+        );
+
+        assert!(episode.advance(2_000_000_000));
+        assert_eq!(episode.cursor, 2);
+        assert_eq!(
+            episode.get_observation(&[], 0.0).timestamp_ns,
+            2_000_000_000
+        );
+    }
 }
 
 /// Initialize an episode by loading bars from S3 parquet files
 pub async fn initialize_episode(
     symbol: &str,
     s3_prefix: &str,
+    local_cache_dir: &str,
+    price_snapshot_ts: Option<i64>,
     episode_start_ts: i64,
     episode_end_ts: i64,
+    market_data_cache: &MarketDataCache,
 ) -> Result<Episode> {
     let mut bars_map = HashMap::new();
+    let start_timestamp_ns = (episode_start_ts > 0).then_some(episode_start_ts);
+    let end_timestamp_ns = (episode_end_ts > 0).then_some(episode_end_ts);
 
     for interval in TIME_INTERVALS {
-        // Construct S3 URI for the parquet file
-        let s3_uri = format!("{}/{}_{}/data.parquet", s3_prefix, symbol, interval);
+        let interval_source = build_interval_data_source(s3_prefix, symbol, interval);
 
-        // Load bars from S3, stopping at end timestamp
-        let mut bars =
-            load_bars_from_parquet_with_end_ts(&s3_uri, symbol, interval, episode_end_ts).await?;
+        let mut bars = match load_bars_from_parquet_with_range_cached_from_local_cache_dir(
+            local_cache_dir,
+            market_data_cache,
+            &interval_source,
+            symbol,
+            interval,
+            price_snapshot_ts,
+            start_timestamp_ns,
+            end_timestamp_ns,
+        )
+        .await
+        {
+            Ok(bars) => bars,
+            Err(err) if is_missing_interval_data_error(&err) => {
+                warn!(
+                    "Skipping unavailable training interval {} for {} at {}: {}",
+                    interval, symbol, interval_source, err
+                );
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
 
-        // Validate that we have bars
         if bars.is_empty() {
             return Err(anyhow::anyhow!(
                 "No bars loaded for {} {} from {}",
                 symbol,
                 interval,
-                s3_uri
+                interval_source
             ));
         }
 
-        // If no start timestamp provided (0), use the first bar's timestamp (earliest data)
-        // This loads the latest available parquet file with all its data
         let start_ts = if episode_start_ts == 0 {
             bars.first().unwrap().timestamp_ns
         } else {
             episode_start_ts
         };
 
-        // Filter bars to only include those within the episode time range [start_ts, episode_end_ts]
+        let end_ts = if episode_end_ts == 0 {
+            bars.last().unwrap().timestamp_ns
+        } else {
+            episode_end_ts
+        };
+
         bars = bars
             .into_iter()
-            .filter(|b| b.timestamp_ns >= start_ts && b.timestamp_ns <= episode_end_ts)
+            .filter(|b| b.timestamp_ns >= start_ts && b.timestamp_ns <= end_ts)
             .collect();
 
-        // Validate that we have bars after filtering
         if bars.is_empty() {
             return Err(anyhow::anyhow!(
                 "No bars found for {} {} in time range [{}, {}]",
                 symbol,
                 interval,
                 start_ts,
-                episode_end_ts
+                end_ts
             ));
         }
 
         bars_map.insert(interval.to_string(), bars);
     }
 
+    let reference_bars = bars_map
+        .get(TIME_INTERVALS[0])
+        .ok_or_else(|| anyhow::anyhow!("Missing reference bars for {}", TIME_INTERVALS[0]))?;
+    let resolved_start_ts = if episode_start_ts == 0 {
+        reference_bars
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No reference bars loaded for {}", symbol))?
+            .timestamp_ns
+    } else {
+        episode_start_ts
+    };
+    let resolved_end_ts = if episode_end_ts == 0 {
+        reference_bars
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No reference bars loaded for {}", symbol))?
+            .timestamp_ns
+    } else {
+        episode_end_ts
+    };
+
+    let news_source = build_news_data_source(s3_prefix, symbol);
+    let news = match load_news_from_parquet_with_range_cached_from_local_cache_dir(
+        local_cache_dir,
+        market_data_cache,
+        &news_source,
+        start_timestamp_ns,
+        end_timestamp_ns,
+    )
+    .await
+    {
+        Ok(news) => news,
+        Err(err) if is_missing_interval_data_error(&err) => {
+            warn!(
+                "Skipping unavailable training news for {} at {}: {}",
+                symbol, news_source, err
+            );
+            Vec::new()
+        }
+        Err(err) => return Err(err),
+    };
+
     Ok(Episode::new(
         symbol.to_string(),
         bars_map,
-        episode_start_ts,
-        episode_end_ts,
-    ))
+        resolved_start_ts,
+        resolved_end_ts,
+    )
+    .with_news(news))
+}
+
+pub async fn preload_training_market_data(
+    symbol: &str,
+    s3_prefix: &str,
+    local_cache_dir: &str,
+    price_snapshot_ts: Option<i64>,
+    market_data_cache: &MarketDataCache,
+) -> Result<()> {
+    let mut has_reference_interval = false;
+
+    for interval in TIME_INTERVALS {
+        let interval_source = build_interval_data_source(s3_prefix, symbol, interval);
+        match load_bars_from_parquet_with_range_cached_from_local_cache_dir(
+            local_cache_dir,
+            market_data_cache,
+            &interval_source,
+            symbol,
+            interval,
+            price_snapshot_ts,
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(_) => {
+                if *interval == TIME_INTERVALS[0] {
+                    has_reference_interval = true;
+                }
+            }
+            Err(err) if is_missing_interval_data_error(&err) => {
+                warn!(
+                    "Skipping unavailable training interval {} for {} at {} during startup preload: {}",
+                    interval, symbol, interval_source, err
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    if !has_reference_interval {
+        return Err(anyhow::anyhow!(
+            "Missing reference bars for {} while preloading training data",
+            TIME_INTERVALS[0]
+        ));
+    }
+
+    let news_source = build_news_data_source(s3_prefix, symbol);
+    match load_news_from_parquet_with_range_cached_from_local_cache_dir(
+        local_cache_dir,
+        market_data_cache,
+        &news_source,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(err) if is_missing_interval_data_error(&err) => {
+            warn!(
+                "Skipping unavailable training news for {} at {} during startup preload: {}",
+                symbol, news_source, err
+            );
+        }
+        Err(err) => return Err(err),
+    }
+
+    Ok(())
+}
+
+pub(crate) fn is_missing_interval_data_error(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("No parquet files found under S3 prefix")
+        || message.contains("No parquet files found under s3://")
+        || message.contains("No child prefixes found under s3://")
+        || message.contains("No parquet files found under local path")
+        || message.contains("Local parquet path does not exist")
 }

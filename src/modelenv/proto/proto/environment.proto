@@ -41,6 +41,7 @@ message ResetRequest {
   int64 episode_start_ts = 2;
   int64 episode_end_ts = 3;
   int64 seed = 4;
+  int64 step_size_seconds = 5;
 }
 
 message ObserveRequest {

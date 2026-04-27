@@ -3,6 +3,8 @@ use anyhow::Result;
 use log::info;
 use std::env;
 
+use crate::data_loader::DEFAULT_LOCAL_CACHE_DIR;
+
 const CTRADER_GATEWAY: &str = "ctrader";
 
 /// Operating mode for the environment
@@ -141,8 +143,14 @@ pub struct Config {
     pub mode: Mode,
     /// gRPC server address
     pub addr: String,
-    /// S3 bucket prefix for training data
+    /// S3 bucket or prefix for training data. Bucket roots are resolved to
+    /// the correct marketdata snapshot branch automatically.
     pub s3_prefix: String,
+    /// Optional training price snapshot selection timestamp in nanoseconds.
+    /// When set, the server loads the latest snapshot at or before this timestamp.
+    pub price_snapshot_ts: Option<i64>,
+    /// Local directory for downloaded parquet cache files.
+    pub local_cache_dir: String,
     /// Trading symbol
     pub symbol: String,
     /// Broker gateway configuration
@@ -158,7 +166,9 @@ impl Default for Config {
         Config {
             mode: Mode::default(),
             addr: "0.0.0.0:50051".to_string(),
-            s3_prefix: "s3://modelenv-data".to_string(),
+            s3_prefix: "s3://prod-fintech-forex-sg-731833471586".to_string(),
+            price_snapshot_ts: None,
+            local_cache_dir: DEFAULT_LOCAL_CACHE_DIR.to_string(),
             symbol: "USDJPY".to_string(),
             broker_gateway: BrokerGatewayConfig::default(),
             reward_lambda: 1.0,
@@ -220,6 +230,22 @@ impl Config {
                         i += 2;
                     } else {
                         return Err(anyhow::anyhow!("--s3-prefix requires a value"));
+                    }
+                }
+                "--price-snapshot-ts" => {
+                    if i + 1 < args.len() {
+                        self.price_snapshot_ts = Some(args[i + 1].parse()?);
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--price-snapshot-ts requires a value"));
+                    }
+                }
+                "--local-cache-dir" => {
+                    if i + 1 < args.len() {
+                        self.local_cache_dir = args[i + 1].clone();
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--local-cache-dir requires a value"));
                     }
                 }
                 "--symbol" => {
@@ -353,6 +379,19 @@ impl Config {
             self.s3_prefix = s3_prefix_env;
         }
 
+        if let Some(price_snapshot_ts_env) =
+            Self::non_empty_env(env_get, "MODELENV_PRICE_SNAPSHOT_TS")
+        {
+            if let Ok(value) = price_snapshot_ts_env.parse::<i64>() {
+                self.price_snapshot_ts = Some(value);
+            }
+        }
+
+        if let Some(local_cache_dir_env) = Self::non_empty_env(env_get, "MODELENV_LOCAL_CACHE_DIR")
+        {
+            self.local_cache_dir = local_cache_dir_env;
+        }
+
         // Symbol
         if let Some(symbol_env) = Self::non_empty_env(env_get, "MODELENV_SYMBOL") {
             self.symbol = symbol_env;
@@ -444,6 +483,16 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.price_snapshot_ts.is_some_and(|value| value <= 0) {
+            return Err(anyhow::anyhow!(
+                "price snapshot timestamp must be > 0 when configured"
+            ));
+        }
+
+        if self.local_cache_dir.trim().is_empty() {
+            return Err(anyhow::anyhow!("local cache dir must not be empty"));
+        }
+
         if self.mode != Mode::Live {
             return Ok(());
         }
@@ -501,6 +550,11 @@ impl Config {
         info!("Mode: {}", self.mode.as_str());
         info!("Address: {}", self.addr);
         info!("S3 Prefix: {}", self.s3_prefix);
+        match self.price_snapshot_ts {
+            Some(value) => info!("Price Snapshot Timestamp: {}", value),
+            None => info!("Price Snapshot Timestamp: latest available"),
+        }
+        info!("Local Cache Dir: {}", self.local_cache_dir);
         info!("Symbol: {}", self.symbol);
         info!("Reward Lambda: {}", self.reward_lambda);
         info!("Reward Action Penalty: {}", self.reward_action_penalty);
@@ -544,7 +598,11 @@ fn print_help() {
         "  --mode <MODE>              Operating mode: 'training' or 'live' (default: training)"
     );
     println!("  --addr <ADDRESS>           gRPC server address (default: 0.0.0.0:50051)");
-    println!("  --s3-prefix <PREFIX>       S3 bucket prefix for training data (default: s3://modelenv-data)");
+    println!("  --s3-prefix <PREFIX>       S3 bucket/prefix for training data (default: s3://prod-fintech-forex-sg-731833471586)");
+    println!("  --price-snapshot-ts <TS>   Select the latest price snapshot at or before TS (nanoseconds)");
+    println!(
+        "  --local-cache-dir <PATH>   Local parquet cache directory (default: /tmp/modelenv-cache)"
+    );
     println!("  --symbol <SYMBOL>          Trading symbol (default: USDJPY)");
     println!(
         "  --broker-gateway <TYPE>    Broker gateway type (e.g., 'ctrader', 'metatrader', 'ib')"
@@ -564,6 +622,8 @@ fn print_help() {
     println!("  MODELENV_MODE              Same as --mode");
     println!("  MODELENV_ADDR              Same as --addr");
     println!("  MODELENV_S3_PREFIX         Same as --s3-prefix");
+    println!("  MODELENV_PRICE_SNAPSHOT_TS Same as --price-snapshot-ts");
+    println!("  MODELENV_LOCAL_CACHE_DIR   Same as --local-cache-dir");
     println!("  MODELENV_SYMBOL            Same as --symbol");
     println!("  MODELENV_BROKER_GATEWAY    Same as --broker-gateway");
     println!("  MODELENV_BROKER_ADDR       Same as --broker-addr");
@@ -728,5 +788,27 @@ mod tests {
         .unwrap();
 
         assert!(config.is_broker_gateway_configured());
+    }
+
+    #[test]
+    fn cli_price_snapshot_ts_overrides_env_default() {
+        let config = load_test_config(
+            &["modelenv-server", "--price-snapshot-ts", "200"],
+            &[("MODELENV_PRICE_SNAPSHOT_TS", "100")],
+        )
+        .unwrap();
+
+        assert_eq!(config.price_snapshot_ts, Some(200));
+    }
+
+    #[test]
+    fn cli_local_cache_dir_overrides_env_default() {
+        let config = load_test_config(
+            &["modelenv-server", "--local-cache-dir", "/cli/cache"],
+            &[("MODELENV_LOCAL_CACHE_DIR", "/env/cache")],
+        )
+        .unwrap();
+
+        assert_eq!(config.local_cache_dir, "/cli/cache");
     }
 }

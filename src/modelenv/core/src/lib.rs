@@ -4,5 +4,6 @@ pub mod config;
 pub mod data_loader;
 pub mod environment;
 pub mod episode;
+pub mod market_data_cache;
 pub mod position;
 pub mod reconciliation;

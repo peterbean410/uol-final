@@ -57,6 +57,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
             episode_start_ts: 0,
             episode_end_ts: 0,
             seed: 0,
+            step_size_seconds: 0,
         })
         .await?;
 

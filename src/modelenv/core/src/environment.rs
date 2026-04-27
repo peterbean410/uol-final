@@ -10,10 +10,13 @@ use modelenv_proto::{
 
 use crate::broker_gateway::BrokerGateway;
 use crate::config::Mode;
-use crate::data_loader::now_ns;
-use crate::episode::{initialize_episode, Episode};
+use crate::data_loader::{now_ns, DEFAULT_LOCAL_CACHE_DIR};
+use crate::episode::{initialize_episode, preload_training_market_data, Episode};
+use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
 use crate::reconciliation::reconcile_positions;
+
+const DEFAULT_STEP_SIZE_NS: i64 = 5_000_000_000;
 
 /// The main environment struct
 #[derive(Clone)]
@@ -21,6 +24,10 @@ pub struct Environment {
     mode: Mode,
     symbol: String,
     s3_prefix: String,
+    local_cache_dir: String,
+    price_snapshot_ts: Option<i64>,
+    market_data_cache: MarketDataCache,
+    step_size_ns: i64,
     episode: Option<Episode>,
     positions: Vec<Position>,
     closed_position_window: ClosedPositionWindow,
@@ -63,6 +70,10 @@ impl Environment {
             mode,
             symbol,
             s3_prefix,
+            local_cache_dir: DEFAULT_LOCAL_CACHE_DIR.to_string(),
+            price_snapshot_ts: None,
+            market_data_cache: MarketDataCache::new(),
+            step_size_ns: DEFAULT_STEP_SIZE_NS,
             episode: None,
             positions: Vec::new(),
             closed_position_window: ClosedPositionWindow::new(),
@@ -92,6 +103,35 @@ impl Environment {
     pub fn with_daily_swap_rate(mut self, symbol: String, rate: f64) -> Self {
         self.daily_swap_rates.insert(symbol, rate);
         self
+    }
+
+    pub fn with_price_snapshot_ts(mut self, price_snapshot_ts: i64) -> Self {
+        self.price_snapshot_ts = Some(price_snapshot_ts);
+        self
+    }
+
+    pub fn with_local_cache_dir(mut self, local_cache_dir: String) -> Self {
+        self.local_cache_dir = local_cache_dir;
+        self
+    }
+
+    pub async fn preload_training_data(&self) -> Result<()> {
+        if self.mode != Mode::Training {
+            return Ok(());
+        }
+
+        info!(
+            "Preloading training market data for {} from {}",
+            self.symbol, self.s3_prefix
+        );
+        preload_training_market_data(
+            &self.symbol,
+            &self.s3_prefix,
+            &self.local_cache_dir,
+            self.price_snapshot_ts,
+            &self.market_data_cache,
+        )
+        .await
     }
 
     /// Set the broker gateway for Production Mode
@@ -145,14 +185,37 @@ impl Environment {
                         req.episode_end_ts
                     ));
                 }
+                if req.step_size_seconds < 0 {
+                    return Err(anyhow::anyhow!(
+                        "step_size_seconds ({}) must be >= 0",
+                        req.step_size_seconds
+                    ));
+                }
+
+                self.step_size_ns = if req.step_size_seconds > 0 {
+                    req.step_size_seconds
+                        .checked_mul(1_000_000_000)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "step_size_seconds ({}) is too large",
+                                req.step_size_seconds
+                            )
+                        })?
+                } else {
+                    DEFAULT_STEP_SIZE_NS
+                };
 
                 // Initialize episode with S3 parquet loading
+                let market_data_cache = self.market_data_cache.clone();
                 self.episode = Some(
                     initialize_episode(
                         &req.symbol,
                         &self.s3_prefix,
+                        &self.local_cache_dir,
+                        self.price_snapshot_ts,
                         req.episode_start_ts,
                         req.episode_end_ts,
+                        &market_data_cache,
                     )
                     .await?,
                 );
@@ -229,7 +292,7 @@ impl Environment {
                 let prev_timestamp = episode.get_cursor_timestamp();
 
                 // Advance the episode first to release the mutable borrow
-                let done = episode.advance(5_000_000_000); // 5 seconds in nanoseconds
+                let still_running = episode.advance(self.step_size_ns);
 
                 // Calculate realised P/L before getting observation
                 let realised_pnl_12m = self
@@ -267,7 +330,7 @@ impl Environment {
                 Ok(StepResponse {
                     observation: Some(observation),
                     reward,
-                    done,
+                    done: !still_running,
                     info: "".to_string(),
                 })
             }
@@ -837,13 +900,53 @@ impl Environment {
 mod tests {
     use super::*;
     use crate::position::{ClosedPosition, Position, NANOS_PER_DAY};
+    use arrow::array::{Float64Array, Int64Array};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::path::PathBuf;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    use tempfile::tempdir;
 
     struct MockBrokerGateway {
         submit_calls: Arc<AtomicUsize>,
+    }
+
+    fn write_test_parquet(path: &PathBuf, timestamps: &[i64], opens: &[f64]) -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("timestamp", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("open", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("high", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("low", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("close", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("volume", arrow::datatypes::DataType::Float64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(timestamps.to_vec())),
+                Arc::new(Float64Array::from(opens.to_vec())),
+                Arc::new(Float64Array::from(
+                    opens.iter().map(|value| value + 0.5).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    opens.iter().map(|value| value - 0.5).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    opens.iter().map(|value| value + 0.25).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(vec![1.0; timestamps.len()])),
+            ],
+        )?;
+
+        let file = std::fs::File::create(path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(())
     }
 
     #[async_trait::async_trait]
@@ -1030,5 +1133,128 @@ mod tests {
         assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
         assert!(response.observation.is_some());
         assert!(environment.recent_fills.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_training_reset_uses_custom_step_size_seconds() {
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        );
+
+        environment
+            .reset(ResetRequest {
+                symbol: "USDJPY".to_string(),
+                episode_start_ts: 0,
+                episode_end_ts: 0,
+                seed: 0,
+                step_size_seconds: 7,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(environment.step_size_ns, 7_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_training_step_response_done_matches_episode_done() {
+        let bars = vec![Bar {
+            timestamp_ns: 0,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.5,
+            volume: 1000.0,
+        }];
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            1_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        );
+        environment.step_size_ns = 2_000_000_000;
+        environment.episode = Some(episode);
+
+        let response = environment
+            .step(Action {
+                action: ActionType::ActionHold as i32,
+                client_order_id: "done-test".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(response.done);
+        assert!(response.observation.unwrap().done);
+    }
+
+    #[test]
+    fn test_server_price_snapshot_ts_is_stored_on_environment() {
+        let environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_price_snapshot_ts(123);
+
+        assert_eq!(environment.price_snapshot_ts, Some(123));
+    }
+
+    #[test]
+    fn test_local_cache_dir_is_stored_on_environment() {
+        let environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_local_cache_dir("/cache/modelenv".to_string());
+
+        assert_eq!(environment.local_cache_dir, "/cache/modelenv");
+    }
+
+    #[tokio::test]
+    async fn test_training_preload_warms_first_reset() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join(
+            "marketdata/eoh-snapshot/symbol=USDJPY/interval=M1/year=2012/month=01/day=02/hour=06",
+        );
+        std::fs::create_dir_all(&base).unwrap();
+
+        let parquet_path = base.join("20120102T060000Z.parquet");
+        write_test_parquet(
+            &parquet_path,
+            &[1_325_484_000_000_000_000, 1_325_484_060_000_000_000],
+            &[102.0, 103.0],
+        )
+        .unwrap();
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            dir.path().to_string_lossy().to_string(),
+        );
+
+        environment.preload_training_data().await.unwrap();
+        std::fs::remove_file(&parquet_path).unwrap();
+
+        let observation = environment
+            .reset(ResetRequest {
+                symbol: "USDJPY".to_string(),
+                episode_start_ts: 0,
+                episode_end_ts: 0,
+                seed: 0,
+                step_size_seconds: 0,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(observation.live_bars["M1"].open, 102.0);
     }
 }
