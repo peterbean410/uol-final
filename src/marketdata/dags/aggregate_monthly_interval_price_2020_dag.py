@@ -33,15 +33,16 @@ _ECR_IMAGE = (
 def _last_d1_logical_date(_dt, **context):
     """Logical date of the D1 aggregate for the last trading day of the window.
 
-    The daily D1 DAG fires Tue–Sat (`0 0 * * 2-6`) with `logical_date` equal
-    to the Mon–Fri date whose M1 data it aggregates. From our
-    `data_interval_end` (midnight UTC on a boundary day), walk back to the
-    most recent weekday, that's the last trading day covered by the window.
+    The daily D1 DAG fires Tue–Sat (`0 0 * * 2-6`); under CronTriggerTimetable
+    its `logical_date` equals the fire time, not the data day. Each run
+    aggregates the prior 24h, so the run that covers a Mon–Fri data day has
+    `logical_date = data_day + 1 day` (always Tue–Sat). Walk back from
+    `data_interval_end` to the last weekday, then add one day.
     """
     cursor = context["data_interval_end"] - timedelta(days=1)
     while cursor.weekday() >= 5:  # Sat=5, Sun=6
         cursor -= timedelta(days=1)
-    return cursor.replace(hour=0, minute=0, second=0, microsecond=0)
+    return (cursor + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 with DAG(
