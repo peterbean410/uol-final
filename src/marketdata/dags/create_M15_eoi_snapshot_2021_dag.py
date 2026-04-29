@@ -1,7 +1,7 @@
 """DAG: Create end-of-interval price snapshots (M1, M5, M15) via Kubernetes.
 
 Runs hourly every day. On Mon–Fri the run waits for the corresponding
-download task in the download_price_bars_hourly_2021 DAG. On Sat–Sun
+download task in the download_price_bars_hourly_2020 DAG. On Sat–Sun
 (when no download fires) the wait is bypassed so the snapshot chain
 stays unbroken, `create_snapshot` then re-emits the prior snapshot's
 contents under the weekend key.
@@ -30,7 +30,7 @@ _ECR_IMAGE = (
 )
 
 _INTERVALS = ["M1", "M5", "M15"]
-# download_price_bars_hourly_2021 runs Mon–Fri (cron "0 * * * 1-5").
+# download_price_bars_hourly_2020 runs Mon–Fri (cron "0 * * * 1-5").
 # Python weekday(): Mon=0…Sun=6. Skip the wait on Sat and Sun.
 _NO_UPSTREAM_WEEKDAYS = {5, 6}
 
@@ -64,7 +64,7 @@ with DAG(
 
         wait_for_download = ExternalTaskSensor(
             task_id=wait_id,
-            external_dag_id="download_price_bars_hourly_2021",
+            external_dag_id="download_price_bars_hourly_2020",
             external_task_id=f"download_{interval}_price_bars",
             poke_interval=60,
             timeout=3600,
