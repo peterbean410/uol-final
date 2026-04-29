@@ -14,6 +14,17 @@ use modelenv_proto::{
 
 use modelenv_core::environment::Environment as CoreEnvironment;
 
+fn format_error_chain(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
+fn internal_error_status(operation: &str, err: anyhow::Error) -> Status {
+    Status::internal(format!("{operation} failed: {}", format_error_chain(&err)))
+}
+
 /// Environment service implementation
 pub struct EnvironmentService {
     environment: Arc<Mutex<CoreEnvironment>>,
@@ -43,7 +54,7 @@ impl Environment for EnvironmentService {
         let observation = env
             .reset(reset_req)
             .await
-            .map_err(|e| Status::internal(format!("Reset failed: {}", e)))?;
+            .map_err(|e| internal_error_status("Reset", e))?;
 
         Ok(Response::new(observation))
     }
@@ -56,7 +67,7 @@ impl Environment for EnvironmentService {
         let step_response = env
             .step(action)
             .await
-            .map_err(|e| Status::internal(format!("Step failed: {}", e)))?;
+            .map_err(|e| internal_error_status("Step", e))?;
 
         Ok(Response::new(step_response))
     }
@@ -65,11 +76,11 @@ impl Environment for EnvironmentService {
         let observe_req = req.into_inner();
 
         // Call the environment observe method
-        let env = self.environment.lock().await;
+        let mut env = self.environment.lock().await;
         let observation = env
             .observe(observe_req)
             .await
-            .map_err(|e| Status::internal(format!("Observe failed: {}", e)))?;
+            .map_err(|e| internal_error_status("Observe", e))?;
 
         Ok(Response::new(observation))
     }
@@ -94,16 +105,14 @@ impl Environment for EnvironmentService {
 
             // Get initial observation
             let observation = {
-                let env = env.lock().await;
+                let mut env = env.lock().await;
                 env.observe(ObserveRequest { symbol }).await
             };
 
             let observation = match observation {
                 Ok(obs) => obs,
                 Err(e) => {
-                    let _ = tx
-                        .send(Err(Status::internal(format!("Observe failed: {}", e))))
-                        .await;
+                    let _ = tx.send(Err(internal_error_status("Observe", e))).await;
                     return;
                 }
             };
@@ -124,5 +133,22 @@ impl Environment for EnvironmentService {
         });
         let stream = Box::pin(stream);
         Ok(Response::new(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_error_chain_includes_causes() {
+        let err = anyhow::anyhow!("root cause")
+            .context("middle context")
+            .context("top context");
+
+        assert_eq!(
+            format_error_chain(&err),
+            "top context: middle context: root cause"
+        );
     }
 }

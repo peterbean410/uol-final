@@ -3,7 +3,7 @@ pub mod ctrader;
 
 use anyhow::Result;
 
-use modelenv_proto::{Action, Bar, Fill, Position};
+use modelenv_proto::{Action, Bar, Fill, Position, Tick};
 
 /// Broker Gateway trait for Production Mode
 ///
@@ -35,6 +35,11 @@ pub trait BrokerGateway {
     /// # Returns
     /// The current Bar message with the latest OHLCV data
     async fn current_bar(&self, symbol: &str) -> Result<Bar>;
+
+    /// Get recent broker tick updates for the symbol.
+    ///
+    /// Implementations should return the most recent ticks in ascending timestamp order.
+    async fn current_ticks(&self, symbol: &str) -> Result<Vec<Tick>>;
 
     /// Submit an action to the broker and return the execution fill
     ///

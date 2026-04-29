@@ -228,6 +228,53 @@ impl BrokerGateway for CtraderBrokerGateway {
         }
     }
 
+    async fn current_ticks(&self, symbol: &str) -> Result<Vec<modelenv_proto::Tick>> {
+        let symbol = self.resolve_symbol(symbol)?;
+
+        debug!("Getting current ticks for symbol: {}", symbol);
+
+        let mut client = self.client.lock().await;
+
+        Self::ensure_connected(&mut client).await.map_err(|err| {
+            anyhow!(
+                "ConnectionError {{ symbol: {}, broker_error: {} }}",
+                symbol,
+                err
+            )
+        })?;
+
+        match client.current_ticks(&symbol).await {
+            Ok(ticks) => Ok(ticks),
+            Err(err) if Self::is_connection_error(&err) => {
+                warn!(
+                    "Current tick request lost broker connection for {}. Attempting reconnect: {}",
+                    symbol, err
+                );
+
+                client.reconnect().await.map_err(|reconnect_err| {
+                    anyhow!(
+                        "TickError {{ symbol: {}, broker_error: {} }}",
+                        symbol,
+                        reconnect_err
+                    )
+                })?;
+
+                client.current_ticks(&symbol).await.map_err(|retry_err| {
+                    anyhow!(
+                        "TickError {{ symbol: {}, broker_error: {} }}",
+                        symbol,
+                        retry_err
+                    )
+                })
+            }
+            Err(err) => Err(anyhow!(
+                "TickError {{ symbol: {}, broker_error: {} }}",
+                symbol,
+                err
+            )),
+        }
+    }
+
     /// Submit an action to the broker and return the execution fill
     ///
     /// This method submits a trading action to the broker and returns the

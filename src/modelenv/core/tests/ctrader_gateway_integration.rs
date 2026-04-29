@@ -27,6 +27,7 @@ async fn ctrader_gateway_trait_returns_mock_api_responses() -> Result<()> {
 
     let positions = gateway.sync_positions("USDJPY").await?;
     let bar = gateway.current_bar("USDJPY").await?;
+    let ticks = gateway.current_ticks("USDJPY").await?;
     let fill = gateway
         .submit(&Action {
             action: ActionType::ActionOpenBuy as i32,
@@ -37,6 +38,10 @@ async fn ctrader_gateway_trait_returns_mock_api_responses() -> Result<()> {
     assert!(positions.is_empty());
     assert!(bar.close > 100.0);
     assert!(bar.high >= bar.close);
+    assert!(!ticks.is_empty());
+    assert!(ticks
+        .windows(2)
+        .all(|window| window[0].timestamp_ns < window[1].timestamp_ns));
     assert_eq!(fill.order_id, "order-USDJPY-integration-order");
     assert_eq!(fill.side, ActionType::ActionOpenBuy as i32);
     assert_eq!(fill.size, 1.0);
@@ -65,6 +70,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
     assert!(reset_observation.positions.is_empty());
     assert!(reset_observation.live_bars.contains_key("M1"));
     assert!(reset_observation.live_bars["M1"].close > 100.0);
+    assert!(!reset_observation.live_ticks.is_empty());
 
     let step_response = environment
         .step(Action {
@@ -85,6 +91,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         ActionType::ActionOpenBuy as i32
     );
     assert!(step_observation.live_bars.contains_key("M1"));
+    assert!(!step_observation.live_ticks.is_empty());
 
     let observe_response = environment
         .observe(ObserveRequest {
@@ -99,6 +106,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         "order-USDJPY-live-step-order"
     );
     assert!(observe_response.live_bars["M1"].close > 100.0);
+    assert!(!observe_response.recent_ticks.is_empty());
 
     Ok(())
 }

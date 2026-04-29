@@ -4,6 +4,7 @@ use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, TimeZone, Timelike, Utc};
+use log::info;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use tokio::fs::OpenOptions;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration as TokioDuration};
 
-use modelenv_proto::{Bar, News};
+use modelenv_proto::{Bar, News, Tick};
 
 use crate::market_data_cache::{CachedLatestSource, MarketDataCache};
 
@@ -192,6 +193,51 @@ pub fn build_news_data_source(prefix: &str, symbol: &str) -> String {
     }
 }
 
+pub fn normalise_tick_data_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.starts_with("file://") || trimmed.ends_with(".parquet") {
+        return trimmed.to_string();
+    }
+
+    if trimmed.contains("/symbol=") && trimmed.contains("/interval=ticks") {
+        return trimmed.to_string();
+    }
+
+    if trimmed.ends_with(TRAINING_DATA_BRANCH) || trimmed.contains("/marketdata/interval-price/") {
+        return trimmed.to_string();
+    }
+
+    if let Some(branch) = known_price_data_branches()
+        .into_iter()
+        .find(|branch| trimmed.ends_with(branch))
+    {
+        return format!(
+            "{}{}",
+            trimmed.trim_end_matches(branch).trim_end_matches('/'),
+            format!("/{TRAINING_DATA_BRANCH}")
+        );
+    }
+
+    for branch in known_price_data_branches() {
+        let from = format!("/{branch}/");
+        if trimmed.contains(&from) {
+            return trimmed.replacen(&from, &format!("/{TRAINING_DATA_BRANCH}/"), 1);
+        }
+    }
+
+    format!("{trimmed}/{TRAINING_DATA_BRANCH}")
+}
+
+pub fn build_tick_data_source(prefix: &str, symbol: &str) -> String {
+    let base = normalise_tick_data_prefix(prefix);
+    if base.ends_with(".parquet") || (base.contains("/symbol=") && base.contains("/interval=ticks"))
+    {
+        base
+    } else {
+        format!("{base}/symbol={symbol}/interval=ticks")
+    }
+}
+
 /// Load price bars from a parquet file (S3 or local file)
 pub async fn load_bars_from_parquet(
     s3_uri: &str,
@@ -266,28 +312,7 @@ pub(crate) async fn load_bars_from_parquet_with_range_cached_from_local_cache_di
     start_timestamp_ns: Option<i64>,
     end_timestamp_ns: Option<i64>,
 ) -> Result<Vec<Bar>> {
-    let local_cached_sources =
-        if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
-            list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
-        } else {
-            None
-        };
-    let sources = if let Some(local_sources) = local_cached_sources {
-        let selected =
-            select_price_snapshot_sources(local_sources, snapshot_selection_timestamp_ns)?;
-        cache_price_snapshot_selection(
-            cache,
-            source_uri,
-            snapshot_selection_timestamp_ns,
-            &selected,
-        )
-        .await;
-        selected
-    } else if let Some(cached_sources) =
-        cached_price_snapshot_sources(cache, source_uri, snapshot_selection_timestamp_ns).await?
-    {
-        cached_sources
-    } else if source_uri.ends_with(".parquet") {
+    let sources = if source_uri.ends_with(".parquet") {
         vec![source_uri.to_string()]
     } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
         determine_price_snapshot_s3_sources_cached(
@@ -298,6 +323,10 @@ pub(crate) async fn load_bars_from_parquet_with_range_cached_from_local_cache_di
             snapshot_selection_timestamp_ns,
         )
         .await?
+    } else if let Some(cached_sources) =
+        cached_price_snapshot_sources(cache, source_uri, snapshot_selection_timestamp_ns).await?
+    {
+        cached_sources
     } else {
         let selected = select_price_snapshot_sources(
             list_parquet_sources(source_uri).await?,
@@ -313,12 +342,174 @@ pub(crate) async fn load_bars_from_parquet_with_range_cached_from_local_cache_di
         selected
     };
 
+    info!(
+        "Resolved parquet source(s) for {} {}: {}",
+        symbol,
+        time_interval,
+        sources.join(", ")
+    );
+
     collect_bars_from_sources(
         local_cache_dir,
         Some(cache),
         sources,
         symbol,
         time_interval,
+        start_timestamp_ns,
+        end_timestamp_ns,
+    )
+    .await
+}
+
+pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+    local_cache_dir: &str,
+    cache: &MarketDataCache,
+    source_uri: &str,
+    symbol: &str,
+    snapshot_selection_timestamp_ns: Option<i64>,
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> Result<Vec<Tick>> {
+    let schedule = IntervalSchedule {
+        partition_tier: PartitionTier::Hour,
+        cadence: ExecutionCadence::Hourly,
+    };
+    let sources = if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
+        if source_uri.ends_with(".parquet") {
+            vec![source_uri.to_string()]
+        } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
+            determine_price_snapshot_s3_sources_cached(
+                local_cache_dir,
+                Some(cache),
+                source_uri,
+                schedule,
+                Some(snapshot_selection_timestamp_ns),
+            )
+            .await?
+        } else if let Some(cached_sources) =
+            cached_price_snapshot_sources(cache, source_uri, Some(snapshot_selection_timestamp_ns))
+                .await?
+        {
+            cached_sources
+        } else {
+            let speculative_source = speculative_price_snapshot_source_uri(
+                source_uri,
+                schedule,
+                snapshot_selection_timestamp_ns,
+            );
+            let speculative_path = Path::new(
+                speculative_source
+                    .strip_prefix("file://")
+                    .unwrap_or(&speculative_source),
+            );
+            if !speculative_path.exists() {
+                return Err(anyhow!(
+                    "Exact parquet tick key {} for configured snapshot timestamp {} ({}) was not found",
+                    speculative_source,
+                    snapshot_selection_timestamp_ns,
+                    format_timestamp_ns(snapshot_selection_timestamp_ns)
+                ));
+            }
+            let selected = vec![speculative_source];
+            cache_price_snapshot_selection(
+                cache,
+                source_uri,
+                Some(snapshot_selection_timestamp_ns),
+                &selected,
+            )
+            .await;
+            selected
+        }
+    } else {
+        let local_cached_sources =
+            if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
+                list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
+            } else {
+                None
+            };
+        if let Some(local_sources) = local_cached_sources {
+            let selected = if let Some(start_timestamp_ns) = start_timestamp_ns {
+                let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
+                if effective_end_ns < start_timestamp_ns {
+                    return Err(anyhow!(
+                        "Invalid time range for {}: start {} is after end {}",
+                        source_uri,
+                        start_timestamp_ns,
+                        effective_end_ns
+                    ));
+                }
+                select_candidate_sources_with_range_details(
+                    local_sources,
+                    source_uri,
+                    schedule,
+                    "ticks",
+                    Some(start_timestamp_ns),
+                    Some(effective_end_ns),
+                )?
+            } else if let Some(end_timestamp_ns) = end_timestamp_ns {
+                let selected = select_candidate_sources_with_range_details(
+                    local_sources,
+                    source_uri,
+                    schedule,
+                    "ticks",
+                    None,
+                    Some(end_timestamp_ns),
+                )?;
+                vec![selected.last().cloned().ok_or_else(|| {
+                    anyhow!("No parquet sources matched the requested time range for ticks")
+                })?]
+            } else {
+                select_candidate_sources(local_sources, "ticks", None, None)?
+            };
+            cache_latest_selection(
+                cache,
+                source_uri,
+                start_timestamp_ns,
+                end_timestamp_ns,
+                &selected,
+            )
+            .await;
+            selected
+        } else if let Some(cached_sources) =
+            cached_latest_sources(cache, source_uri, start_timestamp_ns, end_timestamp_ns).await?
+        {
+            cached_sources
+        } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
+            determine_s3_sources_cached(
+                local_cache_dir,
+                Some(cache),
+                source_uri,
+                schedule,
+                start_timestamp_ns,
+                end_timestamp_ns,
+            )
+            .await?
+        } else {
+            let selected = select_candidate_sources_with_range_details(
+                list_parquet_sources(source_uri).await?,
+                source_uri,
+                schedule,
+                "ticks",
+                start_timestamp_ns,
+                end_timestamp_ns,
+            )?;
+            cache_latest_selection(
+                cache,
+                source_uri,
+                start_timestamp_ns,
+                end_timestamp_ns,
+                &selected,
+            )
+            .await;
+            selected
+        }
+    };
+
+    collect_ticks_from_sources(
+        local_cache_dir,
+        cache,
+        sources,
+        symbol,
         start_timestamp_ns,
         end_timestamp_ns,
     )
@@ -582,6 +773,48 @@ async fn collect_news_from_sources(
     Ok(news)
 }
 
+async fn collect_ticks_from_sources(
+    local_cache_dir: &str,
+    cache: &MarketDataCache,
+    sources: Vec<String>,
+    symbol: &str,
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> Result<Vec<Tick>> {
+    let mut ticks = Vec::new();
+    for source in sources {
+        if let Some(cached_ticks) = cache.tick_items(&source).await {
+            ticks.extend(cached_ticks);
+            continue;
+        }
+
+        let Some(bytes) = try_read_bytes_from_source(local_cache_dir, &source).await? else {
+            continue;
+        };
+        let parsed_ticks = parse_ticks_from_bytes(bytes, symbol, i64::MAX)?;
+        cache
+            .put_tick_items(source.clone(), parsed_ticks.clone())
+            .await;
+        ticks.extend(parsed_ticks);
+    }
+
+    if let Some(start_timestamp_ns) = start_timestamp_ns {
+        ticks.retain(|item| item.timestamp_ns >= start_timestamp_ns);
+    }
+
+    if let Some(end_timestamp_ns) = end_timestamp_ns {
+        ticks.retain(|item| item.timestamp_ns <= end_timestamp_ns);
+    }
+
+    ticks.sort_by_key(|item| item.timestamp_ns);
+    ticks.dedup_by(|left, right| {
+        left.timestamp_ns == right.timestamp_ns
+            && left.price.to_bits() == right.price.to_bits()
+            && left.size.to_bits() == right.size.to_bits()
+    });
+    Ok(ticks)
+}
+
 async fn cached_latest_sources(
     cache: &MarketDataCache,
     source_uri: &str,
@@ -779,7 +1012,59 @@ async fn determine_price_snapshot_s3_sources_cached(
 ) -> Result<Vec<String>> {
     let cache_key = price_snapshot_cache_key(source_uri, snapshot_selection_timestamp_ns);
 
-    if let Some(local_sources) = list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
+    if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
+        if let Some(cache) = cache {
+            if let Some(cached_latest) = cache.latest_source(&cache_key).await {
+                return match cached_latest {
+                    CachedLatestSource::Present(uri) => Ok(vec![uri]),
+                    CachedLatestSource::Missing(message) => Err(anyhow!(message)),
+                };
+            }
+        }
+
+        let speculative_source = speculative_price_snapshot_source_uri(
+            source_uri,
+            schedule,
+            snapshot_selection_timestamp_ns,
+        );
+        info!(
+            "Resolving timestamped parquet snapshot for {} at {} via {}",
+            source_uri,
+            format_timestamp_ns(snapshot_selection_timestamp_ns),
+            speculative_source
+        );
+        match resolve_speculative_price_snapshot_source(local_cache_dir, speculative_source.clone())
+            .await?
+        {
+            true => {
+                if let Some(cache) = cache {
+                    cache_price_snapshot_selection(
+                        cache,
+                        source_uri,
+                        Some(snapshot_selection_timestamp_ns),
+                        std::slice::from_ref(&speculative_source),
+                    )
+                    .await;
+                }
+                return Ok(vec![speculative_source]);
+            }
+            false => {
+                let err = anyhow!(
+                    "Exact parquet snapshot key {} for configured snapshot timestamp {} ({}) was not found in local cache or S3",
+                    speculative_source,
+                    snapshot_selection_timestamp_ns,
+                    format_timestamp_ns(snapshot_selection_timestamp_ns)
+                );
+                if let Some(cache) = cache {
+                    cache
+                        .put_latest_source(cache_key, CachedLatestSource::Missing(err.to_string()))
+                        .await;
+                }
+                return Err(err);
+            }
+        }
+    } else if let Some(local_sources) =
+        list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
     {
         let selected =
             select_price_snapshot_sources(local_sources, snapshot_selection_timestamp_ns)?;
@@ -804,12 +1089,7 @@ async fn determine_price_snapshot_s3_sources_cached(
         }
     }
 
-    let latest = if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
-        find_latest_s3_source_at_or_before(source_uri, schedule, snapshot_selection_timestamp_ns)
-            .await
-    } else {
-        find_latest_s3_source(source_uri, schedule).await
-    };
+    let latest = find_latest_s3_source(source_uri, schedule).await;
     if let Some(cache) = cache {
         let cached_value = match &latest {
             Ok(uri) => CachedLatestSource::Present(uri.clone()),
@@ -819,6 +1099,37 @@ async fn determine_price_snapshot_s3_sources_cached(
     }
 
     Ok(vec![latest?])
+}
+
+async fn resolve_speculative_price_snapshot_source(
+    local_cache_dir: &str,
+    speculative_source: String,
+) -> Result<bool> {
+    let local_path = local_cache_path_for_s3_source(local_cache_dir, &speculative_source)?;
+    if local_path.exists() {
+        return Ok(true);
+    }
+
+    if s3_object_exists(&speculative_source).await? {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn speculative_price_snapshot_source_uri(
+    source_uri: &str,
+    schedule: IntervalSchedule,
+    snapshot_selection_timestamp_ns: i64,
+) -> String {
+    build_s3_object_uri(
+        source_uri,
+        schedule,
+        align_down_execution_dt(
+            Utc.timestamp_nanos(snapshot_selection_timestamp_ns),
+            schedule.cadence,
+        ),
+    )
 }
 
 async fn determine_s3_sources_cached(
@@ -926,22 +1237,171 @@ fn select_price_snapshot_sources(
         .map(|source| (extract_source_timestamp_ns(&source), source))
         .collect();
     stamped_sources.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let candidates_summary = describe_stamped_sources(&stamped_sources);
 
     let selected = if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
         stamped_sources
-            .into_iter()
+            .iter()
             .rev()
             .find(|(timestamp_ns, _)| {
                 timestamp_ns.is_some_and(|timestamp| timestamp <= snapshot_selection_timestamp_ns)
             })
-            .map(|(_, source)| source)
+            .map(|(_, source)| source.clone())
     } else {
         stamped_sources.last().map(|(_, source)| source.clone())
     };
 
-    selected
-        .map(|source| vec![source])
-        .ok_or_else(|| anyhow!("No parquet snapshot matched the configured snapshot timestamp"))
+    selected.map(|source| vec![source]).ok_or_else(|| {
+        if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
+            anyhow!(
+                "No parquet snapshot matched configured snapshot timestamp {} ({}). Candidate snapshots: {}",
+                snapshot_selection_timestamp_ns,
+                format_timestamp_ns(snapshot_selection_timestamp_ns),
+                candidates_summary
+            )
+        } else {
+            anyhow!(
+                "No parquet snapshot matched the configured snapshot timestamp. Candidate snapshots: {}",
+                candidates_summary
+            )
+        }
+    })
+}
+
+fn describe_stamped_sources(stamped_sources: &[(Option<i64>, String)]) -> String {
+    const MAX_CANDIDATES: usize = 8;
+
+    let mut described = stamped_sources
+        .iter()
+        .take(MAX_CANDIDATES)
+        .map(|(timestamp_ns, source)| match timestamp_ns {
+            Some(timestamp_ns) => format!("{} ({})", source, format_timestamp_ns(*timestamp_ns)),
+            None => format!("{source} (timestamp: unknown)"),
+        })
+        .collect::<Vec<_>>();
+
+    if stamped_sources.len() > MAX_CANDIDATES {
+        described.push(format!(
+            "... and {} more",
+            stamped_sources.len() - MAX_CANDIDATES
+        ));
+    }
+
+    described.join(", ")
+}
+
+fn describe_requested_time_range(
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> String {
+    match (start_timestamp_ns, end_timestamp_ns) {
+        (Some(start), Some(end)) => format!(
+            "{} ({}) to {} ({})",
+            start,
+            format_timestamp_ns(start),
+            end,
+            format_timestamp_ns(end)
+        ),
+        (Some(start), None) => format!("from {} ({}) onward", start, format_timestamp_ns(start)),
+        (None, Some(end)) => format!("up to {} ({})", end, format_timestamp_ns(end)),
+        (None, None) => "latest available parquet source".to_string(),
+    }
+}
+
+fn describe_expected_source_range(
+    source_uri: &str,
+    schedule: IntervalSchedule,
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> String {
+    let Some(start_or_end) = start_timestamp_ns.or(end_timestamp_ns) else {
+        return format!("latest available parquet source under {}", source_uri);
+    };
+    let end_or_start = end_timestamp_ns
+        .or(start_timestamp_ns)
+        .unwrap_or(start_or_end);
+
+    let start_source = build_s3_object_uri(
+        source_uri,
+        schedule,
+        align_down_execution_dt(Utc.timestamp_nanos(start_or_end), schedule.cadence),
+    );
+    let end_source = build_s3_object_uri(
+        source_uri,
+        schedule,
+        align_up_execution_dt(Utc.timestamp_nanos(end_or_start), schedule.cadence),
+    );
+
+    if start_source == end_source {
+        start_source
+    } else {
+        format!("{start_source} .. {end_source}")
+    }
+}
+
+fn select_candidate_sources_with_range_details(
+    sources: Vec<String>,
+    source_uri: &str,
+    schedule: IntervalSchedule,
+    time_interval: &str,
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> Result<Vec<String>> {
+    if sources.is_empty() {
+        return Err(anyhow!(
+            "No parquet sources available for {}",
+            time_interval
+        ));
+    }
+
+    let mut stamped_sources: Vec<(Option<i64>, String)> = sources
+        .into_iter()
+        .map(|source| (extract_source_timestamp_ns(&source), source))
+        .collect();
+    stamped_sources.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    if start_timestamp_ns.is_none() && end_timestamp_ns.is_none() {
+        return Ok(vec![stamped_sources
+            .last()
+            .map(|(_, source)| source.clone())
+            .ok_or_else(|| {
+                anyhow!("No parquet sources available for {}", time_interval)
+            })?]);
+    }
+
+    let selected: Vec<String> = stamped_sources
+        .iter()
+        .filter(|(timestamp_ns, _)| match timestamp_ns {
+            Some(timestamp_ns) => {
+                let satisfies_start = start_timestamp_ns
+                    .map(|start| *timestamp_ns + SOURCE_SELECTION_LOOKBACK_NS >= start)
+                    .unwrap_or(true);
+                let satisfies_end = end_timestamp_ns
+                    .map(|end| *timestamp_ns <= end)
+                    .unwrap_or(true);
+                satisfies_start && satisfies_end
+            }
+            None => true,
+        })
+        .map(|(_, source)| source.clone())
+        .collect();
+
+    if selected.is_empty() {
+        return Err(anyhow!(
+            "No parquet sources matched the requested time range for {} under {}. Requested range: {}. Expected parquet partitions: {}. Candidate sources: {}",
+            time_interval,
+            source_uri,
+            describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
+            describe_expected_source_range(source_uri, schedule, start_timestamp_ns, end_timestamp_ns),
+            describe_stamped_sources(&stamped_sources)
+        ));
+    }
+
+    Ok(selected)
+}
+
+fn format_timestamp_ns(timestamp_ns: i64) -> String {
+    Utc.timestamp_nanos(timestamp_ns).to_rfc3339()
 }
 
 fn generate_s3_sources_for_range(
@@ -1278,6 +1738,24 @@ fn extract_source_timestamp_ns(source: &str) -> Option<i64> {
     Some(datetime.timestamp_nanos_opt()? as i64)
 }
 
+fn source_partition_descriptor(source_uri: &str) -> String {
+    let segments = source_uri
+        .split('/')
+        .filter(|segment| {
+            segment.starts_with("year=")
+                || segment.starts_with("month=")
+                || segment.starts_with("day=")
+                || segment.starts_with("hour=")
+        })
+        .collect::<Vec<_>>();
+
+    if segments.is_empty() {
+        "unpartitioned".to_string()
+    } else {
+        segments.join("/")
+    }
+}
+
 async fn try_read_bytes_from_source(local_cache_dir: &str, source: &str) -> Result<Option<Bytes>> {
     if source.starts_with("s3://") {
         let Some(local_path) = ensure_local_cached_s3_source(local_cache_dir, source).await? else {
@@ -1332,6 +1810,8 @@ async fn ensure_local_cached_s3_source(
     })?;
 
     let lock_path = cache_download_lock_path(&local_path);
+    let partition = source_partition_descriptor(source_uri);
+    let mut waiting_for_existing_download = false;
     loop {
         if tokio::fs::try_exists(&local_path)
             .await
@@ -1366,8 +1846,22 @@ async fn ensure_local_cached_s3_source(
                 }
             }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                if !waiting_for_existing_download {
+                    info!(
+                        "Waiting for parquet cache download already in progress for {} ({})",
+                        source_uri, partition
+                    );
+                    waiting_for_existing_download = true;
+                }
                 if cache_download_lock_is_stale(&lock_path).await? {
+                    info!(
+                        "Found stale parquet cache download lock for {} ({}) at {}; retrying",
+                        source_uri,
+                        partition,
+                        lock_path.display()
+                    );
                     remove_file_if_exists(&lock_path).await?;
+                    waiting_for_existing_download = false;
                     continue;
                 }
                 sleep(TokioDuration::from_millis(CACHE_DOWNLOAD_LOCK_POLL_MS)).await;
@@ -1391,11 +1885,18 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
         return Ok(true);
     }
 
+    let partition = source_partition_descriptor(source_uri);
     let temp_path = PathBuf::from(format!(
         "{}.download-{}.tmp",
         local_path.display(),
         now_ns()
     ));
+    info!(
+        "Starting parquet cache download for {} ({}) -> {}",
+        source_uri,
+        partition,
+        local_path.display()
+    );
     let output = Command::new("aws")
         .arg("s3")
         .arg("cp")
@@ -1409,6 +1910,10 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
         let stderr = String::from_utf8_lossy(&output.stderr);
         remove_file_if_exists(&temp_path).await?;
         if stderr.contains("404") || stderr.contains("Not Found") || stderr.contains("HeadObject") {
+            info!(
+                "Parquet cache download source not found for {} ({})",
+                source_uri, partition
+            );
             return Ok(false);
         }
         return Err(anyhow!(
@@ -1437,6 +1942,12 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
                 e
             )
         })?;
+    info!(
+        "Finished parquet cache download for {} ({}) -> {}",
+        source_uri,
+        partition,
+        local_path.display()
+    );
     Ok(true)
 }
 
@@ -1635,6 +2146,55 @@ fn parse_news_from_bytes(bytes: Bytes, end_timestamp_ns: i64) -> Result<Vec<News
     Ok(news)
 }
 
+fn parse_ticks_from_bytes(bytes: Bytes, symbol: &str, end_timestamp_ns: i64) -> Result<Vec<Tick>> {
+    let mut parquet_reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+        .map_err(|e| anyhow!("Failed to create parquet reader: {}", e))?
+        .build()
+        .map_err(|e| anyhow!("Failed to build parquet reader: {}", e))?;
+
+    let mut ticks = Vec::new();
+
+    while let Some(batch) = parquet_reader.next() {
+        let batch = batch.map_err(|e| anyhow!("Failed to read batch: {}", e))?;
+        for i in 0..batch.num_rows() {
+            if !tick_symbol_matches(&batch, i, symbol)? {
+                continue;
+            }
+
+            let tick = parse_tick_from_batch(&batch, i)?;
+            if tick.timestamp_ns > end_timestamp_ns {
+                return Ok(ticks);
+            }
+            ticks.push(tick);
+        }
+    }
+
+    Ok(ticks)
+}
+
+fn parse_tick_from_batch(batch: &RecordBatch, index: usize) -> Result<Tick> {
+    let timestamp = column_by_name_case_insensitive(batch, "timestamp_ns")
+        .or_else(|| column_by_name_case_insensitive(batch, "timestamp"))
+        .or_else(|| column_by_name_case_insensitive(batch, "tick_date_raw"))
+        .or_else(|| column_by_name_case_insensitive(batch, "tick_date"))
+        .ok_or_else(|| anyhow!("Missing tick timestamp column"))?;
+
+    let price = parse_tick_price(batch, index)?;
+    let size = column_by_name_case_insensitive(batch, "size")
+        .or_else(|| column_by_name_case_insensitive(batch, "volume"))
+        .or_else(|| column_by_name_case_insensitive(batch, "qty"))
+        .or_else(|| column_by_name_case_insensitive(batch, "quantity"))
+        .map(|value| parse_numeric_value(value, index))
+        .transpose()?
+        .unwrap_or(0.0);
+
+    Ok(Tick {
+        timestamp_ns: parse_timestamp_value(timestamp, index)?,
+        price,
+        size,
+    })
+}
+
 fn parse_news_from_batch(batch: &RecordBatch, index: usize) -> Result<News> {
     let timestamp = column_by_name_case_insensitive(batch, "timestamp_ns")
         .or_else(|| column_by_name_case_insensitive(batch, "timestamp"))
@@ -1663,6 +2223,34 @@ fn parse_news_from_batch(batch: &RecordBatch, index: usize) -> Result<News> {
         sentiment_score,
         source: string_value(source, index).ok_or_else(|| anyhow!("Invalid news source format"))?,
     })
+}
+
+fn tick_symbol_matches(batch: &RecordBatch, index: usize, expected_symbol: &str) -> Result<bool> {
+    let Some(symbol_value) = column_by_name_case_insensitive(batch, "symbol") else {
+        return Ok(true);
+    };
+
+    let actual =
+        string_value(symbol_value, index).ok_or_else(|| anyhow!("Invalid tick symbol format"))?;
+    Ok(normalise_market_symbol(&actual) == normalise_market_symbol(expected_symbol))
+}
+
+fn parse_tick_price(batch: &RecordBatch, index: usize) -> Result<f64> {
+    if let Some(price) = column_by_name_case_insensitive(batch, "price") {
+        return parse_numeric_value(price, index);
+    }
+
+    let bid = column_by_name_case_insensitive(batch, "bid");
+    let offer = column_by_name_case_insensitive(batch, "offer")
+        .or_else(|| column_by_name_case_insensitive(batch, "ask"));
+
+    match (bid, offer) {
+        (Some(bid), Some(offer)) => {
+            Ok((parse_numeric_value(bid, index)? + parse_numeric_value(offer, index)?) / 2.0)
+        }
+        (Some(price), None) | (None, Some(price)) => parse_numeric_value(price, index),
+        (None, None) => Err(anyhow!("Missing tick price column")),
+    }
 }
 
 fn parse_timestamp_value(value: &dyn Array, index: usize) -> Result<i64> {
@@ -1709,6 +2297,35 @@ fn parse_timestamp_string(raw: &str) -> Result<i64> {
     }
 
     Err(anyhow!("Unsupported timestamp string {}", raw))
+}
+
+fn parse_numeric_value(value: &dyn Array, index: usize) -> Result<f64> {
+    if let Some(arr) = value.as_any().downcast_ref::<arrow::array::Float64Array>() {
+        Ok(arr.value(index))
+    } else if let Some(arr) = value.as_any().downcast_ref::<arrow::array::Float32Array>() {
+        Ok(arr.value(index) as f64)
+    } else if let Some(arr) = value.as_any().downcast_ref::<arrow::array::Int64Array>() {
+        Ok(arr.value(index) as f64)
+    } else if let Some(arr) = value.as_any().downcast_ref::<arrow::array::Int32Array>() {
+        Ok(arr.value(index) as f64)
+    } else if let Some(arr) = value.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+        Ok(arr.value(index) as f64)
+    } else if let Some(arr) = value.as_any().downcast_ref::<arrow::array::UInt32Array>() {
+        Ok(arr.value(index) as f64)
+    } else if let Some(raw) = string_value(value, index) {
+        raw.parse::<f64>()
+            .map_err(|_| anyhow!("Unsupported numeric value {}", raw))
+    } else {
+        Err(anyhow!("Invalid numeric format"))
+    }
+}
+
+fn normalise_market_symbol(symbol: &str) -> String {
+    symbol
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase()
 }
 
 fn string_value(value: &dyn Array, index: usize) -> Option<String> {
@@ -1765,7 +2382,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::tempdir;
 
     use crate::market_data_cache::MarketDataCache;
@@ -1803,6 +2420,56 @@ mod tests {
         writer.write(&batch)?;
         writer.close()?;
         Ok(())
+    }
+
+    fn write_tick_parquet(
+        path: &PathBuf,
+        timestamps_micros: &[i64],
+        symbols: &[&str],
+        prices: &[f64],
+        sizes: &[i64],
+    ) -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "Timestamp",
+                arrow::datatypes::DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Microsecond,
+                    None,
+                ),
+                false,
+            ),
+            arrow::datatypes::Field::new("Symbol", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("Price", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("Size", arrow::datatypes::DataType::Int64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::TimestampMicrosecondArray::from(
+                    timestamps_micros.to_vec(),
+                )),
+                Arc::new(StringArray::from(
+                    symbols
+                        .iter()
+                        .map(|value| (*value).to_string())
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(prices.to_vec())),
+                Arc::new(Int64Array::from(sizes.to_vec())),
+            ],
+        )?;
+
+        let file = std::fs::File::create(path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(())
+    }
+
+    fn path_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn write_news_parquet(path: &PathBuf, timestamps: &[&str], headlines: &[&str]) -> Result<()> {
@@ -1905,6 +2572,38 @@ mod tests {
             monthly,
             "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1/year=2025/month=01/20250101T000000Z.parquet"
         );
+    }
+
+    #[test]
+    fn builds_speculative_snapshot_key_from_requested_timestamp() {
+        let key = speculative_price_snapshot_source_uri(
+            "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1",
+            interval_schedule("H1").unwrap(),
+            1_640_390_400_000_000_000,
+        );
+
+        assert_eq!(
+            key,
+            "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet"
+        );
+    }
+
+    #[test]
+    fn snapshot_selection_error_lists_candidates_and_requested_timestamp() {
+        let err = select_price_snapshot_sources(
+            vec![
+                "s3://bucket/marketdata/eoh-snapshot/symbol=USDJPY/interval=M1/year=2022/month=01/day=01/hour=00/20220101T000000Z.parquet".to_string(),
+                "s3://bucket/marketdata/eoh-snapshot/symbol=USDJPY/interval=M1/year=2022/month=01/day=02/hour=00/20220102T000000Z.parquet".to_string(),
+            ],
+            Some(1_640_390_400_000_000_000),
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("1640390400000000000"));
+        assert!(message.contains("2021-12-25T00:00:00+00:00"));
+        assert!(message.contains("20220101T000000Z.parquet"));
+        assert!(message.contains("20220102T000000Z.parquet"));
     }
 
     #[tokio::test]
@@ -2208,6 +2907,215 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_snapshot_loader_uses_speculative_s3_key_when_local_cache_is_future_only() {
+        let _guard = path_env_lock().lock().unwrap();
+
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().to_string_lossy().to_string();
+        let source_uri = "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1";
+        let future_cached_file = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2025/month=01/day=13/20250113T000000Z.parquet",
+        )
+        .unwrap();
+        std::fs::create_dir_all(future_cached_file.parent().unwrap()).unwrap();
+        write_test_parquet(&future_cached_file, &[1_736_726_400_000_000_000], &[155.0]).unwrap();
+
+        let requested_cached_file = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet",
+        )
+        .unwrap();
+        let fixture_file = dir.path().join("requested.parquet");
+        write_test_parquet(
+            &fixture_file,
+            &[1_640_390_400_000_000_000, 1_640_390_460_000_000_000],
+            &[120.0, 121.0],
+        )
+        .unwrap();
+
+        let fake_bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+        let fake_aws = fake_bin_dir.join("aws");
+        std::fs::write(
+            &fake_aws,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"s3api\" ] && [ \"$2\" = \"head-object\" ]; then\n  case \"$*\" in\n    *'marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet'*) exit 0 ;;\n  esac\n  echo '404' >&2\n  exit 255\nfi\nif [ \"$1\" = \"s3\" ] && [ \"$2\" = \"cp\" ]; then\n  src=\"$3\"\n  dest=\"$4\"\n  case \"$src\" in\n    *'marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet'*) cp '{}' \"$dest\"; exit 0 ;;\n  esac\n  echo '404' >&2\n  exit 255\nfi\necho 'unsupported aws invocation' >&2\nexit 1\n",
+                fixture_file.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake_aws).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake_aws, perms).unwrap();
+        }
+
+        let original_path = std::env::var_os("PATH");
+        let new_path = match &original_path {
+            Some(path) => format!("{}:{}", fake_bin_dir.display(), path.to_string_lossy()),
+            None => fake_bin_dir.display().to_string(),
+        };
+        std::env::set_var("PATH", &new_path);
+
+        let cache = MarketDataCache::new();
+        let bars = load_bars_from_parquet_with_range_cached_from_local_cache_dir(
+            &cache_dir,
+            &cache,
+            source_uri,
+            "USDJPY",
+            "H1",
+            Some(1_640_390_400_000_000_000),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0].open, 120.0);
+        assert_eq!(bars[1].open, 121.0);
+        assert!(requested_cached_file.exists());
+    }
+
+    #[tokio::test]
+    async fn timestamped_snapshot_lookup_checks_speculative_s3_key_before_unrelated_local_cache() {
+        let _guard = path_env_lock().lock().unwrap();
+
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().to_string_lossy().to_string();
+        let source_uri = "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1";
+        let future_cached_file = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2025/month=01/day=13/20250113T000000Z.parquet",
+        )
+        .unwrap();
+        std::fs::create_dir_all(future_cached_file.parent().unwrap()).unwrap();
+        write_test_parquet(&future_cached_file, &[1_736_726_400_000_000_000], &[155.0]).unwrap();
+
+        let fake_bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+        let fake_aws = fake_bin_dir.join("aws");
+        std::fs::write(
+            &fake_aws,
+            r#"#!/bin/sh
+if printf '%s\n' "$*" | grep -q 'head-object' && printf '%s\n' "$*" | grep -q 'marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet'; then
+  exit 0
+fi
+echo "404" >&2
+exit 255
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake_aws).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake_aws, perms).unwrap();
+        }
+
+        let original_path = std::env::var_os("PATH");
+        let new_path = match &original_path {
+            Some(path) => format!("{}:{}", fake_bin_dir.display(), path.to_string_lossy()),
+            None => fake_bin_dir.display().to_string(),
+        };
+        std::env::set_var("PATH", &new_path);
+
+        let resolved = determine_price_snapshot_s3_sources_cached(
+            &cache_dir,
+            None,
+            source_uri,
+            interval_schedule("H1").unwrap(),
+            Some(1_640_390_400_000_000_000),
+        )
+        .await
+        .unwrap();
+
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(
+            resolved,
+            vec![
+                "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn timestamped_snapshot_lookup_errors_when_exact_key_is_missing() {
+        let _guard = path_env_lock().lock().unwrap();
+
+        let dir = tempdir().unwrap();
+        let cache_dir = dir.path().to_string_lossy().to_string();
+        let source_uri = "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1";
+        let future_cached_file = local_cache_path_for_s3_source(
+            &cache_dir,
+            "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2025/month=01/day=13/20250113T000000Z.parquet",
+        )
+        .unwrap();
+        std::fs::create_dir_all(future_cached_file.parent().unwrap()).unwrap();
+        write_test_parquet(&future_cached_file, &[1_736_726_400_000_000_000], &[155.0]).unwrap();
+
+        let fake_bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+        let fake_aws = fake_bin_dir.join("aws");
+        std::fs::write(
+            &fake_aws,
+            r#"#!/bin/sh
+echo "404" >&2
+exit 255
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake_aws).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake_aws, perms).unwrap();
+        }
+
+        let original_path = std::env::var_os("PATH");
+        let new_path = match &original_path {
+            Some(path) => format!("{}:{}", fake_bin_dir.display(), path.to_string_lossy()),
+            None => fake_bin_dir.display().to_string(),
+        };
+        std::env::set_var("PATH", &new_path);
+
+        let err = determine_price_snapshot_s3_sources_cached(
+            &cache_dir,
+            None,
+            source_uri,
+            interval_schedule("H1").unwrap(),
+            Some(1_640_390_400_000_000_000),
+        )
+        .await
+        .unwrap_err();
+
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+
+        let message = err.to_string();
+        assert!(message.contains("Exact parquet snapshot key"));
+        assert!(message.contains("20211225T000000Z.parquet"));
+        assert!(message.contains("2021-12-25T00:00:00+00:00"));
+    }
+
+    #[tokio::test]
     async fn loads_news_from_local_cached_s3_prefix_without_hitting_s3() {
         let dir = tempdir().unwrap();
         let cache_dir = dir.path().to_string_lossy().to_string();
@@ -2343,5 +3251,168 @@ mod tests {
         assert_eq!(item.source, "Source");
         assert_eq!(item.sentiment_score, -1.0);
         assert!(item.timestamp_ns > 0);
+    }
+
+    #[test]
+    fn parses_tick_batch_with_case_insensitive_schema() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "Timestamp",
+                arrow::datatypes::DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Microsecond,
+                    None,
+                ),
+                false,
+            ),
+            arrow::datatypes::Field::new("Price", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("Size", arrow::datatypes::DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow::array::TimestampMicrosecondArray::from(vec![
+                    1_325_480_400_000_000,
+                ])),
+                Arc::new(Float64Array::from(vec![76.947])),
+                Arc::new(Int64Array::from(vec![3])),
+            ],
+        )
+        .unwrap();
+
+        let tick = parse_tick_from_batch(&batch, 0).unwrap();
+        assert_eq!(tick.timestamp_ns, 1_325_480_400_000_000_000);
+        assert_eq!(tick.price, 76.947);
+        assert_eq!(tick.size, 3.0);
+    }
+
+    #[tokio::test]
+    async fn loads_ticks_from_local_hourly_partitions() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join(
+            "marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02",
+        );
+        std::fs::create_dir_all(base.join("hour=05")).unwrap();
+        std::fs::create_dir_all(base.join("hour=06")).unwrap();
+
+        write_tick_parquet(
+            &base.join("hour=05/20120102T050000Z.parquet"),
+            &[1_325_480_400_000_000, 1_325_480_401_000_000],
+            &["USDJPY", "EURUSD"],
+            &[76.947, 1.301],
+            &[2, 1],
+        )
+        .unwrap();
+        write_tick_parquet(
+            &base.join("hour=06/20120102T060000Z.parquet"),
+            &[1_325_484_000_000_000, 1_325_484_001_000_000],
+            &["USDJPY", "USDJPY"],
+            &[76.971, 76.972],
+            &[4, 5],
+        )
+        .unwrap();
+
+        let cache = MarketDataCache::new();
+        let ticks = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+            &dir.path().to_string_lossy(),
+            &cache,
+            &build_tick_data_source(&dir.path().to_string_lossy(), "USDJPY"),
+            "USDJPY",
+            None,
+            Some(1_325_480_400_000_000_000),
+            Some(1_325_484_001_000_000_000),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(ticks.len(), 3);
+        assert_eq!(ticks[0].price, 76.947);
+        assert_eq!(ticks[1].price, 76.971);
+        assert_eq!(ticks[2].size, 5.0);
+    }
+
+    #[tokio::test]
+    async fn tick_range_error_lists_expected_partitions_and_candidates() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join(
+            "prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2025/month=01/day=13",
+        );
+        std::fs::create_dir_all(base.join("hour=00")).unwrap();
+
+        write_tick_parquet(
+            &base.join("hour=00/20250113T000000Z.parquet"),
+            &[1_736_726_400_000_000],
+            &["USDJPY"],
+            &[155.0],
+            &[1],
+        )
+        .unwrap();
+
+        let cache = MarketDataCache::new();
+        let source_uri =
+            "s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks";
+        let err = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+            &dir.path().to_string_lossy(),
+            &cache,
+            source_uri,
+            "USDJPY",
+            None,
+            Some(1_596_844_800_000_000_000),
+            Some(1_596_848_400_000_000_000),
+        )
+        .await
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Requested range: 1596844800000000000"));
+        assert!(message.contains("2020-08-08T00:00:00+00:00"));
+        assert!(message.contains(
+            "Expected parquet partitions: s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2020/month=08/day=08/hour=00/20200808T000000Z.parquet .. s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2020/month=08/day=08/hour=01/20200808T010000Z.parquet"
+        ));
+        assert!(message.contains("Candidate sources:"));
+        assert!(message.contains("20250113T000000Z.parquet"));
+    }
+
+    #[tokio::test]
+    async fn timestamped_tick_lookup_uses_exact_hour_partition() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join(
+            "marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02",
+        );
+        std::fs::create_dir_all(base.join("hour=05")).unwrap();
+        std::fs::create_dir_all(base.join("hour=06")).unwrap();
+
+        write_tick_parquet(
+            &base.join("hour=05/20120102T050000Z.parquet"),
+            &[1_325_480_400_000_000, 1_325_480_401_000_000],
+            &["USDJPY", "USDJPY"],
+            &[76.947, 76.948],
+            &[2, 3],
+        )
+        .unwrap();
+        write_tick_parquet(
+            &base.join("hour=06/20120102T060000Z.parquet"),
+            &[1_325_484_000_000_000, 1_325_484_001_000_000],
+            &["USDJPY", "USDJPY"],
+            &[76.971, 76.972],
+            &[4, 5],
+        )
+        .unwrap();
+
+        let cache = MarketDataCache::new();
+        let ticks = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+            &dir.path().to_string_lossy(),
+            &cache,
+            &build_tick_data_source(&dir.path().to_string_lossy(), "USDJPY"),
+            "USDJPY",
+            Some(1_325_484_123_000_000_000),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks[0].price, 76.971);
+        assert_eq!(ticks[1].price, 76.972);
     }
 }

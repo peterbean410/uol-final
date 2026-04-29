@@ -189,6 +189,30 @@ impl CtraderClient {
         }
     }
 
+    fn synthetic_ticks(symbol: &str) -> Vec<modelenv_proto::Tick> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as i64;
+        let pip = if symbol.ends_with("JPY") {
+            0.01
+        } else {
+            0.0001
+        };
+        let mid = Self::synthetic_mid_price(symbol);
+        let offsets = [-2.0_f64, -0.5, 0.5, 1.0];
+
+        offsets
+            .iter()
+            .enumerate()
+            .map(|(idx, offset)| modelenv_proto::Tick {
+                timestamp_ns: now - ((offsets.len() - idx) as i64 * 250_000_000),
+                price: mid + (offset * pip),
+                size: 1.0 + idx as f64,
+            })
+            .collect()
+    }
+
     /// Create a new cTrader API client
     ///
     /// # Arguments
@@ -410,6 +434,18 @@ impl CtraderClient {
         // 1. Send ProtoOAGetBarsReq with symbol and interval=M1
         // 2. Parse the response into Bar message
         Ok(Self::synthetic_bar(&symbol))
+    }
+
+    pub async fn current_ticks(&mut self, symbol: &str) -> Result<Vec<modelenv_proto::Tick>> {
+        if !self.is_connected() {
+            return Err(anyhow!("Not connected to cTrader API"));
+        }
+
+        let symbol = Self::normalise_symbol(symbol)?;
+
+        debug!("Retrieving current ticks for symbol: {}", symbol);
+
+        Ok(Self::synthetic_ticks(&symbol))
     }
 
     /// Submit order to cTrader API
@@ -886,6 +922,21 @@ mod tests {
         assert!(bar.high > bar.open);
         assert!(bar.low < bar.close);
         assert_eq!(bar.volume, 100.0);
+    }
+
+    #[tokio::test]
+    async fn current_ticks_returns_recent_symbol_specific_ticks() {
+        let mut client = test_client("USDJPY");
+        client.connect().await.unwrap();
+
+        let ticks = client.current_ticks("USDJPY").await.unwrap();
+
+        assert_eq!(ticks.len(), 4);
+        assert!(ticks
+            .windows(2)
+            .all(|window| window[0].timestamp_ns < window[1].timestamp_ns));
+        assert!(ticks.iter().all(|tick| tick.price > 100.0));
+        assert_eq!(ticks[0].size, 1.0);
     }
 
     #[tokio::test]

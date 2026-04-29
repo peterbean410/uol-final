@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use modelenv_proto::{Bar, News};
+use modelenv_proto::{Bar, News, Tick};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug)]
@@ -15,6 +15,7 @@ struct MarketDataCacheState {
     latest_sources: HashMap<String, CachedLatestSource>,
     price_bars: HashMap<String, Vec<Bar>>,
     news_items: HashMap<String, Vec<News>>,
+    tick_items: HashMap<String, Vec<Tick>>,
 }
 
 #[derive(Clone, Default)]
@@ -58,5 +59,13 @@ impl MarketDataCache {
 
     pub async fn put_news_items(&self, source: String, news: Vec<News>) {
         self.state.lock().await.news_items.insert(source, news);
+    }
+
+    pub async fn tick_items(&self, source: &str) -> Option<Vec<Tick>> {
+        self.state.lock().await.tick_items.get(source).cloned()
+    }
+
+    pub async fn put_tick_items(&self, source: String, ticks: Vec<Tick>) {
+        self.state.lock().await.tick_items.insert(source, ticks);
     }
 }

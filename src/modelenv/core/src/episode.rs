@@ -1,14 +1,15 @@
 // Episode management module
-use anyhow::Result;
-use log::warn;
+use anyhow::{Context, Result};
+use log::{info, warn};
 use std::collections::HashMap;
 
-use modelenv_proto::{Bar, BarList, News, Observation};
+use modelenv_proto::{Bar, BarList, News, Observation, Tick};
 
 use crate::data_loader::{
-    build_interval_data_source, build_news_data_source,
+    build_interval_data_source, build_news_data_source, build_tick_data_source,
     load_bars_from_parquet_with_range_cached_from_local_cache_dir,
-    load_news_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
+    load_news_from_parquet_with_range_cached_from_local_cache_dir,
+    load_ticks_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
 };
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
@@ -18,6 +19,7 @@ use crate::position::NANOS_PER_DAY;
 pub struct Episode {
     pub symbol: String,
     pub bars: HashMap<String, Vec<Bar>>,
+    pub ticks: Vec<Tick>,
     pub news: Vec<News>,
     pub cursor: usize,
     pub episode_start_ts: i64,
@@ -36,6 +38,7 @@ impl Episode {
         Episode {
             symbol,
             bars,
+            ticks: Vec::new(),
             news: Vec::new(),
             cursor: 0,
             episode_start_ts,
@@ -46,6 +49,11 @@ impl Episode {
 
     pub fn with_news(mut self, news: Vec<News>) -> Self {
         self.news = news;
+        self
+    }
+
+    pub fn with_ticks(mut self, ticks: Vec<Tick>) -> Self {
+        self.ticks = ticks;
         self
     }
 
@@ -76,6 +84,7 @@ impl Episode {
         &self,
         positions: &[modelenv_proto::Position],
         realised_pnl_12m: f64,
+        previous_timestamp_ns: Option<i64>,
     ) -> Observation {
         let mut live_bars = HashMap::new();
         let mut recent_bars = HashMap::new();
@@ -104,6 +113,9 @@ impl Episode {
             }
         }
 
+        let recent_ticks = self.recent_ticks(current_timestamp);
+        let live_ticks = self.live_ticks(previous_timestamp_ns, current_timestamp);
+
         Observation {
             timestamp_ns: current_timestamp,
             symbol: self.symbol.clone(),
@@ -113,10 +125,46 @@ impl Episode {
             realised_pnl_12m,
             recent_fills: Vec::new(),
             indicators: Vec::new(),
-            recent_ticks: Vec::new(),
-            live_ticks: Vec::new(),
+            recent_ticks,
+            live_ticks,
             recent_news: self.recent_news(current_timestamp),
             done: self.done,
+        }
+    }
+
+    fn recent_ticks(&self, current_timestamp: i64) -> Vec<Tick> {
+        if self.ticks.is_empty() {
+            return Vec::new();
+        }
+
+        let end_idx = self
+            .ticks
+            .partition_point(|tick| tick.timestamp_ns <= current_timestamp);
+        let start_idx = end_idx.saturating_sub(64);
+        self.ticks
+            .get(start_idx..end_idx)
+            .map(|slice| slice.to_vec())
+            .unwrap_or_default()
+    }
+
+    fn live_ticks(&self, previous_timestamp_ns: Option<i64>, current_timestamp: i64) -> Vec<Tick> {
+        if self.ticks.is_empty() {
+            return Vec::new();
+        }
+
+        let end_idx = self
+            .ticks
+            .partition_point(|tick| tick.timestamp_ns <= current_timestamp);
+        if let Some(previous_timestamp_ns) = previous_timestamp_ns {
+            let start_idx = self
+                .ticks
+                .partition_point(|tick| tick.timestamp_ns <= previous_timestamp_ns);
+            self.ticks
+                .get(start_idx..end_idx)
+                .map(|slice| slice.to_vec())
+                .unwrap_or_default()
+        } else {
+            self.recent_ticks(current_timestamp)
         }
     }
 
@@ -193,6 +241,50 @@ impl Episode {
     }
 }
 
+fn resolve_episode_bounds(
+    reference_bars: &[Bar],
+    symbol: &str,
+    episode_start_ts: i64,
+    episode_end_ts: i64,
+) -> Result<(i64, i64)> {
+    let resolved_start_ts = if episode_start_ts == 0 {
+        reference_bars
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No reference bars loaded for {}", symbol))?
+            .timestamp_ns
+    } else {
+        episode_start_ts
+    };
+    let resolved_end_ts = if episode_end_ts == 0 {
+        reference_bars
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No reference bars loaded for {}", symbol))?
+            .timestamp_ns
+    } else {
+        episode_end_ts
+    };
+
+    Ok((resolved_start_ts, resolved_end_ts))
+}
+
+fn resolve_training_tick_query(
+    price_snapshot_ts: Option<i64>,
+    episode_start_ts: i64,
+    episode_end_ts: i64,
+    resolved_start_ts: i64,
+    resolved_end_ts: i64,
+) -> (Option<i64>, Option<i64>, Option<i64>) {
+    if let Some(price_snapshot_ts) = price_snapshot_ts {
+        (
+            Some(price_snapshot_ts),
+            (episode_start_ts > 0).then_some(episode_start_ts),
+            (episode_end_ts > 0).then_some(episode_end_ts),
+        )
+    } else {
+        (None, Some(resolved_start_ts), Some(resolved_end_ts))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,7 +325,7 @@ mod tests {
         assert_eq!(episode.cursor, 5);
 
         // Timestamp should be at 5 seconds
-        let obs = episode.get_observation(&[], 0.0);
+        let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 5_000_000_000);
     }
 
@@ -346,7 +438,7 @@ mod tests {
             200_000_000_000,
         );
 
-        let obs = episode.get_observation(&[], 0.0);
+        let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 100_000_000_000);
     }
 
@@ -396,7 +488,7 @@ mod tests {
         // Cursor should track the reference M1 interval.
         assert_eq!(episode.cursor, 5);
 
-        let obs = episode.get_observation(&[], 0.0);
+        let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 300_000_000_000);
         assert_eq!(obs.live_bars["M1"].timestamp_ns, 300_000_000_000);
         assert_eq!(obs.live_bars["M5"].timestamp_ns, 300_000_000_000);
@@ -444,10 +536,62 @@ mod tests {
 
         assert!(episode.advance(360_000_000_000));
 
-        let obs = episode.get_observation(&[], 0.0);
+        let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 360_000_000_000);
         assert_eq!(obs.live_bars["M1"].timestamp_ns, 360_000_000_000);
         assert_eq!(obs.live_bars["M5"].timestamp_ns, 300_000_000_000);
+    }
+
+    #[test]
+    fn test_observation_includes_recent_and_live_ticks() {
+        let bars = (0..3)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+        let ticks = vec![
+            Tick {
+                timestamp_ns: 1_000_000_000,
+                price: 100.1,
+                size: 1.0,
+            },
+            Tick {
+                timestamp_ns: 59_000_000_000,
+                price: 100.2,
+                size: 1.5,
+            },
+            Tick {
+                timestamp_ns: 61_000_000_000,
+                price: 100.3,
+                size: 2.0,
+            },
+            Tick {
+                timestamp_ns: 119_000_000_000,
+                price: 100.4,
+                size: 2.5,
+            },
+        ];
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            180_000_000_000,
+        )
+        .with_ticks(ticks);
+
+        assert!(episode.advance(60_000_000_000));
+
+        let obs = episode.get_observation(&[], 0.0, Some(0));
+        assert_eq!(obs.recent_ticks.len(), 2);
+        assert_eq!(obs.live_ticks.len(), 2);
+        assert_eq!(obs.live_ticks[0].timestamp_ns, 1_000_000_000);
+        assert_eq!(obs.live_ticks[1].timestamp_ns, 59_000_000_000);
     }
 
     #[test]
@@ -515,9 +659,62 @@ mod tests {
         assert!(episode.advance(2_000_000_000));
         assert_eq!(episode.cursor, 2);
         assert_eq!(
-            episode.get_observation(&[], 0.0).timestamp_ns,
+            episode.get_observation(&[], 0.0, None).timestamp_ns,
             2_000_000_000
         );
+    }
+
+    #[test]
+    fn test_resolve_episode_bounds_defaults_to_reference_range() {
+        let reference_bars = vec![
+            Bar {
+                timestamp_ns: 10,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                volume: 1000.0,
+            },
+            Bar {
+                timestamp_ns: 20,
+                open: 101.0,
+                high: 102.0,
+                low: 100.0,
+                close: 101.5,
+                volume: 1100.0,
+            },
+        ];
+
+        let (start, end) = resolve_episode_bounds(&reference_bars, "USDJPY", 0, 0).unwrap();
+
+        assert_eq!((start, end), (10, 20));
+    }
+
+    #[test]
+    fn test_resolve_training_tick_query_prefers_snapshot_ts_without_explicit_episode_bounds() {
+        let (snapshot_ts, start, end) = resolve_training_tick_query(Some(123), 0, 0, 10, 20);
+
+        assert_eq!(snapshot_ts, Some(123));
+        assert_eq!(start, None);
+        assert_eq!(end, None);
+    }
+
+    #[test]
+    fn test_resolve_training_tick_query_keeps_snapshot_ts_with_explicit_bounds() {
+        let (snapshot_ts, start, end) = resolve_training_tick_query(Some(123), 1, 2, 10, 20);
+
+        assert_eq!(snapshot_ts, Some(123));
+        assert_eq!(start, Some(1));
+        assert_eq!(end, Some(2));
+    }
+
+    #[test]
+    fn test_resolve_training_tick_query_falls_back_to_resolved_range_without_snapshot_ts() {
+        let (snapshot_ts, start, end) = resolve_training_tick_query(None, 1, 2, 10, 20);
+
+        assert_eq!(snapshot_ts, None);
+        assert_eq!(start, Some(10));
+        assert_eq!(end, Some(20));
     }
 }
 
@@ -558,7 +755,14 @@ pub async fn initialize_episode(
                 );
                 continue;
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to load training interval {} for {} from {}",
+                        interval, symbol, interval_source
+                    )
+                })
+            }
         };
 
         if bars.is_empty() {
@@ -603,22 +807,15 @@ pub async fn initialize_episode(
     let reference_bars = bars_map
         .get(TIME_INTERVALS[0])
         .ok_or_else(|| anyhow::anyhow!("Missing reference bars for {}", TIME_INTERVALS[0]))?;
-    let resolved_start_ts = if episode_start_ts == 0 {
-        reference_bars
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No reference bars loaded for {}", symbol))?
-            .timestamp_ns
-    } else {
-        episode_start_ts
-    };
-    let resolved_end_ts = if episode_end_ts == 0 {
-        reference_bars
-            .last()
-            .ok_or_else(|| anyhow::anyhow!("No reference bars loaded for {}", symbol))?
-            .timestamp_ns
-    } else {
-        episode_end_ts
-    };
+    let (resolved_start_ts, resolved_end_ts) =
+        resolve_episode_bounds(reference_bars, symbol, episode_start_ts, episode_end_ts)?;
+    let (tick_snapshot_ts, tick_start_ts, tick_end_ts) = resolve_training_tick_query(
+        price_snapshot_ts,
+        episode_start_ts,
+        episode_end_ts,
+        resolved_start_ts,
+        resolved_end_ts,
+    );
 
     let news_source = build_news_data_source(s3_prefix, symbol);
     let news = match load_news_from_parquet_with_range_cached_from_local_cache_dir(
@@ -638,7 +835,44 @@ pub async fn initialize_episode(
             );
             Vec::new()
         }
-        Err(err) => return Err(err),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to load training news for {} from {}",
+                    symbol, news_source
+                )
+            })
+        }
+    };
+
+    let tick_source = build_tick_data_source(s3_prefix, symbol);
+    let ticks = match load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+        local_cache_dir,
+        market_data_cache,
+        &tick_source,
+        symbol,
+        tick_snapshot_ts,
+        tick_start_ts,
+        tick_end_ts,
+    )
+    .await
+    {
+        Ok(ticks) => ticks,
+        Err(err) if is_missing_interval_data_error(&err) => {
+            warn!(
+                "Skipping unavailable training ticks for {} at {}: {}",
+                symbol, tick_source, err
+            );
+            Vec::new()
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to load training ticks for {} from {}",
+                    symbol, tick_source
+                )
+            })
+        }
     };
 
     Ok(Episode::new(
@@ -647,6 +881,7 @@ pub async fn initialize_episode(
         resolved_start_ts,
         resolved_end_ts,
     )
+    .with_ticks(ticks)
     .with_news(news))
 }
 
@@ -658,9 +893,14 @@ pub async fn preload_training_market_data(
     market_data_cache: &MarketDataCache,
 ) -> Result<()> {
     let mut has_reference_interval = false;
+    let mut reference_bars = None;
 
     for interval in TIME_INTERVALS {
         let interval_source = build_interval_data_source(s3_prefix, symbol, interval);
+        info!(
+            "Preloading training interval {} for {} from {}",
+            interval, symbol, interval_source
+        );
         match load_bars_from_parquet_with_range_cached_from_local_cache_dir(
             local_cache_dir,
             market_data_cache,
@@ -673,9 +913,14 @@ pub async fn preload_training_market_data(
         )
         .await
         {
-            Ok(_) => {
+            Ok(bars) => {
+                info!(
+                    "Finished preloading training interval {} for {}",
+                    interval, symbol
+                );
                 if *interval == TIME_INTERVALS[0] {
                     has_reference_interval = true;
+                    reference_bars = Some(bars);
                 }
             }
             Err(err) if is_missing_interval_data_error(&err) => {
@@ -684,7 +929,14 @@ pub async fn preload_training_market_data(
                     interval, symbol, interval_source, err
                 );
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to preload training interval {} for {} from {}",
+                        interval, symbol, interval_source
+                    )
+                })
+            }
         }
     }
 
@@ -694,8 +946,22 @@ pub async fn preload_training_market_data(
             TIME_INTERVALS[0]
         ));
     }
+    let reference_bars = reference_bars.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Missing reference bars for {} while preloading training data",
+            TIME_INTERVALS[0]
+        )
+    })?;
+    let (resolved_start_ts, resolved_end_ts) =
+        resolve_episode_bounds(&reference_bars, symbol, 0, 0)?;
+    let (tick_snapshot_ts, tick_start_ts, tick_end_ts) =
+        resolve_training_tick_query(price_snapshot_ts, 0, 0, resolved_start_ts, resolved_end_ts);
 
     let news_source = build_news_data_source(s3_prefix, symbol);
+    info!(
+        "Preloading training news for {} from {}",
+        symbol, news_source
+    );
     match load_news_from_parquet_with_range_cached_from_local_cache_dir(
         local_cache_dir,
         market_data_cache,
@@ -705,14 +971,58 @@ pub async fn preload_training_market_data(
     )
     .await
     {
-        Ok(_) => {}
+        Ok(_) => {
+            info!("Finished preloading training news for {}", symbol);
+        }
         Err(err) if is_missing_interval_data_error(&err) => {
             warn!(
                 "Skipping unavailable training news for {} at {} during startup preload: {}",
                 symbol, news_source, err
             );
         }
-        Err(err) => return Err(err),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to preload training news for {} from {}",
+                    symbol, news_source
+                )
+            })
+        }
+    }
+
+    let tick_source = build_tick_data_source(s3_prefix, symbol);
+    info!(
+        "Preloading training ticks for {} from {}",
+        symbol, tick_source
+    );
+    match load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+        local_cache_dir,
+        market_data_cache,
+        &tick_source,
+        symbol,
+        tick_snapshot_ts,
+        tick_start_ts,
+        tick_end_ts,
+    )
+    .await
+    {
+        Ok(_) => {
+            info!("Finished preloading training ticks for {}", symbol);
+        }
+        Err(err) if is_missing_interval_data_error(&err) => {
+            warn!(
+                "Skipping unavailable training ticks for {} at {} during startup preload: {}",
+                symbol, tick_source, err
+            );
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to preload training ticks for {} from {}",
+                    symbol, tick_source
+                )
+            })
+        }
     }
 
     Ok(())

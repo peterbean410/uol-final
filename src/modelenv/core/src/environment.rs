@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use log::info;
 use modelenv_proto::{
-    Action, ActionType, Bar, Observation, ObserveRequest, ResetRequest, StepResponse,
+    Action, ActionType, Bar, Observation, ObserveRequest, ResetRequest, StepResponse, Tick,
 };
 
 use crate::broker_gateway::BrokerGateway;
@@ -50,6 +50,7 @@ pub struct Environment {
     reward_running_sum: f64,
     reward_running_sum_sq: f64,
     reward_count: u64,
+    last_observation_timestamp_ns: Option<i64>,
 }
 
 /// Represents a trade execution record
@@ -90,6 +91,7 @@ impl Environment {
             reward_running_sum: 0.0,
             reward_running_sum_sq: 0.0,
             reward_count: 0,
+            last_observation_timestamp_ns: None,
         }
     }
 
@@ -197,6 +199,7 @@ impl Environment {
         self.recent_fills.clear();
         self.last_action = None;
         self.last_swap_accrual_timestamp = 0; // Will be set when we get the first timestamp
+        self.last_observation_timestamp_ns = None;
 
         match self.mode {
             Mode::Training => {
@@ -299,6 +302,88 @@ impl Environment {
         }
     }
 
+    fn live_observation_timestamp(current_bar: &Bar, recent_ticks: &[Tick]) -> i64 {
+        recent_ticks
+            .last()
+            .map(|tick| tick.timestamp_ns)
+            .unwrap_or(current_bar.timestamp_ns)
+    }
+
+    fn live_ticks_since(recent_ticks: &[Tick], previous_timestamp_ns: Option<i64>) -> Vec<Tick> {
+        if let Some(previous_timestamp_ns) = previous_timestamp_ns {
+            recent_ticks
+                .iter()
+                .filter(|tick| tick.timestamp_ns > previous_timestamp_ns)
+                .cloned()
+                .collect()
+        } else {
+            recent_ticks.to_vec()
+        }
+    }
+
+    async fn build_live_observation(&mut self, symbol: String) -> Result<Observation> {
+        let (current_bar, recent_ticks) = if let Some(broker) = &self.broker_gateway {
+            (
+                broker.current_bar(&symbol).await?,
+                broker.current_ticks(&symbol).await?,
+            )
+        } else {
+            (
+                Bar {
+                    timestamp_ns: now_ns(),
+                    open: 0.0,
+                    high: 0.0,
+                    low: 0.0,
+                    close: 0.0,
+                    volume: 0.0,
+                },
+                Vec::new(),
+            )
+        };
+
+        let current_timestamp = Self::live_observation_timestamp(&current_bar, &recent_ticks);
+        let live_ticks =
+            Self::live_ticks_since(recent_ticks.as_slice(), self.last_observation_timestamp_ns);
+
+        let mut live_bars = HashMap::new();
+        live_bars.insert("M1".to_string(), current_bar);
+
+        let recent_fills = self
+            .recent_fills
+            .iter()
+            .map(|f| modelenv_proto::Fill {
+                order_id: f.order_id.clone(),
+                timestamp_ns: f.timestamp_ns,
+                price: f.price,
+                size: f.size,
+                side: f.side as i32,
+                partial: f.partial,
+            })
+            .collect();
+
+        let proto_positions: Vec<modelenv_proto::Position> =
+            self.positions.iter().map(|p| p.to_proto()).collect();
+
+        let observation = Observation {
+            timestamp_ns: current_timestamp,
+            symbol,
+            live_bars,
+            recent_bars: HashMap::new(),
+            positions: proto_positions,
+            realised_pnl_12m: self
+                .closed_position_window
+                .total_realised_pnl_12m(current_timestamp),
+            recent_fills,
+            indicators: vec![],
+            recent_ticks,
+            live_ticks,
+            recent_news: vec![],
+            done: false,
+        };
+        self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
+        Ok(observation)
+    }
+
     /// Take a step in the environment
     pub async fn step(&mut self, action: Action) -> Result<StepResponse> {
         match self.mode {
@@ -334,7 +419,12 @@ impl Environment {
                     .episode
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?
-                    .get_observation(proto_positions.as_slice(), realised_pnl_12m);
+                    .get_observation(
+                        proto_positions.as_slice(),
+                        realised_pnl_12m,
+                        Some(prev_timestamp),
+                    );
+                self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
 
                 // Calculate reward based on the previous step's action state.
                 let reward = self.calculate_reward(&action)?;
@@ -403,14 +493,6 @@ impl Environment {
                     position.unrealised_pnl = position.calculate_unrealised_pnl(current_mid_price);
                 }
 
-                // Get current timestamp for observation
-                let current_timestamp = now_ns();
-
-                // Calculate realised P/L before getting observation
-                let realised_pnl_12m = self
-                    .closed_position_window
-                    .total_realised_pnl_12m(current_timestamp);
-
                 // Reconcile with broker positions
                 // Get broker positions for reconciliation
                 let broker = self.get_broker_gateway()?;
@@ -420,6 +502,7 @@ impl Environment {
                 // Note: The broker gateway doesn't currently provide realised P/L
                 // For now, we'll use 0.0 as a placeholder and log if reconciliation shows discrepancy
                 let broker_realised_pnl = 0.0; // TODO: Add method to get broker realised P/L
+                let realised_pnl_12m = self.realised_pnl_12m();
 
                 // Perform reconciliation - this logs warnings for discrepancies
                 reconcile_positions(
@@ -433,40 +516,7 @@ impl Environment {
                     broker_realised_pnl,
                 );
 
-                // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> =
-                    self.positions.iter().map(|p| p.to_proto()).collect();
-
-                // Get observation (without episode - use current state)
-                // Create live bars map with current bar
-                let mut live_bars = HashMap::new();
-                live_bars.insert("M1".to_string(), current_bar.clone());
-
-                let observation = Observation {
-                    timestamp_ns: current_timestamp,
-                    symbol: self.symbol.clone(),
-                    live_bars,
-                    recent_bars: HashMap::new(), // TODO: Populate with historical bars
-                    positions: proto_positions,
-                    realised_pnl_12m,
-                    recent_fills: self
-                        .recent_fills
-                        .iter()
-                        .map(|f| modelenv_proto::Fill {
-                            order_id: f.order_id.clone(),
-                            timestamp_ns: f.timestamp_ns,
-                            price: f.price,
-                            size: f.size,
-                            side: f.side as i32,
-                            partial: f.partial,
-                        })
-                        .collect(),
-                    indicators: vec![],   // TODO: Implement technical indicators
-                    recent_ticks: vec![], // TODO: Populate with recent ticks
-                    live_ticks: vec![],   // TODO: Populate with live ticks
-                    recent_news: vec![],  // TODO: Populate with recent news
-                    done: false,
-                };
+                let observation = self.build_live_observation(self.symbol.clone()).await?;
 
                 // Calculate reward
                 let reward = self.calculate_reward(&action)?;
@@ -488,9 +538,7 @@ impl Environment {
     }
 
     /// Get current observation without advancing
-    pub async fn observe(&self, req: ObserveRequest) -> Result<Observation> {
-        let current_timestamp = now_ns();
-
+    pub async fn observe(&mut self, req: ObserveRequest) -> Result<Observation> {
         match self.mode {
             Mode::Training => {
                 let episode = self.episode.as_ref().ok_or_else(|| {
@@ -501,62 +549,15 @@ impl Environment {
                 let proto_positions: Vec<modelenv_proto::Position> =
                     self.positions.iter().map(|p| p.to_proto()).collect();
 
-                Ok(episode.get_observation(proto_positions.as_slice(), self.realised_pnl_12m()))
+                let observation = episode.get_observation(
+                    proto_positions.as_slice(),
+                    self.realised_pnl_12m(),
+                    self.last_observation_timestamp_ns,
+                );
+                self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
+                Ok(observation)
             }
-            Mode::Live => {
-                // Production mode - get current state from broker
-                // Get current bar from broker
-                let current_bar = if let Some(broker) = &self.broker_gateway {
-                    broker.current_bar(&req.symbol).await?
-                } else {
-                    // Fallback if broker gateway not available
-                    Bar {
-                        timestamp_ns: current_timestamp,
-                        open: 0.0,
-                        high: 0.0,
-                        low: 0.0,
-                        close: 0.0,
-                        volume: 0.0,
-                    }
-                };
-
-                // Create live bars map with current bar
-                let mut live_bars = HashMap::new();
-                live_bars.insert("M1".to_string(), current_bar.clone());
-
-                // Convert positions to proto format
-                let proto_positions: Vec<modelenv_proto::Position> =
-                    self.positions.iter().map(|p| p.to_proto()).collect();
-
-                // Get recent fills
-                let recent_fills = self
-                    .recent_fills
-                    .iter()
-                    .map(|f| modelenv_proto::Fill {
-                        order_id: f.order_id.clone(),
-                        timestamp_ns: f.timestamp_ns,
-                        price: f.price,
-                        size: f.size,
-                        side: f.side as i32,
-                        partial: f.partial,
-                    })
-                    .collect();
-
-                Ok(Observation {
-                    timestamp_ns: current_timestamp,
-                    symbol: req.symbol,
-                    live_bars,
-                    recent_bars: HashMap::new(), // TODO: Populate with historical bars
-                    positions: proto_positions,
-                    realised_pnl_12m: self.realised_pnl_12m(),
-                    recent_fills,
-                    indicators: vec![],   // TODO: Implement technical indicators
-                    recent_ticks: vec![], // TODO: Populate with recent ticks
-                    live_ticks: vec![],   // TODO: Populate with live ticks
-                    recent_news: vec![],  // TODO: Populate with recent news
-                    done: false,
-                })
-            }
+            Mode::Live => self.build_live_observation(req.symbol).await,
         }
     }
 
@@ -993,6 +994,21 @@ mod tests {
             })
         }
 
+        async fn current_ticks(&self, _symbol: &str) -> Result<Vec<Tick>> {
+            Ok(vec![
+                Tick {
+                    timestamp_ns: 1,
+                    price: 155.20,
+                    size: 1.0,
+                },
+                Tick {
+                    timestamp_ns: 2,
+                    price: 155.21,
+                    size: 2.0,
+                },
+            ])
+        }
+
         async fn submit(&self, _action: &Action) -> Result<modelenv_proto::Fill> {
             self.submit_calls.fetch_add(1, Ordering::SeqCst);
             Ok(modelenv_proto::Fill {
@@ -1160,6 +1176,7 @@ mod tests {
         assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
         assert!(response.observation.is_some());
         assert!(environment.recent_fills.is_empty());
+        assert_eq!(response.observation.as_ref().unwrap().live_ticks.len(), 2);
     }
 
     #[tokio::test]
@@ -1260,7 +1277,19 @@ mod tests {
                 .collect(),
             0,
             300_000_000_000,
-        );
+        )
+        .with_ticks(vec![
+            Tick {
+                timestamp_ns: 61_000_000_000,
+                price: 101.1,
+                size: 1.0,
+            },
+            Tick {
+                timestamp_ns: 119_000_000_000,
+                price: 102.2,
+                size: 2.0,
+            },
+        ]);
 
         let mut environment = Environment::new(
             Mode::Training,
@@ -1295,6 +1324,8 @@ mod tests {
         assert_eq!(observation.live_bars["M5"].timestamp_ns, 0);
         assert_eq!(observation.positions.len(), 1);
         assert_eq!(observation.positions[0].open_timestamp_ns, 120_000_000_000);
+        assert_eq!(observation.live_ticks.len(), 2);
+        assert_eq!(observation.recent_ticks.len(), 2);
     }
 
     #[tokio::test]
