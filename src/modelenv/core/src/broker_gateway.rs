@@ -41,6 +41,18 @@ pub trait BrokerGateway {
     /// Implementations should return the most recent ticks in ascending timestamp order.
     async fn current_ticks(&self, symbol: &str) -> Result<Vec<Tick>>;
 
+    /// Get up to `count` recent bars for the symbol at the requested interval.
+    ///
+    /// Implementations should return bars in ascending timestamp order (oldest -> newest).
+    /// Used in Production Mode to mirror the multi-interval `recent_bars` view that
+    /// Training Mode builds from cached S3 parquet bars.
+    async fn recent_bars(
+        &self,
+        symbol: &str,
+        interval: &str,
+        count: usize,
+    ) -> Result<Vec<Bar>>;
+
     /// Submit an action to the broker and return the execution fill
     ///
     /// This method submits a trading action to the broker and returns the

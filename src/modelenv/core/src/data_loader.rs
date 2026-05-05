@@ -25,6 +25,7 @@ const EOH_SNAPSHOT_BRANCH: &str = "marketdata/eoh-snapshot";
 const EOD_SNAPSHOT_BRANCH: &str = "marketdata/eod-snapshot";
 const EOW_SNAPSHOT_BRANCH: &str = "marketdata/eow-snapshot";
 const EOM_SNAPSHOT_BRANCH: &str = "marketdata/eom-snapshot";
+const EOD_TICK_SNAPSHOT_BRANCH: &str = "marketdata/eod-tick-snapshot";
 const NEWS_DATA_BRANCH: &str = "marketdata/interval-news";
 const SOURCE_SELECTION_LOOKBACK_NS: i64 = 31 * 24 * 60 * 60 * 1_000_000_000;
 const CACHE_DOWNLOAD_LOCK_STALE_SECS: u64 = 60 * 60;
@@ -199,12 +200,21 @@ pub fn normalise_tick_data_prefix(prefix: &str) -> String {
         return trimmed.to_string();
     }
 
-    if trimmed.contains("/symbol=") && trimmed.contains("/interval=ticks") {
+    if trimmed.ends_with(EOD_TICK_SNAPSHOT_BRANCH)
+        || trimmed.contains("/marketdata/eod-tick-snapshot/")
+    {
+        return trimmed.to_string();
+    }
+
+    if trimmed.contains("/symbol=")
+        && (trimmed.contains("/interval=ticks")
+            || trimmed.contains("/marketdata/eod-tick-snapshot/"))
+    {
         return trimmed.to_string();
     }
 
     if trimmed.ends_with(TRAINING_DATA_BRANCH) || trimmed.contains("/marketdata/interval-price/") {
-        return trimmed.to_string();
+        return trimmed.replacen(TRAINING_DATA_BRANCH, EOD_TICK_SNAPSHOT_BRANCH, 1);
     }
 
     if let Some(branch) = known_price_data_branches()
@@ -214,27 +224,40 @@ pub fn normalise_tick_data_prefix(prefix: &str) -> String {
         return format!(
             "{}{}",
             trimmed.trim_end_matches(branch).trim_end_matches('/'),
-            format!("/{TRAINING_DATA_BRANCH}")
+            format!("/{EOD_TICK_SNAPSHOT_BRANCH}")
         );
     }
 
     for branch in known_price_data_branches() {
         let from = format!("/{branch}/");
         if trimmed.contains(&from) {
-            return trimmed.replacen(&from, &format!("/{TRAINING_DATA_BRANCH}/"), 1);
+            return trimmed.replacen(&from, &format!("/{EOD_TICK_SNAPSHOT_BRANCH}/"), 1);
         }
     }
 
-    format!("{trimmed}/{TRAINING_DATA_BRANCH}")
+    format!("{trimmed}/{EOD_TICK_SNAPSHOT_BRANCH}")
 }
 
 pub fn build_tick_data_source(prefix: &str, symbol: &str) -> String {
     let base = normalise_tick_data_prefix(prefix);
-    if base.ends_with(".parquet") || (base.contains("/symbol=") && base.contains("/interval=ticks"))
-    {
+    if base.ends_with(".parquet") || base.contains("/symbol=") {
         base
     } else {
-        format!("{base}/symbol={symbol}/interval=ticks")
+        format!("{base}/symbol={symbol}")
+    }
+}
+
+fn tick_source_schedule(source_uri: &str) -> IntervalSchedule {
+    if source_uri.contains(EOD_TICK_SNAPSHOT_BRANCH) {
+        IntervalSchedule {
+            partition_tier: PartitionTier::Day,
+            cadence: ExecutionCadence::Daily,
+        }
+    } else {
+        IntervalSchedule {
+            partition_tier: PartitionTier::Hour,
+            cadence: ExecutionCadence::Hourly,
+        }
     }
 }
 
@@ -370,10 +393,7 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
     start_timestamp_ns: Option<i64>,
     end_timestamp_ns: Option<i64>,
 ) -> Result<Vec<Tick>> {
-    let schedule = IntervalSchedule {
-        partition_tier: PartitionTier::Hour,
-        cadence: ExecutionCadence::Hourly,
-    };
+    let schedule = tick_source_schedule(source_uri);
     let sources = if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
         if source_uri.ends_with(".parquet") {
             vec![source_uri.to_string()]
@@ -809,8 +829,8 @@ async fn collect_ticks_from_sources(
     ticks.sort_by_key(|item| item.timestamp_ns);
     ticks.dedup_by(|left, right| {
         left.timestamp_ns == right.timestamp_ns
-            && left.price.to_bits() == right.price.to_bits()
-            && left.size.to_bits() == right.size.to_bits()
+            && left.bid.to_bits() == right.bid.to_bits()
+            && left.ask.to_bits() == right.ask.to_bits()
     });
     Ok(ticks)
 }
@@ -2153,6 +2173,9 @@ fn parse_ticks_from_bytes(bytes: Bytes, symbol: &str, end_timestamp_ns: i64) -> 
         .map_err(|e| anyhow!("Failed to build parquet reader: {}", e))?;
 
     let mut ticks = Vec::new();
+    let mut last_bid: Option<f64> = None;
+    let mut last_ask: Option<f64> = None;
+    let mut current_ts: Option<i64> = None;
 
     while let Some(batch) = parquet_reader.next() {
         let batch = batch.map_err(|e| anyhow!("Failed to read batch: {}", e))?;
@@ -2161,37 +2184,108 @@ fn parse_ticks_from_bytes(bytes: Bytes, symbol: &str, end_timestamp_ns: i64) -> 
                 continue;
             }
 
-            let tick = parse_tick_from_batch(&batch, i)?;
-            if tick.timestamp_ns > end_timestamp_ns {
+            let update = parse_tick_quote_update(&batch, i)?;
+            if update.timestamp_ns > end_timestamp_ns {
+                emit_pending_tick(&mut ticks, current_ts, last_bid, last_ask);
                 return Ok(ticks);
             }
-            ticks.push(tick);
+
+            match current_ts {
+                Some(prev_ts) if prev_ts != update.timestamp_ns => {
+                    emit_pending_tick(&mut ticks, Some(prev_ts), last_bid, last_ask);
+                    current_ts = Some(update.timestamp_ns);
+                }
+                None => current_ts = Some(update.timestamp_ns),
+                _ => {}
+            }
+
+            if let Some(bid) = update.bid {
+                last_bid = Some(bid);
+            }
+            if let Some(ask) = update.ask {
+                last_ask = Some(ask);
+            }
         }
     }
 
+    emit_pending_tick(&mut ticks, current_ts, last_bid, last_ask);
     Ok(ticks)
 }
 
-fn parse_tick_from_batch(batch: &RecordBatch, index: usize) -> Result<Tick> {
+fn emit_pending_tick(
+    ticks: &mut Vec<Tick>,
+    timestamp_ns: Option<i64>,
+    bid: Option<f64>,
+    ask: Option<f64>,
+) {
+    if let (Some(ts), Some(bid), Some(ask)) = (timestamp_ns, bid, ask) {
+        if ticks.last().map(|t| t.timestamp_ns) != Some(ts) {
+            ticks.push(Tick {
+                timestamp_ns: ts,
+                bid,
+                ask,
+            });
+        }
+    }
+}
+
+struct QuoteUpdate {
+    timestamp_ns: i64,
+    bid: Option<f64>,
+    ask: Option<f64>,
+}
+
+fn parse_tick_quote_update(batch: &RecordBatch, index: usize) -> Result<QuoteUpdate> {
     let timestamp = column_by_name_case_insensitive(batch, "timestamp_ns")
         .or_else(|| column_by_name_case_insensitive(batch, "timestamp"))
         .or_else(|| column_by_name_case_insensitive(batch, "tick_date_raw"))
         .or_else(|| column_by_name_case_insensitive(batch, "tick_date"))
         .ok_or_else(|| anyhow!("Missing tick timestamp column"))?;
+    let timestamp_ns = parse_timestamp_value(timestamp, index)?;
 
-    let price = parse_tick_price(batch, index)?;
-    let size = column_by_name_case_insensitive(batch, "size")
-        .or_else(|| column_by_name_case_insensitive(batch, "volume"))
-        .or_else(|| column_by_name_case_insensitive(batch, "qty"))
-        .or_else(|| column_by_name_case_insensitive(batch, "quantity"))
-        .map(|value| parse_numeric_value(value, index))
-        .transpose()?
-        .unwrap_or(0.0);
+    let bid_col = column_by_name_case_insensitive(batch, "bid");
+    let ask_col = column_by_name_case_insensitive(batch, "ask")
+        .or_else(|| column_by_name_case_insensitive(batch, "offer"));
 
-    Ok(Tick {
-        timestamp_ns: parse_timestamp_value(timestamp, index)?,
-        price,
-        size,
+    if let (Some(bid), Some(ask)) = (bid_col, ask_col) {
+        return Ok(QuoteUpdate {
+            timestamp_ns,
+            bid: Some(parse_numeric_value(bid, index)?),
+            ask: Some(parse_numeric_value(ask, index)?),
+        });
+    }
+
+    let price_col = bid_col
+        .or(ask_col)
+        .or_else(|| column_by_name_case_insensitive(batch, "price"))
+        .ok_or_else(|| {
+            anyhow!("Missing tick price column (need bid/ask, bid, ask, offer, or price)")
+        })?;
+    let price = parse_numeric_value(price_col, index)?;
+
+    if let Some(type_col) = column_by_name_case_insensitive(batch, "type") {
+        let raw = string_value(type_col, index)
+            .ok_or_else(|| anyhow!("Invalid tick Type format"))?;
+        let side = raw.trim().to_ascii_lowercase();
+        return match side.as_str() {
+            "bid" => Ok(QuoteUpdate {
+                timestamp_ns,
+                bid: Some(price),
+                ask: None,
+            }),
+            "ask" | "offer" => Ok(QuoteUpdate {
+                timestamp_ns,
+                bid: None,
+                ask: Some(price),
+            }),
+            other => Err(anyhow!("Unknown tick Type value: {other}")),
+        };
+    }
+
+    Ok(QuoteUpdate {
+        timestamp_ns,
+        bid: Some(price),
+        ask: Some(price),
     })
 }
 
@@ -2233,24 +2327,6 @@ fn tick_symbol_matches(batch: &RecordBatch, index: usize, expected_symbol: &str)
     let actual =
         string_value(symbol_value, index).ok_or_else(|| anyhow!("Invalid tick symbol format"))?;
     Ok(normalise_market_symbol(&actual) == normalise_market_symbol(expected_symbol))
-}
-
-fn parse_tick_price(batch: &RecordBatch, index: usize) -> Result<f64> {
-    if let Some(price) = column_by_name_case_insensitive(batch, "price") {
-        return parse_numeric_value(price, index);
-    }
-
-    let bid = column_by_name_case_insensitive(batch, "bid");
-    let offer = column_by_name_case_insensitive(batch, "offer")
-        .or_else(|| column_by_name_case_insensitive(batch, "ask"));
-
-    match (bid, offer) {
-        (Some(bid), Some(offer)) => {
-            Ok((parse_numeric_value(bid, index)? + parse_numeric_value(offer, index)?) / 2.0)
-        }
-        (Some(price), None) | (None, Some(price)) => parse_numeric_value(price, index),
-        (None, None) => Err(anyhow!("Missing tick price column")),
-    }
 }
 
 fn parse_timestamp_value(value: &dyn Array, index: usize) -> Result<i64> {
@@ -2467,6 +2543,56 @@ mod tests {
         Ok(())
     }
 
+    fn write_typed_tick_parquet(
+        path: &PathBuf,
+        timestamps_micros: &[i64],
+        symbols: &[&str],
+        types: &[&str],
+        prices: &[f64],
+    ) -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "Timestamp",
+                arrow::datatypes::DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Microsecond,
+                    None,
+                ),
+                false,
+            ),
+            arrow::datatypes::Field::new("Symbol", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("Type", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("Price", arrow::datatypes::DataType::Float64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::TimestampMicrosecondArray::from(
+                    timestamps_micros.to_vec(),
+                )),
+                Arc::new(StringArray::from(
+                    symbols
+                        .iter()
+                        .map(|value| (*value).to_string())
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    types
+                        .iter()
+                        .map(|value| (*value).to_string())
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(prices.to_vec())),
+            ],
+        )?;
+
+        let file = std::fs::File::create(path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(())
+    }
+
     fn path_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -2546,6 +2672,10 @@ mod tests {
         assert_eq!(
             build_news_data_source("s3://bucket", "USDJPY"),
             "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1"
+        );
+        assert_eq!(
+            build_tick_data_source("s3://bucket", "USDJPY"),
+            "s3://bucket/marketdata/eod-tick-snapshot/symbol=USDJPY"
         );
     }
 
@@ -3279,31 +3409,107 @@ exit 255
         )
         .unwrap();
 
-        let tick = parse_tick_from_batch(&batch, 0).unwrap();
-        assert_eq!(tick.timestamp_ns, 1_325_480_400_000_000_000);
-        assert_eq!(tick.price, 76.947);
-        assert_eq!(tick.size, 3.0);
+        let update = parse_tick_quote_update(&batch, 0).unwrap();
+        assert_eq!(update.timestamp_ns, 1_325_480_400_000_000_000);
+        assert_eq!(update.bid, Some(76.947));
+        assert_eq!(update.ask, Some(76.947));
+    }
+
+    #[test]
+    fn parses_tick_quote_update_from_type_column() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "Timestamp",
+                arrow::datatypes::DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Microsecond,
+                    None,
+                ),
+                false,
+            ),
+            arrow::datatypes::Field::new("Symbol", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("Type", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("Price", arrow::datatypes::DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow::array::TimestampMicrosecondArray::from(vec![
+                    1_325_480_400_000_000,
+                    1_325_480_400_000_000,
+                ])),
+                Arc::new(StringArray::from(vec!["USDJPY", "USDJPY"])),
+                Arc::new(StringArray::from(vec!["Ask", "Bid"])),
+                Arc::new(Float64Array::from(vec![158.779, 158.766])),
+            ],
+        )
+        .unwrap();
+
+        let ask_update = parse_tick_quote_update(&batch, 0).unwrap();
+        assert_eq!(ask_update.bid, None);
+        assert_eq!(ask_update.ask, Some(158.779));
+
+        let bid_update = parse_tick_quote_update(&batch, 1).unwrap();
+        assert_eq!(bid_update.bid, Some(158.766));
+        assert_eq!(bid_update.ask, None);
     }
 
     #[tokio::test]
-    async fn loads_ticks_from_local_hourly_partitions() {
+    async fn merges_bid_and_ask_rows_into_paired_ticks() {
         let dir = tempdir().unwrap();
-        let base = dir.path().join(
-            "marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02",
-        );
-        std::fs::create_dir_all(base.join("hour=05")).unwrap();
-        std::fs::create_dir_all(base.join("hour=06")).unwrap();
+        let base = dir
+            .path()
+            .join("marketdata/eod-tick-snapshot/symbol=USDJPY/year=2012/month=01/day=02");
+        std::fs::create_dir_all(&base).unwrap();
 
-        write_tick_parquet(
-            &base.join("hour=05/20120102T050000Z.parquet"),
-            &[1_325_480_400_000_000, 1_325_480_401_000_000],
-            &["USDJPY", "EURUSD"],
-            &[76.947, 1.301],
-            &[2, 1],
+        write_typed_tick_parquet(
+            &base.join("20120102T000000Z.parquet"),
+            &[
+                1_325_484_000_000_000,
+                1_325_484_000_000_000,
+                1_325_484_001_000_000,
+                1_325_484_002_000_000,
+            ],
+            &["USDJPY"; 4],
+            &["Ask", "Bid", "Bid", "Ask"],
+            &[76.973, 76.971, 76.972, 76.974],
         )
         .unwrap();
+
+        let cache = MarketDataCache::new();
+        let ticks = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+            &dir.path().to_string_lossy(),
+            &cache,
+            &build_tick_data_source(&dir.path().to_string_lossy(), "USDJPY"),
+            "USDJPY",
+            None,
+            Some(1_325_480_400_000_000_000),
+            Some(1_325_484_002_000_000_000),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(ticks.len(), 3);
+        assert_eq!(ticks[0].timestamp_ns, 1_325_484_000_000_000_000);
+        assert_eq!(ticks[0].bid, 76.971);
+        assert_eq!(ticks[0].ask, 76.973);
+        assert_eq!(ticks[1].timestamp_ns, 1_325_484_001_000_000_000);
+        assert_eq!(ticks[1].bid, 76.972);
+        assert_eq!(ticks[1].ask, 76.973);
+        assert_eq!(ticks[2].timestamp_ns, 1_325_484_002_000_000_000);
+        assert_eq!(ticks[2].bid, 76.972);
+        assert_eq!(ticks[2].ask, 76.974);
+    }
+
+    #[tokio::test]
+    async fn loads_ticks_from_local_eod_snapshots() {
+        let dir = tempdir().unwrap();
+        let base = dir
+            .path()
+            .join("marketdata/eod-tick-snapshot/symbol=USDJPY/year=2012/month=01/day=02");
+        std::fs::create_dir_all(&base).unwrap();
+
         write_tick_parquet(
-            &base.join("hour=06/20120102T060000Z.parquet"),
+            &base.join("20120102T000000Z.parquet"),
             &[1_325_484_000_000_000, 1_325_484_001_000_000],
             &["USDJPY", "USDJPY"],
             &[76.971, 76.972],
@@ -3324,22 +3530,23 @@ exit 255
         .await
         .unwrap();
 
-        assert_eq!(ticks.len(), 3);
-        assert_eq!(ticks[0].price, 76.947);
-        assert_eq!(ticks[1].price, 76.971);
-        assert_eq!(ticks[2].size, 5.0);
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks[0].bid, 76.971);
+        assert_eq!(ticks[0].ask, 76.971);
+        assert_eq!(ticks[1].bid, 76.972);
+        assert_eq!(ticks[1].ask, 76.972);
     }
 
     #[tokio::test]
     async fn tick_range_error_lists_expected_partitions_and_candidates() {
         let dir = tempdir().unwrap();
         let base = dir.path().join(
-            "prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2025/month=01/day=13",
+            "prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY/year=2025/month=01/day=13",
         );
-        std::fs::create_dir_all(base.join("hour=00")).unwrap();
+        std::fs::create_dir_all(&base).unwrap();
 
         write_tick_parquet(
-            &base.join("hour=00/20250113T000000Z.parquet"),
+            &base.join("20250113T000000Z.parquet"),
             &[1_736_726_400_000_000],
             &["USDJPY"],
             &[155.0],
@@ -3349,7 +3556,7 @@ exit 255
 
         let cache = MarketDataCache::new();
         let source_uri =
-            "s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks";
+            "s3://prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY";
         let err = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
             &dir.path().to_string_lossy(),
             &cache,
@@ -3366,35 +3573,26 @@ exit 255
         assert!(message.contains("Requested range: 1596844800000000000"));
         assert!(message.contains("2020-08-08T00:00:00+00:00"));
         assert!(message.contains(
-            "Expected parquet partitions: s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2020/month=08/day=08/hour=00/20200808T000000Z.parquet .. s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2020/month=08/day=08/hour=01/20200808T010000Z.parquet"
+            "Expected parquet partitions: s3://prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY/year=2020/month=08/day=08/20200808T000000Z.parquet .. s3://prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY/year=2020/month=08/day=09/20200809T000000Z.parquet"
         ));
         assert!(message.contains("Candidate sources:"));
         assert!(message.contains("20250113T000000Z.parquet"));
     }
 
     #[tokio::test]
-    async fn timestamped_tick_lookup_uses_exact_hour_partition() {
+    async fn timestamped_tick_lookup_uses_exact_daily_snapshot() {
         let dir = tempdir().unwrap();
-        let base = dir.path().join(
-            "marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02",
-        );
-        std::fs::create_dir_all(base.join("hour=05")).unwrap();
-        std::fs::create_dir_all(base.join("hour=06")).unwrap();
+        let base = dir
+            .path()
+            .join("marketdata/eod-tick-snapshot/symbol=USDJPY/year=2012/month=01/day=02");
+        std::fs::create_dir_all(&base).unwrap();
 
         write_tick_parquet(
-            &base.join("hour=05/20120102T050000Z.parquet"),
+            &base.join("20120102T000000Z.parquet"),
             &[1_325_480_400_000_000, 1_325_480_401_000_000],
             &["USDJPY", "USDJPY"],
             &[76.947, 76.948],
             &[2, 3],
-        )
-        .unwrap();
-        write_tick_parquet(
-            &base.join("hour=06/20120102T060000Z.parquet"),
-            &[1_325_484_000_000_000, 1_325_484_001_000_000],
-            &["USDJPY", "USDJPY"],
-            &[76.971, 76.972],
-            &[4, 5],
         )
         .unwrap();
 
@@ -3412,7 +3610,9 @@ exit 255
         .unwrap();
 
         assert_eq!(ticks.len(), 2);
-        assert_eq!(ticks[0].price, 76.971);
-        assert_eq!(ticks[1].price, 76.972);
+        assert_eq!(ticks[0].bid, 76.947);
+        assert_eq!(ticks[0].ask, 76.947);
+        assert_eq!(ticks[1].bid, 76.948);
+        assert_eq!(ticks[1].ask, 76.948);
     }
 }

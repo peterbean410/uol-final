@@ -90,8 +90,8 @@ message News {
 
 message Tick {
   int64 timestamp_ns = 1;
-  double price = 2;
-  double size = 3;
+  double bid = 2;
+  double ask = 3;
 }
 
 message BarList {
@@ -102,13 +102,24 @@ message Observation {
   int64 timestamp_ns = 1;
   string symbol = 2;
   map<string, Bar> live_bars = 3;
+  // recent_bars[interval] holds up to 64 bars sorted latest -> earliest.
   map<string, BarList> recent_bars = 4;
+  // positions are sorted latest -> earliest by open_timestamp_ns.
   repeated Position positions = 5;
   double realised_pnl_12m = 9;
+  // recent_fills holds up to 64 fills sorted latest -> earliest.
   repeated Fill recent_fills = 6;
+  // indicators is a flat block of per-interval scalars. Layout:
+  //   indicators[i * INDICATORS_PER_INTERVAL + j]
+  // where i indexes TIME_INTERVALS (M1, M5, M15, H1, H4, D1, W1, MN) and j
+  // is the indicator slot. Current slots:
+  //   [0] double-bottom pattern score in [0.0, 1.0] (0 = no pattern)
   repeated double indicators = 7;
+  // recent_ticks holds up to 64 ticks sorted latest -> earliest.
   repeated Tick recent_ticks = 10;
+  // live_ticks are ticks since the previous observation, sorted latest -> earliest.
   repeated Tick live_ticks = 11;
+  // recent_news holds up to 64 news items sorted latest -> earliest.
   repeated News recent_news = 12;
   bool done = 8;
 }

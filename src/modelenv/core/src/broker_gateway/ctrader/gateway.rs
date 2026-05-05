@@ -228,6 +228,64 @@ impl BrokerGateway for CtraderBrokerGateway {
         }
     }
 
+    async fn recent_bars(
+        &self,
+        symbol: &str,
+        interval: &str,
+        count: usize,
+    ) -> Result<Vec<modelenv_proto::Bar>> {
+        let symbol = self.resolve_symbol(symbol)?;
+
+        debug!(
+            "Getting up to {} recent {} bars for symbol: {}",
+            count, interval, symbol
+        );
+
+        let mut client = self.client.lock().await;
+
+        Self::ensure_connected(&mut client).await.map_err(|err| {
+            anyhow!(
+                "ConnectionError {{ symbol: {}, broker_error: {} }}",
+                symbol,
+                err
+            )
+        })?;
+
+        match client.recent_bars(&symbol, interval, count).await {
+            Ok(bars) => Ok(bars),
+            Err(err) if Self::is_connection_error(&err) => {
+                warn!(
+                    "Recent bars request lost broker connection for {}. Attempting reconnect: {}",
+                    symbol, err
+                );
+
+                client.reconnect().await.map_err(|reconnect_err| {
+                    anyhow!(
+                        "BarError {{ symbol: {}, broker_error: {} }}",
+                        symbol,
+                        reconnect_err
+                    )
+                })?;
+
+                client
+                    .recent_bars(&symbol, interval, count)
+                    .await
+                    .map_err(|retry_err| {
+                        anyhow!(
+                            "BarError {{ symbol: {}, broker_error: {} }}",
+                            symbol,
+                            retry_err
+                        )
+                    })
+            }
+            Err(err) => Err(anyhow!(
+                "BarError {{ symbol: {}, broker_error: {} }}",
+                symbol,
+                err
+            )),
+        }
+    }
+
     async fn current_ticks(&self, symbol: &str) -> Result<Vec<modelenv_proto::Tick>> {
         let symbol = self.resolve_symbol(symbol)?;
 

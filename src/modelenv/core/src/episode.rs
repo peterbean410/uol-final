@@ -11,8 +11,13 @@ use crate::data_loader::{
     load_news_from_parquet_with_range_cached_from_local_cache_dir,
     load_ticks_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
 };
+use crate::indicators::{compute_interval_indicators, INDICATORS_PER_INTERVAL};
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
+
+pub const RECENT_WINDOW: usize = 64;
+pub const LIVE_TICK_WINDOW_NS: i64 = 5_000_000_000;
+pub const RECENT_TICK_WINDOW_NS: i64 = 60_000_000_000;
 
 /// Represents a loaded episode with price bars for all time intervals
 #[derive(Clone)]
@@ -21,7 +26,7 @@ pub struct Episode {
     pub bars: HashMap<String, Vec<Bar>>,
     pub ticks: Vec<Tick>,
     pub news: Vec<News>,
-    pub cursor: usize,
+    pub cursor_timestamp: i64,
     pub episode_start_ts: i64,
     pub episode_end_ts: i64,
     pub done: bool,
@@ -40,7 +45,7 @@ impl Episode {
             bars,
             ticks: Vec::new(),
             news: Vec::new(),
-            cursor: 0,
+            cursor_timestamp: episode_start_ts,
             episode_start_ts,
             episode_end_ts,
             done: false,
@@ -71,12 +76,52 @@ impl Episode {
         Some(upper_bound.saturating_sub(1))
     }
 
-    pub fn current_bar(&self, interval: &str) -> Option<&Bar> {
-        let current_timestamp = self.get_cursor_timestamp();
+    /// Synthesize the partial "live" bar for `interval` at the current cursor.
+    /// `open` comes from the historical bar covering the current cursor (its
+    /// timestamp is always <= current_timestamp). `high`/`low`/`close`/`volume`
+    /// reflect ticks observed in `[period_start, current_timestamp]` so that
+    /// the model sees a bar that is still forming, mirroring live mode.
+    pub fn forming_bar(&self, interval: &str, current_timestamp: i64) -> Option<Bar> {
         let interval_cursor = self.interval_cursor_at_or_before(interval, current_timestamp)?;
-        self.bars
-            .get(interval)
-            .and_then(|bars| bars.get(interval_cursor))
+        let bars = self.bars.get(interval)?;
+        let historical = bars.get(interval_cursor)?;
+        let period_start = historical.timestamp_ns;
+
+        let start_idx = self
+            .ticks
+            .partition_point(|tick| tick.timestamp_ns < period_start);
+        let end_idx = self
+            .ticks
+            .partition_point(|tick| tick.timestamp_ns <= current_timestamp);
+        let window = self.ticks.get(start_idx..end_idx).unwrap_or(&[]);
+
+        let mut high = historical.open;
+        let mut low = historical.open;
+        let mut close = historical.open;
+        for tick in window {
+            let mid = (tick.bid + tick.ask) / 2.0;
+            if mid > high {
+                high = mid;
+            }
+            if mid < low {
+                low = mid;
+            }
+            close = mid;
+        }
+
+        Some(Bar {
+            timestamp_ns: period_start,
+            open: historical.open,
+            high,
+            low,
+            close,
+            volume: window.len() as f64,
+        })
+    }
+
+    pub fn current_bar(&self, interval: &str) -> Option<Bar> {
+        let current_timestamp = self.get_cursor_timestamp();
+        self.forming_bar(interval, current_timestamp)
     }
 
     /// Get the current observation for the episode
@@ -88,33 +133,45 @@ impl Episode {
     ) -> Observation {
         let mut live_bars = HashMap::new();
         let mut recent_bars = HashMap::new();
+        let mut indicators: Vec<f64> =
+            Vec::with_capacity(TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL);
 
         // Get the current timestamp from the cursor
         let current_timestamp = self.get_cursor_timestamp();
 
         for interval in TIME_INTERVALS {
+            let mut interval_block = [0.0_f64; INDICATORS_PER_INTERVAL];
             if let Some(bars) = self.bars.get(*interval) {
                 if let Some(interval_cursor) =
                     self.interval_cursor_at_or_before(interval, current_timestamp)
                 {
-                    if let Some(latest_bar) = bars.get(interval_cursor) {
-                        live_bars.insert(interval.to_string(), latest_bar.clone());
+                    if let Some(forming) = self.forming_bar(interval, current_timestamp) {
+                        live_bars.insert(interval.to_string(), forming);
                     }
 
-                    let start_idx = interval_cursor.saturating_sub(63);
-                    let end_idx = interval_cursor + 1;
+                    let start_idx = interval_cursor.saturating_sub(RECENT_WINDOW);
+                    let end_idx = interval_cursor;
                     let recent: Vec<Bar> = bars
                         .get(start_idx..end_idx)
                         .map(|slice| slice.to_vec())
                         .unwrap_or_default();
 
-                    recent_bars.insert(interval.to_string(), BarList { bars: recent });
+                    interval_block = compute_interval_indicators(&recent);
+
+                    let mut reversed = recent;
+                    reversed.reverse();
+                    recent_bars.insert(interval.to_string(), BarList { bars: reversed });
                 }
             }
+            indicators.extend_from_slice(&interval_block);
         }
 
-        let recent_ticks = self.recent_ticks(current_timestamp);
-        let live_ticks = self.live_ticks(previous_timestamp_ns, current_timestamp);
+        let live_lower = previous_timestamp_ns
+            .map(|prev| prev.max(current_timestamp - LIVE_TICK_WINDOW_NS))
+            .unwrap_or_else(|| current_timestamp - LIVE_TICK_WINDOW_NS);
+
+        let recent_ticks = self.recent_ticks(live_lower);
+        let live_ticks = self.live_ticks(live_lower, current_timestamp);
 
         Observation {
             timestamp_ns: current_timestamp,
@@ -124,7 +181,7 @@ impl Episode {
             positions: positions.to_vec(),
             realised_pnl_12m,
             recent_fills: Vec::new(),
-            indicators: Vec::new(),
+            indicators,
             recent_ticks,
             live_ticks,
             recent_news: self.recent_news(current_timestamp),
@@ -132,40 +189,47 @@ impl Episode {
         }
     }
 
-    fn recent_ticks(&self, current_timestamp: i64) -> Vec<Tick> {
+    /// All ticks in `[live_lower - RECENT_TICK_WINDOW_NS, live_lower)`; the
+    /// 60-second window right before live_ticks starts.
+    fn recent_ticks(&self, live_lower: i64) -> Vec<Tick> {
         if self.ticks.is_empty() {
             return Vec::new();
         }
-
+        let recent_lower = live_lower - RECENT_TICK_WINDOW_NS;
         let end_idx = self
             .ticks
-            .partition_point(|tick| tick.timestamp_ns <= current_timestamp);
-        let start_idx = end_idx.saturating_sub(64);
-        self.ticks
+            .partition_point(|tick| tick.timestamp_ns < live_lower);
+        let start_idx = self
+            .ticks
+            .partition_point(|tick| tick.timestamp_ns < recent_lower);
+        let mut window: Vec<Tick> = self
+            .ticks
             .get(start_idx..end_idx)
             .map(|slice| slice.to_vec())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        window.reverse();
+        window
     }
 
-    fn live_ticks(&self, previous_timestamp_ns: Option<i64>, current_timestamp: i64) -> Vec<Tick> {
+    /// Ticks in `(live_lower, current_timestamp]`, what changed since the last observation,
+    /// capped to the most recent LIVE_TICK_WINDOW_NS.
+    fn live_ticks(&self, live_lower: i64, current_timestamp: i64) -> Vec<Tick> {
         if self.ticks.is_empty() {
             return Vec::new();
         }
-
         let end_idx = self
             .ticks
             .partition_point(|tick| tick.timestamp_ns <= current_timestamp);
-        if let Some(previous_timestamp_ns) = previous_timestamp_ns {
-            let start_idx = self
-                .ticks
-                .partition_point(|tick| tick.timestamp_ns <= previous_timestamp_ns);
-            self.ticks
-                .get(start_idx..end_idx)
-                .map(|slice| slice.to_vec())
-                .unwrap_or_default()
-        } else {
-            self.recent_ticks(current_timestamp)
-        }
+        let start_idx = self
+            .ticks
+            .partition_point(|tick| tick.timestamp_ns <= live_lower);
+        let mut window: Vec<Tick> = self
+            .ticks
+            .get(start_idx..end_idx)
+            .map(|slice| slice.to_vec())
+            .unwrap_or_default();
+        window.reverse();
+        window
     }
 
     fn recent_news(&self, current_timestamp: i64) -> Vec<News> {
@@ -175,47 +239,28 @@ impl Episode {
             .filter(|item| item.timestamp_ns <= current_timestamp)
             .cloned()
             .collect();
-        if recent.len() > 16 {
-            recent.drain(0..recent.len() - 16);
+        if recent.len() > RECENT_WINDOW {
+            recent.drain(0..recent.len() - RECENT_WINDOW);
         }
+        recent.reverse();
         recent
     }
 
-    /// Advance the episode cursor by one step (5 seconds = 5,000,000,000 nanoseconds)
-    /// Returns true if the episode is still running, false if done
+    /// Advance the cursor by `step_size_ns`. The cursor is free-running and does
+    /// not snap to bar boundaries. Returns true if the episode is still running.
     pub fn advance(&mut self, step_size_ns: i64) -> bool {
         if self.done {
             return false;
         }
 
-        // Get the current timestamp at the cursor position
-        let current_timestamp = self.get_cursor_timestamp();
-
-        // Calculate the target timestamp (current + 5 seconds)
-        let target_timestamp = current_timestamp + step_size_ns;
-
-        // Check if target timestamp exceeds episode end
+        let target_timestamp = self.cursor_timestamp + step_size_ns;
         if target_timestamp > self.episode_end_ts {
             self.done = true;
             return false;
         }
 
-        let Some(reference_bars) = self.bars.get(TIME_INTERVALS[0]) else {
-            self.done = true;
-            return false;
-        };
-
-        let search_start = (self.cursor + 1).min(reference_bars.len());
-        if let Some(offset) = reference_bars[search_start..]
-            .iter()
-            .position(|bar| bar.timestamp_ns >= target_timestamp)
-        {
-            self.cursor = search_start + offset;
-            true
-        } else {
-            self.done = true;
-            false
-        }
+        self.cursor_timestamp = target_timestamp;
+        true
     }
 
     /// Check if a day boundary has been crossed between two timestamps
@@ -225,14 +270,8 @@ impl Episode {
         from_day != to_day
     }
 
-    /// Get the timestamp at the current cursor position (uses first interval as reference)
     pub fn get_cursor_timestamp(&self) -> i64 {
-        if let Some(bars) = self.bars.get(TIME_INTERVALS[0]) {
-            if let Some(bar) = bars.get(self.cursor) {
-                return bar.timestamp_ns;
-            }
-        }
-        self.episode_start_ts
+        self.cursor_timestamp
     }
 
     /// Check if the episode is done
@@ -312,8 +351,8 @@ mod tests {
             10_000_000_000,
         );
 
-        // Initial cursor should be at 0
-        assert_eq!(episode.cursor, 0);
+        // Initial cursor sits at episode_start_ts.
+        assert_eq!(episode.get_cursor_timestamp(), 0);
 
         // Advance by 5 seconds (5_000_000_000 ns)
         let still_running = episode.advance(5_000_000_000);
@@ -321,25 +360,21 @@ mod tests {
         // Should still be running
         assert!(still_running);
 
-        // Cursor should have moved to bar at or after 5 seconds (index 5)
-        assert_eq!(episode.cursor, 5);
+        // Free-running cursor lands exactly at +5s.
+        assert_eq!(episode.get_cursor_timestamp(), 5_000_000_000);
 
-        // Timestamp should be at 5 seconds
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 5_000_000_000);
     }
 
     #[test]
     fn test_advance_reaches_end() {
-        // Create bars with 3-second intervals - bars at 0, 3, 6, 9, 12 seconds
-        // Episode ends at 15 seconds
-        // Advancing 5 seconds from 0 should find bar at 6 seconds (index 2)
-        // Advancing 5 seconds from 6 should find bar at 12 seconds (index 4) - no bar at 9s >= 11s
-        // Advancing 5 seconds from 12 should find bar at 15... but we only have up to 12
+        // Bars at 0, 3, 6, 9, 12 seconds. Episode ends at 15 seconds.
+        // Free-running cursor: 0 → 5 → 10 → 15 (ok) → 20 (> 15, done).
         let mut bars = Vec::new();
         for i in 0..5 {
             bars.push(Bar {
-                timestamp_ns: i * 3_000_000_000, // 3 second intervals: 0, 3, 6, 9, 12
+                timestamp_ns: i * 3_000_000_000,
                 open: 100.0 + i as f64,
                 high: 101.0 + i as f64,
                 low: 99.0 + i as f64,
@@ -352,27 +387,26 @@ mod tests {
             "USDJPY".to_string(),
             [("M1".to_string(), bars)].into_iter().collect(),
             0,
-            15_000_000_000, // episode ends at 15 seconds
+            15_000_000_000,
         );
 
-        // First advance: 0 -> 6 seconds (bar at index 2)
         assert!(episode.advance(5_000_000_000));
-        assert_eq!(episode.cursor, 2);
+        assert_eq!(episode.get_cursor_timestamp(), 5_000_000_000);
 
-        // Second advance: 6 -> 11 seconds (no bar at 9s >= 11s, so use bar at 12s index 4)
         assert!(episode.advance(5_000_000_000));
-        assert_eq!(episode.cursor, 4);
+        assert_eq!(episode.get_cursor_timestamp(), 10_000_000_000);
 
-        // Third advance: 12 -> 17 seconds, but no bar at 17 seconds
-        // So this should be done
-        let still_running = episode.advance(5_000_000_000);
-        assert!(!still_running);
+        assert!(episode.advance(5_000_000_000));
+        assert_eq!(episode.get_cursor_timestamp(), 15_000_000_000);
+
+        // Next step crosses episode_end_ts → done.
+        assert!(!episode.advance(5_000_000_000));
         assert!(episode.is_done());
     }
 
     #[test]
     fn test_advance_multiple_steps() {
-        // Create bars with 1-second intervals
+        // Bars at 0..19s (1s intervals). Episode ends at 20s.
         let mut bars = Vec::new();
         for i in 0..20 {
             bars.push(Bar {
@@ -392,19 +426,19 @@ mod tests {
             20_000_000_000,
         );
 
-        // First advance
         assert!(episode.advance(5_000_000_000));
-        assert_eq!(episode.cursor, 5);
+        assert_eq!(episode.get_cursor_timestamp(), 5_000_000_000);
 
-        // Second advance
         assert!(episode.advance(5_000_000_000));
-        assert_eq!(episode.cursor, 10);
+        assert_eq!(episode.get_cursor_timestamp(), 10_000_000_000);
 
-        // Third advance
         assert!(episode.advance(5_000_000_000));
-        assert_eq!(episode.cursor, 15);
+        assert_eq!(episode.get_cursor_timestamp(), 15_000_000_000);
 
-        // Fourth advance - should be done (no bar at 20 seconds)
+        assert!(episode.advance(5_000_000_000));
+        assert_eq!(episode.get_cursor_timestamp(), 20_000_000_000);
+
+        // Next step crosses episode_end_ts → done.
         assert!(!episode.advance(5_000_000_000));
         assert!(episode.is_done());
     }
@@ -434,7 +468,7 @@ mod tests {
         let episode = Episode::new(
             "USDJPY".to_string(),
             [("M1".to_string(), bars)].into_iter().collect(),
-            0,
+            100_000_000_000,
             200_000_000_000,
         );
 
@@ -475,8 +509,8 @@ mod tests {
 
         let mut episode = Episode::new("USDJPY".to_string(), bars_map, 0, 600_000_000_000);
 
-        // Initial cursor should be at 0
-        assert_eq!(episode.cursor, 0);
+        // Initial cursor sits at episode_start_ts.
+        assert_eq!(episode.get_cursor_timestamp(), 0);
         assert!(!episode.is_done());
 
         // Advance by 5 minutes (300 seconds = 300_000_000_000 ns)
@@ -485,8 +519,8 @@ mod tests {
         // Should still be running
         assert!(still_running);
 
-        // Cursor should track the reference M1 interval.
-        assert_eq!(episode.cursor, 5);
+        // Free-running cursor lands exactly at +300s.
+        assert_eq!(episode.get_cursor_timestamp(), 300_000_000_000);
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 300_000_000_000);
@@ -557,23 +591,23 @@ mod tests {
         let ticks = vec![
             Tick {
                 timestamp_ns: 1_000_000_000,
-                price: 100.1,
-                size: 1.0,
+                bid: 100.10,
+                ask: 100.11,
             },
             Tick {
                 timestamp_ns: 59_000_000_000,
-                price: 100.2,
-                size: 1.5,
+                bid: 100.20,
+                ask: 100.21,
             },
             Tick {
                 timestamp_ns: 61_000_000_000,
-                price: 100.3,
-                size: 2.0,
+                bid: 100.30,
+                ask: 100.31,
             },
             Tick {
                 timestamp_ns: 119_000_000_000,
-                price: 100.4,
-                size: 2.5,
+                bid: 100.40,
+                ask: 100.41,
             },
         ];
 
@@ -588,10 +622,278 @@ mod tests {
         assert!(episode.advance(60_000_000_000));
 
         let obs = episode.get_observation(&[], 0.0, Some(0));
-        assert_eq!(obs.recent_ticks.len(), 2);
+        assert_eq!(obs.recent_ticks.len(), 1);
+        assert_eq!(obs.recent_ticks[0].timestamp_ns, 1_000_000_000);
+        assert_eq!(obs.live_ticks.len(), 1);
+        assert_eq!(obs.live_ticks[0].timestamp_ns, 59_000_000_000);
+    }
+
+    #[test]
+    fn test_first_step_observation_includes_ticks_after_bar_open() {
+        // Mirrors the real-world S3 case: the first bar timestamp lands on a
+        // session-open boundary and the very first tick is a few ms later.
+        // After advancing one 5s step the live tick window must capture it.
+        let bars = vec![
+            Bar {
+                timestamp_ns: 0,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                volume: 1000.0,
+            },
+            Bar {
+                timestamp_ns: 60_000_000_000,
+                open: 100.5,
+                high: 101.5,
+                low: 100.0,
+                close: 101.0,
+                volume: 1000.0,
+            },
+        ];
+        let ticks = vec![
+            Tick {
+                timestamp_ns: 29_000_000,
+                bid: 100.10,
+                ask: 100.12,
+            },
+            Tick {
+                timestamp_ns: 4_500_000_000,
+                bid: 100.20,
+                ask: 100.22,
+            },
+        ];
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            120_000_000_000,
+        )
+        .with_ticks(ticks);
+
+        // Simulate environment.reset() pushing the cursor one step in.
+        assert!(episode.advance(5_000_000_000));
+
+        let obs = episode.get_observation(&[], 0.0, None);
+        assert_eq!(obs.timestamp_ns, 5_000_000_000);
         assert_eq!(obs.live_ticks.len(), 2);
-        assert_eq!(obs.live_ticks[0].timestamp_ns, 1_000_000_000);
-        assert_eq!(obs.live_ticks[1].timestamp_ns, 59_000_000_000);
+        assert_eq!(obs.live_ticks[0].timestamp_ns, 4_500_000_000);
+        assert_eq!(obs.live_ticks[1].timestamp_ns, 29_000_000);
+    }
+
+    #[test]
+    fn test_forming_bar_synthesizes_partial_ohlc_from_ticks() {
+        let bars = vec![
+            Bar {
+                timestamp_ns: 0,
+                open: 100.00,
+                high: 999.0, // historical full-period high, must NOT leak
+                low: 1.0,    // historical full-period low, must NOT leak
+                close: 50.0, // historical close, must NOT leak
+                volume: 1000.0,
+            },
+            Bar {
+                timestamp_ns: 60_000_000_000,
+                open: 200.0,
+                high: 200.0,
+                low: 200.0,
+                close: 200.0,
+                volume: 1000.0,
+            },
+        ];
+        let ticks = vec![
+            Tick {
+                timestamp_ns: 1_000_000_000,
+                bid: 100.10,
+                ask: 100.20,
+            }, // mid 100.15
+            Tick {
+                timestamp_ns: 2_000_000_000,
+                bid: 100.30,
+                ask: 100.40,
+            }, // mid 100.35, high
+            Tick {
+                timestamp_ns: 3_000_000_000,
+                bid: 99.90,
+                ask: 100.00,
+            }, // mid 99.95, low
+            Tick {
+                timestamp_ns: 4_000_000_000,
+                bid: 100.20,
+                ask: 100.22,
+            }, // mid 100.21, close
+            Tick {
+                timestamp_ns: 6_000_000_000,
+                bid: 105.0,
+                ask: 105.0,
+            }, // outside window
+        ];
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            120_000_000_000,
+        )
+        .with_ticks(ticks);
+
+        let bar = episode
+            .forming_bar("M1", 5_000_000_000)
+            .expect("forming bar exists");
+
+        assert_eq!(bar.timestamp_ns, 0);
+        assert_eq!(bar.open, 100.00);
+        assert!((bar.high - 100.35).abs() < 1e-9);
+        assert!((bar.low - 99.95).abs() < 1e-9);
+        assert!((bar.close - 100.21).abs() < 1e-9);
+        assert_eq!(bar.volume, 4.0);
+    }
+
+    #[test]
+    fn test_forming_bar_falls_back_to_open_when_no_ticks_in_window() {
+        let bars = vec![Bar {
+            timestamp_ns: 0,
+            open: 100.0,
+            high: 999.0,
+            low: 1.0,
+            close: 50.0,
+            volume: 1000.0,
+        }];
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            60_000_000_000,
+        );
+
+        let bar = episode
+            .forming_bar("M1", 1_000_000_000)
+            .expect("forming bar exists");
+        assert_eq!(bar.open, 100.0);
+        assert_eq!(bar.high, 100.0);
+        assert_eq!(bar.low, 100.0);
+        assert_eq!(bar.close, 100.0);
+        assert_eq!(bar.volume, 0.0);
+    }
+
+    #[test]
+    fn test_recent_news_capped_and_sorted_latest_first() {
+        let total = (RECENT_WINDOW + 10) as i64;
+        let news = (0..total)
+            .map(|i| News {
+                timestamp_ns: i * 60_000_000_000,
+                headline: format!("h{}", i),
+                sentiment_score: 0.0,
+                source: "test".to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let bars = (0..total)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0,
+                high: 100.0,
+                low: 100.0,
+                close: 100.0,
+                volume: 0.0,
+            })
+            .collect::<Vec<_>>();
+        let cursor_ts = (total - 1) * 60_000_000_000;
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            cursor_ts,
+        )
+        .with_news(news);
+        assert!(episode.advance(cursor_ts));
+
+        let obs = episode.get_observation(&[], 0.0, None);
+        assert_eq!(obs.recent_news.len(), RECENT_WINDOW);
+        assert_eq!(obs.recent_news[0].timestamp_ns, cursor_ts);
+        assert!(obs.recent_news[0].timestamp_ns > obs.recent_news[1].timestamp_ns);
+    }
+
+    #[test]
+    fn test_recent_bars_capped_and_sorted_latest_first() {
+        let bars = (0..(RECENT_WINDOW as i64 + 10))
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+        let cursor_ts = (RECENT_WINDOW as i64 + 9) * 60_000_000_000;
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            cursor_ts,
+        )
+        .with_ticks(Vec::new());
+
+        assert!(episode.advance(cursor_ts));
+
+        let obs = episode.get_observation(&[], 0.0, Some(0));
+
+        let recent = &obs.recent_bars["M1"].bars;
+        assert_eq!(recent.len(), RECENT_WINDOW);
+        let last_bar_ts = cursor_ts - 60_000_000_000;
+        assert_eq!(recent[0].timestamp_ns, last_bar_ts);
+        assert!(recent[0].timestamp_ns > recent[1].timestamp_ns);
+        assert!(recent.last().unwrap().timestamp_ns < recent[0].timestamp_ns);
+    }
+
+    #[test]
+    fn test_recent_ticks_returns_all_ticks_in_60s_window_before_live() {
+        // Cursor at 120s; live_lower = 120s - 5s = 115s; recent window = [55s, 115s).
+        let bars = vec![
+            Bar { timestamp_ns: 0, open: 0.0, high: 0.0, low: 0.0, close: 0.0, volume: 0.0 },
+            Bar { timestamp_ns: 60_000_000_000, open: 0.0, high: 0.0, low: 0.0, close: 0.0, volume: 0.0 },
+            Bar { timestamp_ns: 120_000_000_000, open: 0.0, high: 0.0, low: 0.0, close: 0.0, volume: 0.0 },
+        ];
+        // 70 ticks at 1s intervals starting at 50s: 50, 51, …, 119.
+        let tick_count = 70i64;
+        let ticks: Vec<Tick> = (0..tick_count)
+            .map(|i| Tick {
+                timestamp_ns: 50_000_000_000 + i * 1_000_000_000,
+                bid: 100.0,
+                ask: 100.01,
+            })
+            .collect();
+
+        let mut episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            180_000_000_000,
+        )
+        .with_ticks(ticks);
+
+        // Advance to bar at 120s.
+        assert!(episode.advance(120_000_000_000));
+
+        // previous=60s, so live_lower = max(60s, 120s-5s) = 115s.
+        // recent window = [115s-60s, 115s) = [55s, 115s) → ticks at 55s–114s = 60 ticks.
+        let obs = episode.get_observation(&[], 0.0, Some(60_000_000_000));
+        assert_eq!(obs.recent_ticks.len(), 60);
+        assert_eq!(obs.recent_ticks[0].timestamp_ns, 114_000_000_000);
+        assert_eq!(obs.recent_ticks[59].timestamp_ns, 55_000_000_000);
+        assert!(obs.recent_ticks[0].timestamp_ns > obs.recent_ticks[1].timestamp_ns);
+
+        // live_ticks = (115s, 120s] → ticks at 116s–119s = 4 ticks (ts 116,117,118,119).
+        // tick at 115s falls on the boundary (not > live_lower) → excluded.
+        // tick at 120s doesn't exist (ticks go to 119s).
+        assert_eq!(obs.live_ticks.len(), 4);
+        assert_eq!(obs.live_ticks[0].timestamp_ns, 119_000_000_000);
+        assert_eq!(obs.live_ticks[3].timestamp_ns, 116_000_000_000);
     }
 
     #[test]
@@ -657,7 +959,7 @@ mod tests {
         );
 
         assert!(episode.advance(2_000_000_000));
-        assert_eq!(episode.cursor, 2);
+        assert_eq!(episode.get_cursor_timestamp(), 2_000_000_000);
         assert_eq!(
             episode.get_observation(&[], 0.0, None).timestamp_ns,
             2_000_000_000

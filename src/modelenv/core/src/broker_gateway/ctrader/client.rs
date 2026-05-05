@@ -189,6 +189,52 @@ impl CtraderClient {
         }
     }
 
+    fn interval_nanoseconds(interval: &str) -> i64 {
+        match interval {
+            "M1" => 60_000_000_000,
+            "M5" => 300_000_000_000,
+            "M15" => 900_000_000_000,
+            "H1" => 3_600_000_000_000,
+            "H4" => 14_400_000_000_000,
+            "D1" => 86_400_000_000_000,
+            "W1" => 604_800_000_000_000,
+            "MN" => 2_592_000_000_000_000,
+            _ => 60_000_000_000,
+        }
+    }
+
+    fn synthetic_recent_bars(
+        symbol: &str,
+        interval: &str,
+        count: usize,
+    ) -> Vec<modelenv_proto::Bar> {
+        if count == 0 {
+            return Vec::new();
+        }
+        let pip = if symbol.ends_with("JPY") { 0.01 } else { 0.0001 };
+        let mid = Self::synthetic_mid_price(symbol);
+        let interval_ns = Self::interval_nanoseconds(interval);
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as i64;
+
+        (0..count)
+            .map(|idx| {
+                let age = (count - 1 - idx) as i64;
+                let drift = (idx as f64) * 0.1 * pip;
+                modelenv_proto::Bar {
+                    timestamp_ns: now - age * interval_ns,
+                    open: mid - (2.0 * pip) + drift,
+                    high: mid + (3.0 * pip) + drift,
+                    low: mid - (4.0 * pip) + drift,
+                    close: mid + pip + drift,
+                    volume: 100.0,
+                }
+            })
+            .collect()
+    }
+
     fn synthetic_ticks(symbol: &str) -> Vec<modelenv_proto::Tick> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -202,13 +248,17 @@ impl CtraderClient {
         let mid = Self::synthetic_mid_price(symbol);
         let offsets = [-2.0_f64, -0.5, 0.5, 1.0];
 
+        let spread = pip;
         offsets
             .iter()
             .enumerate()
-            .map(|(idx, offset)| modelenv_proto::Tick {
-                timestamp_ns: now - ((offsets.len() - idx) as i64 * 250_000_000),
-                price: mid + (offset * pip),
-                size: 1.0 + idx as f64,
+            .map(|(idx, offset)| {
+                let bid = mid + (offset * pip);
+                modelenv_proto::Tick {
+                    timestamp_ns: now - ((offsets.len() - idx) as i64 * 250_000_000),
+                    bid,
+                    ask: bid + spread,
+                }
             })
             .collect()
     }
@@ -446,6 +496,30 @@ impl CtraderClient {
         debug!("Retrieving current ticks for symbol: {}", symbol);
 
         Ok(Self::synthetic_ticks(&symbol))
+    }
+
+    /// Retrieve up to `count` recent bars for the symbol at the requested interval.
+    ///
+    /// Synthetic placeholder mirroring `current_bar` until real cTrader trendbar
+    /// fetching is wired up. Returns bars in ascending timestamp order.
+    pub async fn recent_bars(
+        &mut self,
+        symbol: &str,
+        interval: &str,
+        count: usize,
+    ) -> Result<Vec<modelenv_proto::Bar>> {
+        if !self.is_connected() {
+            return Err(anyhow!("Not connected to cTrader API"));
+        }
+
+        let symbol = Self::normalise_symbol(symbol)?;
+
+        debug!(
+            "Retrieving up to {} recent {} bars for symbol: {}",
+            count, interval, symbol
+        );
+
+        Ok(Self::synthetic_recent_bars(&symbol, interval, count))
     }
 
     /// Submit order to cTrader API
@@ -935,8 +1009,8 @@ mod tests {
         assert!(ticks
             .windows(2)
             .all(|window| window[0].timestamp_ns < window[1].timestamp_ns));
-        assert!(ticks.iter().all(|tick| tick.price > 100.0));
-        assert_eq!(ticks[0].size, 1.0);
+        assert!(ticks.iter().all(|tick| tick.bid > 100.0));
+        assert!(ticks.iter().all(|tick| tick.ask > tick.bid));
     }
 
     #[tokio::test]
