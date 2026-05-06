@@ -27,6 +27,7 @@ const EOW_SNAPSHOT_BRANCH: &str = "marketdata/eow-snapshot";
 const EOM_SNAPSHOT_BRANCH: &str = "marketdata/eom-snapshot";
 const EOD_TICK_SNAPSHOT_BRANCH: &str = "marketdata/eod-tick-snapshot";
 const NEWS_DATA_BRANCH: &str = "marketdata/interval-news";
+const EOD_NEWS_SNAPSHOT_BRANCH: &str = "marketdata/eod-news-snapshot";
 const SOURCE_SELECTION_LOOKBACK_NS: i64 = 31 * 24 * 60 * 60 * 1_000_000_000;
 const CACHE_DOWNLOAD_LOCK_STALE_SECS: u64 = 60 * 60;
 const CACHE_DOWNLOAD_LOCK_POLL_MS: u64 = 250;
@@ -161,25 +162,35 @@ pub fn normalise_news_data_prefix(prefix: &str) -> String {
         return trimmed.to_string();
     }
 
-    if trimmed.ends_with(NEWS_DATA_BRANCH) || trimmed.contains("/marketdata/interval-news/") {
+    if trimmed.ends_with(EOD_NEWS_SNAPSHOT_BRANCH)
+        || trimmed.contains("/marketdata/eod-news-snapshot/")
+    {
         return trimmed.to_string();
+    }
+
+    if trimmed.ends_with(NEWS_DATA_BRANCH) || trimmed.contains("/marketdata/interval-news/") {
+        return trimmed.replacen(NEWS_DATA_BRANCH, EOD_NEWS_SNAPSHOT_BRANCH, 1);
     }
 
     if let Some(branch) = known_price_data_branches()
         .into_iter()
         .find(|branch| trimmed.ends_with(branch))
     {
-        return format!("{}{}", trimmed.trim_end_matches(branch), NEWS_DATA_BRANCH);
+        return format!(
+            "{}{}",
+            trimmed.trim_end_matches(branch),
+            EOD_NEWS_SNAPSHOT_BRANCH
+        );
     }
 
     for branch in known_price_data_branches() {
         let from = format!("/{branch}/");
         if trimmed.contains(&from) {
-            return trimmed.replacen(&from, &format!("/{NEWS_DATA_BRANCH}/"), 1);
+            return trimmed.replacen(&from, &format!("/{EOD_NEWS_SNAPSHOT_BRANCH}/"), 1);
         }
     }
 
-    format!("{trimmed}/{NEWS_DATA_BRANCH}")
+    format!("{trimmed}/{EOD_NEWS_SNAPSHOT_BRANCH}")
 }
 
 pub fn build_news_data_source(prefix: &str, symbol: &str) -> String {
@@ -187,10 +198,7 @@ pub fn build_news_data_source(prefix: &str, symbol: &str) -> String {
     if base.ends_with(".parquet") {
         base
     } else {
-        format!(
-            "{base}/symbol={}/interval=D1",
-            news_symbol_storage_name(symbol)
-        )
+        format!("{base}/symbol={}", news_symbol_storage_name(symbol))
     }
 }
 
@@ -2689,13 +2697,13 @@ mod tests {
     fn normalises_news_prefix_from_bucket_or_price_branch() {
         assert_eq!(
             normalise_news_data_prefix("s3://prod-fintech-forex-sg-731833471586"),
-            "s3://prod-fintech-forex-sg-731833471586/marketdata/interval-news"
+            "s3://prod-fintech-forex-sg-731833471586/marketdata/eod-news-snapshot"
         );
         assert_eq!(
             normalise_news_data_prefix(
                 "s3://prod-fintech-forex-sg-731833471586/marketdata/eod-snapshot"
             ),
-            "s3://prod-fintech-forex-sg-731833471586/marketdata/interval-news"
+            "s3://prod-fintech-forex-sg-731833471586/marketdata/eod-news-snapshot"
         );
     }
 
@@ -2719,7 +2727,7 @@ mod tests {
         );
         assert_eq!(
             build_news_data_source("s3://bucket", "USDJPY"),
-            "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1"
+            "s3://bucket/marketdata/eod-news-snapshot/symbol=USD-JPY"
         );
         assert_eq!(
             build_tick_data_source("s3://bucket", "USDJPY"),
@@ -2976,7 +2984,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let base = dir
             .path()
-            .join("marketdata/interval-news/symbol=USD-JPY/interval=D1/year=2026/month=01/day=01");
+            .join("marketdata/eod-news-snapshot/symbol=USD-JPY/year=2026/month=01/day=01");
         std::fs::create_dir_all(&base).unwrap();
         let parquet_path = base.join("20260101T000000Z.parquet");
         write_news_parquet(
@@ -2992,7 +3000,7 @@ mod tests {
         let cache = MarketDataCache::new();
         let source_root = dir
             .path()
-            .join("marketdata/interval-news")
+            .join("marketdata/eod-news-snapshot")
             .to_string_lossy()
             .to_string();
 
@@ -3297,15 +3305,15 @@ exit 255
     async fn loads_news_from_local_cached_s3_prefix_without_hitting_s3() {
         let dir = tempdir().unwrap();
         let cache_dir = dir.path().to_string_lossy().to_string();
-        let source_uri = "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1";
+        let source_uri = "s3://bucket/marketdata/eod-news-snapshot/symbol=USD-JPY";
         let day_one = local_cache_path_for_s3_source(
             &cache_dir,
-            "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1/year=2026/month=01/day=01/20260101T000000Z.parquet",
+            "s3://bucket/marketdata/eod-news-snapshot/symbol=USD-JPY/year=2026/month=01/day=01/20260101T000000Z.parquet",
         )
         .unwrap();
         let day_two = local_cache_path_for_s3_source(
             &cache_dir,
-            "s3://bucket/marketdata/interval-news/symbol=USD-JPY/interval=D1/year=2026/month=01/day=02/20260102T000000Z.parquet",
+            "s3://bucket/marketdata/eod-news-snapshot/symbol=USD-JPY/year=2026/month=01/day=02/20260102T000000Z.parquet",
         )
         .unwrap();
         std::fs::create_dir_all(day_one.parent().unwrap()).unwrap();
