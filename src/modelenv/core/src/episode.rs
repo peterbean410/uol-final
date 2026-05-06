@@ -1044,7 +1044,7 @@ pub async fn initialize_episode(
             symbol,
             interval,
             price_snapshot_ts,
-            start_timestamp_ns,
+            None, // load full history, episode_start_ts only constrains ticks
             end_timestamp_ns,
         )
         .await
@@ -1076,31 +1076,22 @@ pub async fn initialize_episode(
             ));
         }
 
-        let start_ts = if episode_start_ts == 0 {
-            bars.first().unwrap().timestamp_ns
-        } else {
-            episode_start_ts
-        };
+        // Only enforce the upper bound, episode_start_ts constrains ticks,
+        // not bar history.  Bars before the cursor provide recent_bars lookback.
+        if episode_end_ts > 0 {
+            bars = bars
+                .into_iter()
+                .filter(|b| b.timestamp_ns <= episode_end_ts)
+                .collect();
 
-        let end_ts = if episode_end_ts == 0 {
-            bars.last().unwrap().timestamp_ns
-        } else {
-            episode_end_ts
-        };
-
-        bars = bars
-            .into_iter()
-            .filter(|b| b.timestamp_ns >= start_ts && b.timestamp_ns <= end_ts)
-            .collect();
-
-        if bars.is_empty() {
-            return Err(anyhow::anyhow!(
-                "No bars found for {} {} in time range [{}, {}]",
-                symbol,
-                interval,
-                start_ts,
-                end_ts
-            ));
+            if bars.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No bars found for {} {} before episode_end_ts {}",
+                    symbol,
+                    interval,
+                    episode_end_ts
+                ));
+            }
         }
 
         bars_map.insert(interval.to_string(), bars);

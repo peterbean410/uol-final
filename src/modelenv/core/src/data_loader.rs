@@ -479,7 +479,14 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
                     anyhow!("No parquet sources matched the requested time range for ticks")
                 })?]
             } else {
-                select_candidate_sources(local_sources, "ticks", None, None)?
+                select_candidate_sources(
+                    local_sources,
+                    "ticks",
+                    None,
+                    None,
+                    Some(source_uri),
+                    Some(schedule),
+                )?
             };
             cache_latest_selection(
                 cache,
@@ -696,15 +703,27 @@ pub(crate) async fn load_news_from_parquet_with_range_cached_from_local_cache_di
                 "D1",
                 Some(start_timestamp_ns),
                 Some(effective_end_ns),
+                Some(source_uri),
+                Some(schedule),
             )?
         } else if let Some(end_timestamp_ns) = end_timestamp_ns {
-            let selected =
-                select_candidate_sources(local_sources, "D1", None, Some(end_timestamp_ns))?;
-            vec![selected.last().cloned().ok_or_else(|| {
-                anyhow!("No parquet sources matched the requested time range for D1")
-            })?]
+            select_candidate_sources(
+                local_sources,
+                "D1",
+                None,
+                Some(end_timestamp_ns),
+                Some(source_uri),
+                Some(schedule),
+            )?
         } else {
-            select_candidate_sources(local_sources, "D1", None, None)?
+            select_candidate_sources(
+                local_sources,
+                "D1",
+                None,
+                None,
+                Some(source_uri),
+                Some(schedule),
+            )?
         };
         cache_latest_selection(
             cache,
@@ -735,6 +754,8 @@ pub(crate) async fn load_news_from_parquet_with_range_cached_from_local_cache_di
             "D1",
             start_timestamp_ns,
             end_timestamp_ns,
+            Some(source_uri),
+            Some(schedule),
         )?;
         cache_latest_selection(
             cache,
@@ -1182,18 +1203,30 @@ async fn determine_s3_sources_cached(
                 "D1",
                 Some(start_timestamp_ns),
                 Some(effective_end_ns),
+                Some(source_uri),
+                Some(schedule),
             );
         }
 
         if let Some(end_timestamp_ns) = end_timestamp_ns {
-            let selected =
-                select_candidate_sources(local_sources, "D1", None, Some(end_timestamp_ns))?;
-            return Ok(vec![selected.last().cloned().ok_or_else(|| {
-                anyhow!("No parquet sources matched the requested time range for D1")
-            })?]);
+            return select_candidate_sources(
+                local_sources,
+                "D1",
+                None,
+                Some(end_timestamp_ns),
+                Some(source_uri),
+                Some(schedule),
+            );
         }
 
-        return select_candidate_sources(local_sources, "D1", None, None);
+        return select_candidate_sources(
+            local_sources,
+            "D1",
+            None,
+            None,
+            Some(source_uri),
+            Some(schedule),
+        );
     }
 
     if let Some(start_timestamp_ns) = start_timestamp_ns {
@@ -1689,6 +1722,8 @@ fn select_candidate_sources(
     time_interval: &str,
     start_timestamp_ns: Option<i64>,
     end_timestamp_ns: Option<i64>,
+    source_uri: Option<&str>,
+    schedule: Option<IntervalSchedule>,
 ) -> Result<Vec<String>> {
     if sources.is_empty() {
         return Err(anyhow!(
@@ -1713,7 +1748,7 @@ fn select_candidate_sources(
     }
 
     let selected: Vec<String> = stamped_sources
-        .into_iter()
+        .iter()
         .filter(|(timestamp_ns, _)| match timestamp_ns {
             Some(timestamp_ns) => {
                 let satisfies_start = start_timestamp_ns
@@ -1726,14 +1761,27 @@ fn select_candidate_sources(
             }
             None => true,
         })
-        .map(|(_, source)| source)
+        .map(|(_, source)| source.clone())
         .collect();
 
     if selected.is_empty() {
-        return Err(anyhow!(
-            "No parquet sources matched the requested time range for {}",
-            time_interval
-        ));
+        return Err(if let (Some(uri), Some(sched)) = (source_uri, schedule) {
+            anyhow!(
+                "No parquet sources matched the requested time range for {} under {}. Requested range: {}. Expected parquet partitions: {}. Candidate sources: {}",
+                time_interval,
+                uri,
+                describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
+                describe_expected_source_range(uri, sched, start_timestamp_ns, end_timestamp_ns),
+                describe_stamped_sources(&stamped_sources)
+            )
+        } else {
+            anyhow!(
+                "No parquet sources matched the requested time range for {}. Requested range: {}. Candidate sources: {}",
+                time_interval,
+                describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
+                describe_stamped_sources(&stamped_sources)
+            )
+        });
     }
 
     Ok(selected)
