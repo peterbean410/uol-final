@@ -1,15 +1,15 @@
 """
-Double Bottom Pattern Detection
+Double Top Pattern Detection
 
-A double bottom is a bullish reversal pattern defined by:
+A double top is a bearish reversal pattern defined by:
 
-    1.  A decline to a local low  (first bottom)
-    2.  A rally to a resistance level  (the neckline)
-    3.  A second decline to approximately the same low  (second bottom)
-    4.  A rally above the neckline  (confirmation)
+    1.  A rally to a local high  (first top)
+    2.  A decline to a support level  (the neckline)
+    3.  A second rally to approximately the same high  (second top)
+    4.  A decline below the neckline  (confirmation)
 
 Pass a DataFrame with columns Low, High, Close, Timestamp to
-detect_double_bottoms() and receive a DataFrame of detected patterns.
+detect_double_tops() and receive a DataFrame of detected patterns.
 """
 
 from dataclasses import dataclass, asdict
@@ -21,19 +21,19 @@ import pandas as pd
 # Pattern detection
 # ──────────────────────────────────────────────
 @dataclass
-class DoubleBottom:
-    """A detected double-bottom pattern."""
-    idx1: int               # DataFrame index of first bottom
-    idx2: int               # DataFrame index of second bottom
-    ts1: str                # Timestamp of first bottom
-    ts2: str                # Timestamp of second bottom
-    low1: float             # Price at first bottom
-    low2: float             # Price at second bottom
-    neckline: float         # Highest high between the two bottoms
+class DoubleTop:
+    """A detected double-top pattern."""
+    idx1: int               # DataFrame index of first top
+    idx2: int               # DataFrame index of second top
+    ts1: str                # Timestamp of first top
+    ts2: str                # Timestamp of second top
+    high1: float            # Price at first top
+    high2: float            # Price at second top
+    neckline: float         # Lowest low between the two tops
     neckline_idx: int       # DataFrame index of the neckline bar
-    depth_pct: float        # (neckline - avg_bottom) / neckline * 100
-    width_bars: int         # Number of bars between the two bottoms
-    confirmed: bool         # True if price closed above the neckline after bottom 2
+    depth_pct: float        # (avg_top - neckline) / avg_top * 100
+    width_bars: int         # Number of bars between the two tops
+    confirmed: bool         # True if price closed below the neckline after top 2
 
     # Local extrema before the pattern
     min_before_val: float | None = None
@@ -104,20 +104,20 @@ def _extrema_after(
     return min_val, min_ts, max_val, max_ts
 
 
-def detect_double_bottoms(
+def detect_double_tops(
     df: pd.DataFrame,
     window: int = 5,
     tolerance_pct: float = 0.3,
     min_width: int = 5,
 ) -> tuple[pd.DataFrame, float | None, float | None]:
-    """Scan *df* for double-bottom patterns.
+    """Scan *df* for double-top patterns.
 
     Parameters
     ----------
     df : DataFrame with columns Low, High, Close, Timestamp
-    window : rolling window size for local-minima detection
-    tolerance_pct : max % difference between the two bottoms
-    min_width : minimum bars between the two bottoms
+    window : rolling window size for local-maxima detection
+    tolerance_pct : max % difference between the two tops
+    min_width : minimum bars between the two tops
 
     Returns
     -------
@@ -132,14 +132,14 @@ def detect_double_bottoms(
 
     minima = find_local_minima(lows, window)
     maxima = find_local_maxima(highs, window)
-    patterns: list[DoubleBottom] = []
+    patterns: list[DoubleTop] = []
 
-    for a, b in zip(minima, minima[1:]):
-        low1, low2 = lows.iloc[a], lows.iloc[b]
-        avg_low = (low1 + low2) / 2
+    for a, b in zip(maxima, maxima[1:]):
+        high1, high2 = highs.iloc[a], highs.iloc[b]
+        avg_high = (high1 + high2) / 2
 
         # ── Tolerance check ──
-        diff_pct = abs(low1 - low2) / avg_low * 100
+        diff_pct = abs(high1 - high2) / avg_high * 100
         if diff_pct > tolerance_pct:
             continue
 
@@ -148,21 +148,21 @@ def detect_double_bottoms(
         if width < min_width:
             continue
 
-        # ── Neckline: highest high between the two bottoms ──
-        between = highs.iloc[a + 1 : b]
+        # ── Neckline: lowest low between the two tops ──
+        between = lows.iloc[a + 1 : b]
         if between.empty:
             continue
-        neckline_idx = int(between.idxmax())
-        neckline = float(highs.iloc[neckline_idx])
+        neckline_idx = int(between.idxmin())
+        neckline = float(lows.iloc[neckline_idx])
 
-        # ── Depth: the neckline must be meaningfully above the bottoms ──
-        depth_pct = (neckline - avg_low) / neckline * 100
+        # ── Depth: the tops must be meaningfully above the neckline ──
+        depth_pct = (avg_high - neckline) / avg_high * 100
         if depth_pct < 0.1:
             continue
 
-        # ── Confirmation: did price close above the neckline after bottom 2? ──
+        # ── Confirmation: did price close below the neckline after top 2? ──
         remaining = closes.iloc[b + 1 :]
-        confirmed = bool((remaining > neckline).any()) if not remaining.empty else False
+        confirmed = bool((remaining < neckline).any()) if not remaining.empty else False
 
         ts1 = str(timestamps.iloc[a])
         ts2 = str(timestamps.iloc[b])
@@ -174,10 +174,10 @@ def detect_double_bottoms(
             minima, maxima, b, lows, highs, timestamps,
         )
 
-        patterns.append(DoubleBottom(
+        patterns.append(DoubleTop(
             idx1=a, idx2=b,
             ts1=ts1, ts2=ts2,
-            low1=round(low1, 5), low2=round(low2, 5),
+            high1=round(high1, 5), high2=round(high2, 5),
             neckline=round(neckline, 5),
             neckline_idx=neckline_idx,
             depth_pct=round(depth_pct, 3),
@@ -189,28 +189,28 @@ def detect_double_bottoms(
             max_after_val=max_after_val, max_after_ts=max_after_ts,
         ))
 
-    # ── Check for potential forming double bottom at the right edge ──
-    if minima:
-        a = minima[-1]
+    # ── Check for potential forming double top at the right edge ──
+    if maxima:
+        a = maxima[-1]
         if a + 1 < len(df):
-            b = int(lows.iloc[a + 1 :].idxmin())
-            if b not in minima:
-                low1, low2 = float(lows.iloc[a]), float(lows.iloc[b])
-                avg_low = (low1 + low2) / 2
-                diff_pct = abs(low1 - low2) / avg_low * 100
+            b = int(highs.iloc[a + 1 :].idxmax())
+            if b not in maxima:
+                high1, high2 = float(highs.iloc[a]), float(highs.iloc[b])
+                avg_high = (high1 + high2) / 2
+                diff_pct = abs(high1 - high2) / avg_high * 100
 
                 if diff_pct <= tolerance_pct:
                     width = b - a
                     if width >= min_width:
-                        between = highs.iloc[a + 1 : b]
+                        between = lows.iloc[a + 1 : b]
                         if not between.empty:
-                            neckline_idx = int(between.idxmax())
-                            neckline = float(highs.iloc[neckline_idx])
-                            depth_pct = (neckline - avg_low) / neckline * 100
+                            neckline_idx = int(between.idxmin())
+                            neckline = float(lows.iloc[neckline_idx])
+                            depth_pct = (avg_high - neckline) / avg_high * 100
 
                             if depth_pct >= 0.1:
                                 remaining = closes.iloc[b + 1 :]
-                                confirmed = bool((remaining > neckline).any()) if not remaining.empty else False
+                                confirmed = bool((remaining < neckline).any()) if not remaining.empty else False
                                 ts1 = str(timestamps.iloc[a])
                                 ts2 = str(timestamps.iloc[b])
 
@@ -218,10 +218,10 @@ def detect_double_bottoms(
                                     minima, maxima, a, lows, highs, timestamps,
                                 )
 
-                                patterns.append(DoubleBottom(
+                                patterns.append(DoubleTop(
                                     idx1=a, idx2=b,
                                     ts1=ts1, ts2=ts2,
-                                    low1=round(low1, 5), low2=round(low2, 5),
+                                    high1=round(high1, 5), high2=round(high2, 5),
                                     neckline=round(neckline, 5),
                                     neckline_idx=neckline_idx,
                                     depth_pct=round(depth_pct, 3),
@@ -239,11 +239,11 @@ def detect_double_bottoms(
     return patterns_to_frame(patterns), latest_min, latest_max
 
 
-def patterns_to_frame(patterns: list[DoubleBottom]) -> pd.DataFrame:
-    """Convert a list of DoubleBottom instances to a DataFrame."""
+def patterns_to_frame(patterns: list[DoubleTop]) -> pd.DataFrame:
+    """Convert a list of DoubleTop instances to a DataFrame."""
     if not patterns:
         return pd.DataFrame(columns=[
-            "idx1", "idx2", "ts1", "ts2", "low1", "low2",
+            "idx1", "idx2", "ts1", "ts2", "high1", "high2",
             "neckline", "neckline_idx", "depth_pct", "width_bars", "confirmed",
             "min_before_val", "min_before_ts", "max_before_val", "max_before_ts",
             "min_after_val", "min_after_ts", "max_after_val", "max_after_ts",
