@@ -48,12 +48,12 @@ def _price_snapshot_root(time_window_minutes: int) -> str:
 
 def _ta_snapshot_root(time_window_minutes: int) -> str:
     if time_window_minutes == MONTH_MINUTES:
-        return "marketdata/eom-ta-snapshot"
+        return "ta/eom-ta-snapshot"
     if time_window_minutes == WEEK_MINUTES:
-        return "marketdata/eow-ta-snapshot"
+        return "ta/eow-ta-snapshot"
     if time_window_minutes == HOUR_MINUTES:
-        return "marketdata/eoh-ta-snapshot"
-    return "marketdata/eod-ta-snapshot"
+        return "ta/eoh-ta-snapshot"
+    return "ta/eod-ta-snapshot"
 
 
 def _build_snapshot_key(root: str, fx_symbol: str, interval: str, dt: datetime,
