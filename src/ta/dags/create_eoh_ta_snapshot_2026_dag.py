@@ -9,10 +9,10 @@ from datetime import datetime, timedelta
 
 from airflow.sdk import DAG
 from airflow.operators.empty import EmptyOperator
-from airflow.operators.python import BranchPythonOperator
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
-from airflow.sensors.external_task import ExternalTaskSensor
-from airflow.utils.trigger_rule import TriggerRule
+from airflow.providers.standard.operators.python import BranchPythonOperator
+from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
+from airflow.task.trigger_rule import TriggerRule
 from kubernetes.client import models as k8s
 
 default_args = {
@@ -24,7 +24,7 @@ default_args = {
 
 _ECR_IMAGE = (
     "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
-    "/forex-marketdata-download-interval-price-data:latest"
+    "/forex-ta-snapshot:latest"
 )
 
 _INTERVALS = ["M1", "M5", "M15"]
