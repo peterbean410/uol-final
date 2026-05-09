@@ -92,10 +92,8 @@ with DAG(
                     secret_ref=k8s.V1SecretEnvSource(name="airflow-s3-marketdata")
                 ),
             ],
-            container_resources=k8s.V1ResourceRequirements(
-                requests={"cpu": "100m", "memory": "256Mi"},
-                limits={"cpu": "500m", "memory": "512Mi"},
-            ),
+            container_resources={"requests": {"cpu": "100m", "memory": "256Mi"},
+                                "limits": {"cpu": "500m", "memory": "512Mi"}},
             is_delete_operator_pod=True,
             get_logs=True,
             trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
