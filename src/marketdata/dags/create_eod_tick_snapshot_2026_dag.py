@@ -105,8 +105,8 @@ with DAG(
             ),
         ],
         container_resources=k8s.V1ResourceRequirements(
-            requests={"cpu": "200m", "memory": "512Mi"},
-            limits={"cpu": "1000m", "memory": "2Gi"},
+            requests={"cpu": "200m", "memory": "1Gi"},
+            limits={"cpu": "1000m", "memory": "8Gi"},
         ),
         is_delete_operator_pod=True,
         get_logs=True,
