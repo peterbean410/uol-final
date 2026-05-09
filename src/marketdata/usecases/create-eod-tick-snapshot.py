@@ -13,6 +13,7 @@ Environment variables:
 
 import io
 import os
+import tracemalloc
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -20,6 +21,13 @@ import pandas as pd
 from botocore.exceptions import ClientError
 
 from commons.python.appconfig import AppConfig
+
+tracemalloc.start()
+
+
+def _log_memory(label: str) -> None:
+    current, peak = tracemalloc.get_traced_memory()
+    print(f"[MEM] {label}: current={current / 1024 / 1024:.1f}MB peak={peak / 1024 / 1024:.1f}MB")
 
 TICK_DEDUP_KEYS = ["Timestamp", "Symbol", "Type"]
 
@@ -92,20 +100,25 @@ def create_snapshot(fx_symbol: str, end_dt: datetime, s3, bucket: str) -> pd.Dat
     current_prefix = _partition_prefix(fx_symbol, end_dt)
     print(f"Loading current partition: {current_prefix}")
     df_current = _load_partition(s3, bucket, current_prefix)
+    _log_memory("after loading current partition")
 
     prev_snapshot_key = _build_snapshot_key(fx_symbol, end_dt - timedelta(days=1))
     print(f"Loading previous snapshot: {prev_snapshot_key}")
     df_previous = _load_snapshot_file(s3, bucket, prev_snapshot_key)
+    _log_memory("after loading previous snapshot")
 
     df = pd.concat([df_previous, df_current], ignore_index=True)
+    _log_memory("after concat")
 
     if df.empty:
         print("No data found in either partition.")
         return df
 
     df.drop_duplicates(subset=TICK_DEDUP_KEYS, keep="last", inplace=True)
+    _log_memory("after dedup")
     df.sort_values("Timestamp", inplace=True)
     df.reset_index(drop=True, inplace=True)
+    _log_memory("after sort + reset_index")
 
     key = _build_snapshot_key(fx_symbol, end_dt)
     _upload_to_s3(df, bucket, key, s3)
