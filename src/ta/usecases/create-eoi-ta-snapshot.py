@@ -21,7 +21,6 @@ import boto3
 import pandas as pd
 from botocore.exceptions import ClientError
 
-from commons.python.appconfig import AppConfig
 from ta.momentum import cci, rsi
 from ta.patterns import doublebottom, doubletop
 from ta.support import fr
@@ -149,11 +148,11 @@ def create_ta_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
 
 
 if __name__ == "__main__":
-    config = AppConfig()
     fx_symbol = os.environ.get("FX_SYMBOL", "USDJPY")
     interval = os.environ.get("INTERVAL", "M15")
     execution_ts = os.environ.get("EXECUTION_TS")
     time_window = int(os.environ.get("TIME_WINDOW_IN_MINUTES", "60"))
+    bucket = os.environ.get("S3_BUCKET", "")
 
     end_dt = (
         datetime.fromisoformat(execution_ts).astimezone(timezone.utc)
@@ -162,6 +161,5 @@ if __name__ == "__main__":
     )
 
     s3 = boto3.client("s3")
-    bucket = str(config.s3_bucket)
 
     create_ta_snapshot(fx_symbol, interval, end_dt, time_window, s3, bucket)
