@@ -4,7 +4,7 @@ use anyhow::Result;
 use modelenv_core::{
     broker_gateway::create_broker_gateway_instance, config::Mode, environment::Environment,
 };
-use modelenv_proto::{Action, ActionType, ObserveRequest, ResetRequest};
+use modelenv_proto::{Action, ActionType, FillSide, ObserveRequest, ResetRequest};
 
 fn create_mock_ctrader_gateway(
 ) -> Result<Arc<dyn modelenv_core::broker_gateway::BrokerGateway + Send + Sync>> {
@@ -30,7 +30,7 @@ async fn ctrader_gateway_trait_returns_mock_api_responses() -> Result<()> {
     let ticks = gateway.current_ticks("USDJPY").await?;
     let fill = gateway
         .submit(&Action {
-            action: ActionType::ActionOpenBuy as i32,
+            action: ActionType::ActionBuy1 as i32,
             client_order_id: "integration-order".to_string(),
         })
         .await?;
@@ -43,7 +43,7 @@ async fn ctrader_gateway_trait_returns_mock_api_responses() -> Result<()> {
         .windows(2)
         .all(|window| window[0].timestamp_ns < window[1].timestamp_ns));
     assert_eq!(fill.order_id, "order-USDJPY-integration-order");
-    assert_eq!(fill.side, ActionType::ActionOpenBuy as i32);
+    assert_eq!(fill.side, FillSide::Buy as i32);
     assert_eq!(fill.size, 1.0);
 
     Ok(())
@@ -74,7 +74,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
 
     let step_response = environment
         .step(Action {
-            action: ActionType::ActionOpenBuy as i32,
+            action: ActionType::ActionBuy1 as i32,
             client_order_id: "live-step-order".to_string(),
         })
         .await?;
@@ -88,7 +88,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
     );
     assert_eq!(
         step_observation.recent_fills[0].side,
-        ActionType::ActionOpenBuy as i32
+        FillSide::Buy as i32
     );
     assert!(step_observation.live_bars.contains_key("M1"));
     assert!(!step_observation.live_ticks.is_empty());

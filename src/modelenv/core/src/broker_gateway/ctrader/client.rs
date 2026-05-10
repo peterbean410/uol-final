@@ -555,18 +555,17 @@ impl CtraderClient {
             )
         })?;
 
-        // Determine order type based on action
-        let (order_type, _trade_side) = match action_type {
+        // Determine order type and volume based on action
+        let (order_type, _trade_side, volume) = match action_type {
             modelenv_proto::ActionType::ActionHold => {
                 return Err(anyhow!(
                     "ValidationError {{ field: action, details: hold actions do not submit broker orders }}"
                 ));
             }
-            modelenv_proto::ActionType::ActionOpenBuy => ("BUY", 1),
-            modelenv_proto::ActionType::ActionCloseMostLoss
-            | modelenv_proto::ActionType::ActionCloseMostProfit
-            | modelenv_proto::ActionType::ActionCloseAllLoss
-            | modelenv_proto::ActionType::ActionCloseAllProfit => ("CLOSE", 0),
+            modelenv_proto::ActionType::ActionBuy1 => ("BUY", 1, 1.0),
+            modelenv_proto::ActionType::ActionBuy2 => ("BUY", 1, 2.0),
+            modelenv_proto::ActionType::ActionSell1 => ("SELL", 2, 1.0),
+            modelenv_proto::ActionType::ActionSell2 => ("SELL", 2, 2.0),
         };
 
         // Build the order request using ProtoOAOpenPositionReq
@@ -576,8 +575,8 @@ impl CtraderClient {
             .clone()
             .ok_or_else(|| anyhow!("No session ID available"))?;
 
-        // For now, use a default volume of 1.0 (100 units in cTrader API)
-        let _volume = 100; // 1.0 units * 100
+        // Volume in cTrader API units (1.0 = 100)
+        let _volume = (volume * 100.0) as i64;
 
         // Create a unique client order ID for the cTrader API
         let _client_id = format!("{}-{}", self.symbol, action.client_order_id);
@@ -622,12 +621,22 @@ impl CtraderClient {
         // };
 
         // For now, simulate successful execution
+        let fill_side = match action_type {
+            modelenv_proto::ActionType::ActionBuy1 | modelenv_proto::ActionType::ActionBuy2 => {
+                modelenv_proto::FillSide::Buy
+            }
+            modelenv_proto::ActionType::ActionSell1 | modelenv_proto::ActionType::ActionSell2 => {
+                modelenv_proto::FillSide::Sell
+            }
+            _ => modelenv_proto::FillSide::Buy, // unreachable: HOLD is rejected above
+        };
+
         let execution_bar = self.current_bar(&self.symbol.clone()).await?;
         let execution_price = execution_bar.close;
 
         info!(
-            "Order {} executed at {:.5} for 1.0 volume (type: {})",
-            action.client_order_id, execution_price, order_type
+            "Order {} executed at {:.5} for {:.1} volume (type: {})",
+            action.client_order_id, execution_price, volume, order_type
         );
         Ok(modelenv_proto::Fill {
             order_id: format!("order-{}-{}", self.symbol, action.client_order_id),
@@ -636,8 +645,8 @@ impl CtraderClient {
                 .unwrap_or_default()
                 .as_nanos() as i64,
             price: execution_price,
-            size: 1.0,
-            side: action.action as i32,
+            size: volume,
+            side: fill_side as i32,
             partial: false,
         })
     }
@@ -862,7 +871,7 @@ unsafe impl Sync for CtraderClient {}
 #[cfg(test)]
 mod tests {
     use super::{CtraderClient, SwapRates, SWAP_RATE_CACHE_TTL};
-    use modelenv_proto::{Action, ActionType};
+    use modelenv_proto::{Action, ActionType, FillSide};
     use std::time::{Duration, SystemTime};
 
     fn test_client(symbol: &str) -> CtraderClient {
@@ -1020,14 +1029,14 @@ mod tests {
 
         let fill = client
             .submit_order(&Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: "order-1".to_string(),
             })
             .await
             .unwrap();
 
         assert_eq!(fill.order_id, "order-USDJPY-order-1");
-        assert_eq!(fill.side, ActionType::ActionOpenBuy as i32);
+        assert_eq!(fill.side, FillSide::Buy as i32);
         assert!(fill.price > 100.0);
         assert_eq!(fill.size, 1.0);
         assert!(!fill.partial);
@@ -1040,7 +1049,7 @@ mod tests {
 
         let empty_id_err = client
             .submit_order(&Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: "   ".to_string(),
             })
             .await
@@ -1066,7 +1075,7 @@ mod tests {
 
         client
             .queue_action(Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: "queued-order".to_string(),
             })
             .await;

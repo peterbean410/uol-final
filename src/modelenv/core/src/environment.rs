@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use log::info;
 use modelenv_proto::{
-    Action, ActionType, Bar, BarList, Observation, ObserveRequest, ResetRequest, StepResponse,
-    Tick,
+    Action, ActionType, Bar, BarList, FillSide, Observation, ObserveRequest, ResetRequest,
+    StepResponse, Tick,
 };
 
 use crate::broker_gateway::BrokerGateway;
@@ -62,7 +62,7 @@ pub struct Fill {
     pub timestamp_ns: i64,
     pub price: f64,
     pub size: f64,
-    pub side: ActionType,
+    pub side: FillSide,
     pub partial: bool,
 }
 
@@ -530,9 +530,9 @@ impl Environment {
                         timestamp_ns: fill.timestamp_ns,
                         price,
                         size,
-                        side: match ActionType::try_from(fill.side) {
-                            Ok(action_type) => action_type,
-                            Err(_) => ActionType::ActionHold,
+                        side: match FillSide::try_from(fill.side) {
+                            Ok(s) => s,
+                            Err(_) => FillSide::Buy,
                         },
                         partial,
                     });
@@ -730,29 +730,19 @@ impl Environment {
     fn apply_action(&mut self, action: &Action) -> Result<()> {
         match action.action() {
             ActionType::ActionHold => {
-                // Hold - take no action
-                // But we need to accrue swap on open positions
                 self.accrue_swap_on_positions()?;
             }
-            ActionType::ActionOpenBuy => {
-                // Open a new buy position
-                self.open_position(1.0, Side::Buy)?; // Default volume
+            ActionType::ActionBuy1 => {
+                self.open_position(1.0, Side::Buy)?;
             }
-            ActionType::ActionCloseMostLoss => {
-                // Close the position with the largest unrealised loss
-                self.close_most_loss()?;
+            ActionType::ActionBuy2 => {
+                self.open_position(2.0, Side::Buy)?;
             }
-            ActionType::ActionCloseMostProfit => {
-                // Close the position with the largest unrealised profit
-                self.close_most_profit()?;
+            ActionType::ActionSell1 => {
+                self.open_position(1.0, Side::Sell)?;
             }
-            ActionType::ActionCloseAllLoss => {
-                // Close all positions at a loss
-                self.close_all_loss()?;
-            }
-            ActionType::ActionCloseAllProfit => {
-                // Close all positions that are profitable
-                self.close_all_profit()?;
+            ActionType::ActionSell2 => {
+                self.open_position(2.0, Side::Sell)?;
             }
         }
         Ok(())
@@ -838,151 +828,6 @@ impl Environment {
         }
     }
 
-    /// Close the position with the largest unrealised loss
-    fn close_most_loss(&mut self) -> Result<()> {
-        if self.positions.is_empty() {
-            return Ok(());
-        }
-
-        // Find the position with the largest unrealised loss
-        let positions_to_close: Vec<Position> = self
-            .positions
-            .iter()
-            .filter(|p| p.unrealised_pnl < 0.0)
-            .cloned()
-            .collect();
-
-        if positions_to_close.is_empty() {
-            return Ok(()); // No positions at a loss
-        }
-
-        // Find the minimum unrealised P/L
-        let min_pnl = positions_to_close
-            .iter()
-            .map(|p| p.unrealised_pnl)
-            .fold(f64::INFINITY, f64::min);
-
-        // Close all positions with the minimum P/L
-        let positions_to_close: Vec<Position> = self
-            .positions
-            .iter()
-            .filter(|p| p.unrealised_pnl == min_pnl)
-            .cloned()
-            .collect();
-
-        for position in positions_to_close {
-            self.close_position(&position)?;
-        }
-
-        Ok(())
-    }
-
-    /// Close the position with the largest unrealised profit
-    fn close_most_profit(&mut self) -> Result<()> {
-        if self.positions.is_empty() {
-            return Ok(());
-        }
-
-        // Find the position with the largest unrealised profit
-        let positions_to_close: Vec<Position> = self
-            .positions
-            .iter()
-            .filter(|p| p.unrealised_pnl > 0.0)
-            .cloned()
-            .collect();
-
-        if positions_to_close.is_empty() {
-            return Ok(()); // No positions at a profit
-        }
-
-        // Find the maximum unrealised P/L
-        let max_pnl = positions_to_close
-            .iter()
-            .map(|p| p.unrealised_pnl)
-            .fold(f64::NEG_INFINITY, f64::max);
-
-        // Close all positions with the maximum P/L
-        let positions_to_close: Vec<Position> = self
-            .positions
-            .iter()
-            .filter(|p| p.unrealised_pnl == max_pnl)
-            .cloned()
-            .collect();
-
-        for position in positions_to_close {
-            self.close_position(&position)?;
-        }
-
-        Ok(())
-    }
-
-    /// Close all positions at a loss
-    fn close_all_loss(&mut self) -> Result<()> {
-        let positions_to_close: Vec<Position> = self
-            .positions
-            .iter()
-            .filter(|p| p.unrealised_pnl < 0.0)
-            .cloned()
-            .collect();
-
-        for position in positions_to_close {
-            self.close_position(&position)?;
-        }
-
-        Ok(())
-    }
-
-    /// Close all positions that are profitable
-    fn close_all_profit(&mut self) -> Result<()> {
-        let positions_to_close: Vec<Position> = self
-            .positions
-            .iter()
-            .filter(|p| p.unrealised_pnl > 0.0)
-            .cloned()
-            .collect();
-
-        for position in positions_to_close {
-            self.close_position(&position)?;
-        }
-
-        Ok(())
-    }
-
-    /// Close a specific position
-    fn close_position(&mut self, position: &Position) -> Result<()> {
-        let current_timestamp = self.current_timestamp();
-        let close_price = self.get_current_mid_price()?;
-
-        // Calculate realised P/L
-        let _realised_pnl = position.calculate_realised_pnl(close_price, self.transaction_cost);
-
-        // Create closed position record
-        let closed_position =
-            position.to_closed_position(close_price, current_timestamp, self.transaction_cost);
-
-        // Add to closed position window
-        self.closed_position_window
-            .add_closed_position(closed_position);
-
-        // Remove from open positions
-        self.positions
-            .retain(|p| p.position_id != position.position_id);
-
-        // Record the fill
-        self.recent_fills.push(Fill {
-            order_id: format!("fill_{}", current_timestamp),
-            timestamp_ns: current_timestamp,
-            price: close_price,
-            size: position.volume,
-            side: match position.side {
-                Side::Buy => ActionType::ActionCloseMostLoss, // Placeholder for closing
-                Side::Sell => ActionType::ActionCloseMostProfit, // Placeholder for closing
-            },
-            partial: false,
-        });
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -1096,7 +941,7 @@ mod tests {
                 timestamp_ns: 1,
                 price: 155.21,
                 size: 1.0,
-                side: ActionType::ActionOpenBuy as i32,
+                side: FillSide::Buy as i32,
                 partial: false,
             })
         }
@@ -1448,7 +1293,7 @@ mod tests {
 
         let second = environment
             .step(Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: "buy-1".to_string(),
             })
             .await
@@ -1486,7 +1331,21 @@ mod tests {
             observation.indicators.len(),
             TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL
         );
-        assert!(observation.indicators.iter().all(|v| *v == 0.0));
+        // MockBrokerGateway returns 1 bar per interval, so:
+        // - Pattern indicators (indices 0, 1) should be 0.0 (not enough bars for patterns)
+        // - Most technical indicators will be NaN (insufficient data)
+        // - Fibonacci retracements (indices 22-28) will have valid values (min_periods=1)
+        for interval_idx in 0..TIME_INTERVALS.len() {
+            let base = interval_idx * INDICATORS_PER_INTERVAL;
+            // Index 0: double_bottom_score should be 0.0 (needs more bars)
+            assert_eq!(observation.indicators[base], 0.0, "double_bottom_score should be 0.0 with 1 bar");
+            // Index 1: double_top_score should be 0.0 (needs more bars)
+            assert_eq!(observation.indicators[base + 1], 0.0, "double_top_score should be 0.0 with 1 bar");
+            // Fibonacci retracements (indices 22-28) should have valid values due to min_periods=1
+            for i in 22..INDICATORS_PER_INTERVAL {
+                assert!(!observation.indicators[base + i].is_nan(), "Fibonacci index {} should not be NaN with 1 bar", i);
+            }
+        }
     }
 
     #[tokio::test]
@@ -1616,7 +1475,7 @@ mod tests {
                 timestamp_ns: i as i64,
                 price: 100.0 + i as f64,
                 size: 1.0,
-                side: ActionType::ActionOpenBuy,
+                side: FillSide::Buy,
                 partial: false,
             });
         }
@@ -1672,14 +1531,14 @@ mod tests {
 
         let second = environment
             .step(Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: "buy-1".to_string(),
             })
             .await
             .unwrap();
 
         assert!(second.reward < -0.9);
-        assert_eq!(environment.last_action, Some(ActionType::ActionOpenBuy));
+        assert_eq!(environment.last_action, Some(ActionType::ActionBuy1));
     }
 
     #[test]

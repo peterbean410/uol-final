@@ -442,7 +442,7 @@ impl BrokerGateway for CtraderBrokerGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelenv_proto::Action;
+    use modelenv_proto::{Action, FillSide};
 
     fn test_gateway(symbol: &str) -> CtraderBrokerGateway {
         CtraderBrokerGateway::new(
@@ -483,13 +483,13 @@ mod tests {
 
         let fill = gateway
             .submit(&Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: "order-1".to_string(),
             })
             .await
             .unwrap();
 
-        assert_eq!(fill.side, ActionType::ActionOpenBuy as i32);
+        assert_eq!(fill.side, FillSide::Buy as i32);
         assert!(fill.price > 100.0);
         assert!(gateway.client.lock().await.is_connected());
     }
@@ -536,7 +536,7 @@ mod tests {
 
         let err = gateway
             .submit(&Action {
-                action: ActionType::ActionOpenBuy as i32,
+                action: ActionType::ActionBuy1 as i32,
                 client_order_id: " ".to_string(),
             })
             .await

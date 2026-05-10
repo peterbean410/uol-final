@@ -17,11 +17,15 @@ enum Mode {
 
 enum ActionType {
   ACTION_HOLD = 0;
-  ACTION_OPEN_BUY = 1;
-  ACTION_CLOSE_MOST_LOSS = 2;
-  ACTION_CLOSE_MOST_PROFIT = 3;
-  ACTION_CLOSE_ALL_LOSS = 4;
-  ACTION_CLOSE_ALL_PROFIT = 5;
+  ACTION_BUY_1 = 1;
+  ACTION_BUY_2 = 2;
+  ACTION_SELL_1 = 3;
+  ACTION_SELL_2 = 4;
+}
+
+enum FillSide {
+  FILL_SIDE_BUY = 0;
+  FILL_SIDE_SELL = 1;
 }
 
 enum TimeInterval {
@@ -77,7 +81,7 @@ message Fill {
   int64 timestamp_ns = 2;
   double price = 3;
   double size = 4;
-  ActionType side = 5;
+  FillSide side = 5;
   bool partial = 6;
 }
 
