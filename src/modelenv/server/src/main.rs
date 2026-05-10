@@ -29,7 +29,8 @@ fn build_environment(config: &Config) -> Environment {
     .with_local_cache_dir(config.local_cache_dir.clone())
     .with_reward_lambda(config.reward_lambda)
     .with_reward_action_penalty(config.reward_action_penalty)
-    .with_reward_holding_penalty(config.reward_holding_penalty);
+    .with_reward_holding_penalty(config.reward_holding_penalty)
+    .with_disable_hedging(config.disable_hedging);
 
     if let Some(price_snapshot_ts) = config.price_snapshot_ts {
         environment = environment.with_price_snapshot_ts(price_snapshot_ts);

@@ -159,6 +159,8 @@ pub struct Config {
     pub reward_lambda: f64,
     pub reward_action_penalty: f64,
     pub reward_holding_penalty: f64,
+    /// When true, close opposite-side positions before opening new ones (no hedging)
+    pub disable_hedging: bool,
 }
 
 impl Default for Config {
@@ -174,6 +176,7 @@ impl Default for Config {
             reward_lambda: 1.0,
             reward_action_penalty: 0.001,
             reward_holding_penalty: 1e-6,
+            disable_hedging: true,
         }
     }
 }
@@ -463,6 +466,15 @@ impl Config {
                 self.reward_holding_penalty = value;
             }
         }
+
+        if let Some(disable_hedging_env) =
+            Self::non_empty_env(env_get, "MODELENV_DISABLE_HEDGING")
+        {
+            self.disable_hedging = matches!(
+                disable_hedging_env.to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
     }
 
     fn non_empty_env<F>(env_get: &F, key: &str) -> Option<String>
@@ -559,6 +571,7 @@ impl Config {
         info!("Reward Lambda: {}", self.reward_lambda);
         info!("Reward Action Penalty: {}", self.reward_action_penalty);
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
+        info!("Disable Hedging: {}", self.disable_hedging);
 
         if let Some(ref broker_gateway) = self.broker_gateway.broker_gateway {
             info!("Broker Gateway: {}", broker_gateway);
@@ -810,5 +823,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.local_cache_dir, "/cli/cache");
+    }
+
+    #[test]
+    fn disable_hedging_defaults_to_true() {
+        let config = load_test_config(&["modelenv-server"], &[]).unwrap();
+        assert!(config.disable_hedging);
+    }
+
+    #[test]
+    fn disable_hedging_parses_true_variants() {
+        for value in &["1", "true", "yes", "on", "TRUE", "Yes"] {
+            let config = load_test_config(
+                &["modelenv-server"],
+                &[("MODELENV_DISABLE_HEDGING", value)],
+            )
+            .unwrap();
+            assert!(config.disable_hedging, "value={value}");
+        }
+    }
+
+    #[test]
+    fn disable_hedging_ignores_unrecognised_values() {
+        let config = load_test_config(
+            &["modelenv-server"],
+            &[("MODELENV_DISABLE_HEDGING", "maybe")],
+        )
+        .unwrap();
+        assert!(!config.disable_hedging);
     }
 }

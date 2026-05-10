@@ -46,6 +46,7 @@ pub struct Environment {
     reward_lambda: f64,
     reward_action_penalty: f64,
     reward_holding_penalty: f64,
+    disable_hedging: bool,
     // Track previous step's total equity for delta_V_t calculation
     prev_total_equity: Option<f64>,
     // Running statistics for reward normalisation
@@ -89,6 +90,7 @@ impl Environment {
             reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
             reward_action_penalty: 0.001, // Default action penalty (scaled to USD/JPY spread)
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
+            disable_hedging: true,
             prev_total_equity: None,
             reward_running_sum: 0.0,
             reward_running_sum_sq: 0.0,
@@ -131,6 +133,11 @@ impl Environment {
 
     pub fn with_reward_holding_penalty(mut self, reward_holding_penalty: f64) -> Self {
         self.reward_holding_penalty = reward_holding_penalty;
+        self
+    }
+
+    pub fn with_disable_hedging(mut self, disable_hedging: bool) -> Self {
+        self.disable_hedging = disable_hedging;
         self
     }
 
@@ -543,29 +550,15 @@ impl Environment {
                     );
                 }
 
-                // Update positions based on broker response
-                // Get current bar to calculate P/L
-                let broker = self.get_broker_gateway()?;
-                let current_bar = broker.current_bar(&self.symbol).await?;
+                // Sync positions from broker and reconcile before splitting
+                let broker_positions = {
+                    let broker = self.get_broker_gateway()?;
+                    broker.sync_positions(&self.symbol).await?
+                };
 
-                // Update unrealised P/L for all positions based on current bar
-                let current_mid_price = (current_bar.open + current_bar.close) / 2.0;
-                for position in &mut self.positions {
-                    position.unrealised_pnl = position.calculate_unrealised_pnl(current_mid_price);
-                }
-
-                // Reconcile with broker positions
-                // Get broker positions for reconciliation
-                let broker = self.get_broker_gateway()?;
-                let broker_positions = broker.sync_positions(&self.symbol).await?;
-
-                // Get broker's reported realised P/L
-                // Note: The broker gateway doesn't currently provide realised P/L
-                // For now, we'll use 0.0 as a placeholder and log if reconciliation shows discrepancy
-                let broker_realised_pnl = 0.0; // TODO: Add method to get broker realised P/L
+                // Reconcile internal positions against broker positions
+                let broker_realised_pnl = 0.0;
                 let realised_pnl_12m = self.realised_pnl_12m();
-
-                // Perform reconciliation - this logs warnings for discrepancies
                 reconcile_positions(
                     &self
                         .positions
@@ -576,6 +569,44 @@ impl Environment {
                     realised_pnl_12m,
                     broker_realised_pnl,
                 );
+
+                // Replace internal positions with broker state, split to
+                // 1-unit chunks when hedging is disabled so reduce_side can
+                // net individual units (matching training-mode behaviour).
+                if self.disable_hedging {
+                    let mut split = Vec::new();
+                    for bp in &broker_positions {
+                        let side = match bp.side {
+                            0 => Side::Buy,
+                            _ => Side::Sell,
+                        };
+                        let count = bp.volume as usize;
+                        for i in 0..count {
+                            split.push(Position::new(
+                                format!("{}_{}", bp.position_id, i),
+                                bp.entry_price,
+                                0.0, // spread already baked into broker entry price
+                                1.0,
+                                side,
+                                bp.open_timestamp_ns,
+                            ));
+                        }
+                    }
+                    self.positions = split;
+                } else {
+                    self.positions = broker_positions
+                        .iter()
+                        .map(Position::from_proto)
+                        .collect();
+                }
+
+                // Update unrealised P/L based on current broker price
+                let broker = self.get_broker_gateway()?;
+                let current_bar = broker.current_bar(&self.symbol).await?;
+                let current_mid_price = (current_bar.open + current_bar.close) / 2.0;
+                for position in &mut self.positions {
+                    position.unrealised_pnl = position.calculate_unrealised_pnl(current_mid_price);
+                }
 
                 let observation = self.build_live_observation(self.symbol.clone()).await?;
 
@@ -732,19 +763,97 @@ impl Environment {
             ActionType::ActionHold => {
                 self.accrue_swap_on_positions()?;
             }
-            ActionType::ActionBuy1 => {
-                self.open_position(1.0, Side::Buy)?;
+            ActionType::ActionBuy1 => self.net_open(1.0, Side::Buy)?,
+            ActionType::ActionBuy2 => self.net_open(2.0, Side::Buy)?,
+            ActionType::ActionSell1 => self.net_open(1.0, Side::Sell)?,
+            ActionType::ActionSell2 => self.net_open(2.0, Side::Sell)?,
+        }
+        Ok(())
+    }
+
+    /// Open `volume` on `side`. When hedging is disabled, first reduce
+    /// opposite-side positions by `volume` (LIFO: newest first), then open
+    /// any remainder on the desired side.
+    fn net_open(&mut self, volume: f64, side: Side) -> Result<()> {
+        if self.disable_hedging {
+            let opposite = match side {
+                Side::Buy => Side::Sell,
+                Side::Sell => Side::Buy,
+            };
+            let remaining = self.reduce_side(opposite, volume)?;
+            if remaining > 0.0 {
+                self.open_position(remaining, side)?;
             }
-            ActionType::ActionBuy2 => {
-                self.open_position(2.0, Side::Buy)?;
+        } else {
+            self.open_position(volume, side)?;
+        }
+        Ok(())
+    }
+
+    /// Reduce positions of `side` by up to `volume` units (LIFO: newest
+    /// first). Returns the volume that could NOT be covered, zero means
+    /// existing positions fully absorbed the request.
+    fn reduce_side(&mut self, side: Side, volume: f64) -> Result<f64> {
+        let mut remaining = volume as usize;
+        if remaining == 0 {
+            return Ok(0.0);
+        }
+
+        // Collect position IDs to close, newest first
+        let mut to_close: Vec<String> = Vec::new();
+        for pos in self.positions.iter().rev() {
+            if remaining == 0 {
+                break;
             }
-            ActionType::ActionSell1 => {
-                self.open_position(1.0, Side::Sell)?;
-            }
-            ActionType::ActionSell2 => {
-                self.open_position(2.0, Side::Sell)?;
+            if pos.side == side {
+                to_close.push(pos.position_id.clone());
+                remaining -= 1;
             }
         }
+
+        for id in to_close {
+            self.close_position(&id)?;
+        }
+
+        Ok(remaining as f64)
+    }
+
+    /// Close a specific position by id (full close)
+    fn close_position(&mut self, position_id: &str) -> Result<()> {
+        let position = self
+            .positions
+            .iter()
+            .find(|p| p.position_id == position_id)
+            .cloned();
+        let position = match position {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        let current_timestamp = self.current_timestamp();
+        let close_price = self.get_current_mid_price()?;
+
+        let closed_position =
+            position.to_closed_position(close_price, current_timestamp, self.transaction_cost);
+
+        self.closed_position_window
+            .add_closed_position(closed_position);
+
+        self.positions
+            .retain(|p| p.position_id != position_id);
+
+        self.recent_fills.push(Fill {
+            order_id: format!("fill_{}", current_timestamp),
+            timestamp_ns: current_timestamp,
+            price: close_price,
+            size: position.volume,
+            side: match position.side {
+                Side::Buy => FillSide::Buy,
+                Side::Sell => FillSide::Sell,
+            },
+            partial: false,
+        });
+
         Ok(())
     }
 
@@ -782,24 +891,24 @@ impl Environment {
         Ok(())
     }
 
-    /// Open a new position
+    /// Open `volume` 1-unit positions on `side`.
     fn open_position(&mut self, volume: f64, side: Side) -> Result<()> {
         let current_timestamp = self.current_timestamp();
-
-        // Get the current bar to calculate mid_price and spread
         let mid_price = self.get_current_mid_price()?;
         let spread = self.get_current_spread()?;
 
-        let position = Position::new(
-            format!("pos_{}", current_timestamp),
-            mid_price,
-            spread,
-            volume,
-            side,
-            current_timestamp,
-        );
-
-        self.positions.push(position);
+        let count = volume as usize;
+        for i in 0..count {
+            let position = Position::new(
+                format!("pos_{}_{}", current_timestamp, i),
+                mid_price,
+                spread,
+                1.0,
+                side,
+                current_timestamp,
+            );
+            self.positions.push(position);
+        }
         Ok(())
     }
 
@@ -1616,5 +1725,212 @@ mod tests {
             .unwrap();
 
         assert_eq!(observation.live_bars["M1"].open, 102.0);
+    }
+
+    #[tokio::test]
+    async fn test_disable_hedging_nets_out_equal_volume_fully() {
+        let m1_bars = (0..10)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars)].into_iter().collect(),
+            0,
+            600_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_disable_hedging(true);
+        environment.step_size_ns = 60_000_000_000;
+        environment.episode = Some(episode);
+
+        // BUY_1: open 1-unit long
+        environment
+            .step(Action {
+                action: ActionType::ActionBuy1 as i32,
+                client_order_id: "buy-1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(environment.positions.len(), 1);
+        assert_eq!(environment.positions[0].side, Side::Buy);
+
+        // SELL_1: nets out exactly, positions go flat
+        environment
+            .step(Action {
+                action: ActionType::ActionSell1 as i32,
+                client_order_id: "sell-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(environment.positions.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_disable_hedging_partially_reduces_larger_position() {
+        let m1_bars = (0..10)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars)].into_iter().collect(),
+            0,
+            600_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_disable_hedging(true);
+        environment.step_size_ns = 60_000_000_000;
+        environment.episode = Some(episode);
+
+        // BUY_2: open two 1-unit long positions
+        environment
+            .step(Action {
+                action: ActionType::ActionBuy2 as i32,
+                client_order_id: "buy-2".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(environment.positions.len(), 2);
+        assert!(environment.positions.iter().all(|p| p.volume == 1.0));
+
+        // SELL_1: closes one, 1-unit long remains
+        environment
+            .step(Action {
+                action: ActionType::ActionSell1 as i32,
+                client_order_id: "sell-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(environment.positions.len(), 1);
+        assert_eq!(environment.positions[0].side, Side::Buy);
+        assert_eq!(environment.positions[0].volume, 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_disable_hedging_excess_opens_remainder() {
+        let m1_bars = (0..10)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars)].into_iter().collect(),
+            0,
+            600_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_disable_hedging(true);
+        environment.step_size_ns = 60_000_000_000;
+        environment.episode = Some(episode);
+
+        // BUY_1: open 1-unit long
+        environment
+            .step(Action {
+                action: ActionType::ActionBuy1 as i32,
+                client_order_id: "buy-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // SELL_2: closes the 1-unit buy, opens remaining 1-unit sell
+        environment
+            .step(Action {
+                action: ActionType::ActionSell2 as i32,
+                client_order_id: "sell-2".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(environment.positions.len(), 1);
+        assert_eq!(environment.positions[0].side, Side::Sell);
+        assert_eq!(environment.positions[0].volume, 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_hedging_enabled_allows_both_sides() {
+        let m1_bars = (0..10)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars)].into_iter().collect(),
+            0,
+            600_000_000_000,
+        );
+
+        let mut environment = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_disable_hedging(false);
+        environment.step_size_ns = 60_000_000_000;
+        environment.episode = Some(episode);
+
+        environment
+            .step(Action {
+                action: ActionType::ActionBuy1 as i32,
+                client_order_id: "buy-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        environment
+            .step(Action {
+                action: ActionType::ActionSell1 as i32,
+                client_order_id: "sell-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Both positions coexist (hedging allowed)
+        assert_eq!(environment.positions.len(), 2);
     }
 }
