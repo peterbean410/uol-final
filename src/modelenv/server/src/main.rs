@@ -20,6 +20,14 @@ fn init_logging() {
         .try_init();
 }
 
+fn format_timestamp_ns(ns: i64) -> String {
+    let secs = ns / 1_000_000_000;
+    let nsecs = (ns % 1_000_000_000) as u32;
+    chrono::DateTime::from_timestamp(secs, nsecs)
+        .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| ns.to_string())
+}
+
 fn build_environment(config: &Config) -> Environment {
     let mut environment = Environment::new(
         config.mode.clone(),
@@ -39,8 +47,202 @@ fn build_environment(config: &Config) -> Environment {
     environment
 }
 
+fn print_double_bottoms_table(patterns: &[modelenv_proto::DoubleBottomPattern]) {
+    if patterns.is_empty() {
+        println!("No double-bottom patterns detected.");
+        return;
+    }
+
+    println!(
+        "{:<4} {:<22} {:<12} {:<22} {:<12} {:<12} {:<8} {:<6} {:<10}",
+        "#", "Bottom 1", "Low 1", "Bottom 2", "Low 2", "Neckline", "Depth %", "Width", "Confirmed"
+    );
+    for (i, p) in patterns.iter().enumerate() {
+        let ts1 = format_timestamp_ns(p.ts1);
+        let ts2 = format_timestamp_ns(p.ts2);
+        let conf = if p.confirmed { "Yes" } else { "No" };
+        println!(
+            "{:<4} {:<22} {:<12.5} {:<22} {:<12.5} {:<12.5} {:<8.2} {:<6} {:<10}",
+            i + 1,
+            ts1,
+            p.low1,
+            ts2,
+            p.low2,
+            p.neckline,
+            p.depth_pct,
+            p.width_bars,
+            conf,
+        );
+    }
+    println!("\nTotal: {} pattern(s)", patterns.len());
+}
+
+fn parse_cli_detect_args() -> Option<(String, String, i32, u32, u32, u32, usize, f64, usize)> {
+    let args: Vec<String> = std::env::args().collect();
+    let has_detect = args.iter().any(|a| a == "--detect-double-bottoms");
+    if !has_detect {
+        return None;
+    }
+
+    fn get_arg(args: &[String], flag: &str) -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1).cloned())
+    }
+
+    let symbol = get_arg(&args, "--symbol").unwrap_or_else(|| "USDJPY".to_string());
+    let interval = get_arg(&args, "--interval").unwrap_or_else(|| "M15".to_string());
+    let year: i32 = get_arg(&args, "--year")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2026);
+    let month: u32 = get_arg(&args, "--month")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let day: u32 = get_arg(&args, "--day")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let hour: u32 = get_arg(&args, "--hour")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let window: usize = get_arg(&args, "--window")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let tolerance: f64 = get_arg(&args, "--tolerance")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.3);
+    let min_width: usize = get_arg(&args, "--min-width")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+
+    Some((symbol, interval, year, month, day, hour, window, tolerance, min_width))
+}
+
+async fn run_detect_double_bottoms(
+    symbol: &str,
+    interval: &str,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    window: usize,
+    tolerance: f64,
+    min_width: usize,
+    s3_prefix: &str,
+) -> Result<()> {
+    use modelenv_core::data_loader::build_interval_data_source;
+    use modelenv_core::indicators::patterns::detect_double_bottoms;
+
+    // Build the S3 data source prefix using the same function as episode loading
+    let source = build_interval_data_source(s3_prefix, symbol, interval);
+    println!("Loading bars from {source} ...");
+
+    // Build a timestamp at the requested year/month/day/hour for the upper bound
+    let target_dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|d| d.and_hms_opt(hour, 0, 0))
+        .and_then(|dt| dt.and_utc().timestamp_nanos_opt())
+        .unwrap_or(0);
+
+    let bars = modelenv_core::data_loader::load_bars_from_parquet_with_end_ts(
+        &source, symbol, interval, target_dt,
+    )
+    .await?;
+
+    if bars.is_empty() {
+        println!("No bars loaded.");
+        return Ok(());
+    }
+    println!("Loaded {} bars", bars.len());
+
+    let detection = detect_double_bottoms(&bars, window, tolerance, min_width)?;
+
+    if let Some(min_val) = detection.latest_min {
+        println!("Latest Local Minimum: {:.5}", min_val);
+    }
+    if let Some(max_val) = detection.latest_max {
+        println!("Latest Local Maximum: {:.5}", max_val);
+    }
+    println!();
+
+    let patterns: Vec<modelenv_proto::DoubleBottomPattern> = detection
+        .patterns
+        .iter()
+        .map(|p| modelenv_proto::DoubleBottomPattern {
+            idx1: p.idx1 as i64,
+            idx2: p.idx2 as i64,
+            ts1: p.ts1,
+            ts2: p.ts2,
+            low1: p.low1,
+            low2: p.low2,
+            neckline: p.neckline,
+            neckline_idx: p.neckline_idx as i64,
+            depth_pct: p.depth_pct,
+            width_bars: p.width_bars as i64,
+            confirmed: p.confirmed,
+            min_before_val: p.min_before_val.unwrap_or(0.0),
+            min_before_ts: p.min_before_ts.unwrap_or(0),
+            max_before_val: p.max_before_val.unwrap_or(0.0),
+            max_before_ts: p.max_before_ts.unwrap_or(0),
+        })
+        .collect();
+
+    print_double_bottoms_table(&patterns);
+
+    if let Some(last) = bars.last() {
+        let ts = format_timestamp_ns(last.timestamp_ns);
+        println!(
+            "\nLatest Bar: {}  Open={:.5}  High={:.5}  Low={:.5}  Close={:.5}",
+            ts, last.open, last.high, last.low, last.close
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Check for CLI subcommand before starting the server.
+    // Must be checked before Config::load() because Config rejects unknown flags.
+    if let Some((symbol, interval, year, month, day, hour, window, tolerance, min_width)) =
+        parse_cli_detect_args()
+    {
+        init_logging();
+        // Rewrite argv so Config::load() doesn't see the detect flags.
+        let original: Vec<String> = std::env::args().collect();
+        let detect_flags_with_val = &[
+            "--year", "--month", "--day", "--hour", "--interval",
+            "--window", "--tolerance", "--min-width",
+        ];
+        let detect_flags_bool = &["--detect-double-bottoms"];
+        let mut filtered: Vec<String> = Vec::new();
+        let mut skip_next = false;
+        for a in &original {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if detect_flags_bool.contains(&a.as_str()) {
+                continue; // boolean flag, no value to skip
+            }
+            if detect_flags_with_val.contains(&a.as_str()) {
+                skip_next = true;
+                continue;
+            }
+            filtered.push(a.clone());
+        }
+        // Build a Config from the filtered args so --local-cache-dir etc. still work
+        let config = Config::load_from_args(&filtered)?;
+        let prefix = if config.s3_prefix.starts_with("s3://") {
+            config.s3_prefix.clone()
+        } else {
+            format!("s3://{}", config.s3_prefix)
+        };
+        return run_detect_double_bottoms(
+            &symbol, &interval, year, month, day, hour, window, tolerance, min_width,
+            &prefix,
+        )
+        .await;
+    }
+
     init_logging();
 
     // Load configuration from command-line arguments and environment variables

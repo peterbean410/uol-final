@@ -19,4 +19,5 @@ futures = "0.3"
 env_logger = "0.11"
 log = "0.4"
 modelenv-proto = { path = "../proto" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 modelenv-core = { path = "../core" }

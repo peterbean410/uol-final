@@ -1,9 +1,9 @@
 // Episode management module
 use anyhow::{Context, Result};
-use log::{info, warn};
+use log::info;
 use std::collections::HashMap;
 
-use modelenv_proto::{Bar, BarList, News, Observation, Tick};
+use modelenv_proto::{Bar, News, Reference, Tick};
 
 use crate::data_loader::{
     build_interval_data_source, build_news_data_source, build_tick_data_source,
@@ -11,7 +11,7 @@ use crate::data_loader::{
     load_news_from_parquet_with_range_cached_from_local_cache_dir,
     load_ticks_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
 };
-use crate::indicators::{compute_interval_indicators, INDICATORS_PER_INTERVAL};
+use crate::indicators::{compute_interval_indicators, detect_all_patterns, state_columns};
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
 
@@ -62,7 +62,7 @@ impl Episode {
         self
     }
 
-    fn interval_cursor_at_or_before(
+    pub fn interval_cursor_at_or_before(
         &self,
         interval: &str,
         current_timestamp: i64,
@@ -130,17 +130,17 @@ impl Episode {
         positions: &[modelenv_proto::Position],
         realised_pnl_12m: f64,
         previous_timestamp_ns: Option<i64>,
-    ) -> Observation {
+    ) -> Reference {
         let mut live_bars = HashMap::new();
-        let mut recent_bars = HashMap::new();
-        let mut indicators: Vec<f64> =
-            Vec::with_capacity(TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL);
+        let mut ta: Vec<modelenv_proto::IntervalIndicators> =
+            Vec::with_capacity(TIME_INTERVALS.len());
+        let mut double_bottoms: Vec<modelenv_proto::DoubleBottomPattern> = Vec::new();
+        let mut double_tops: Vec<modelenv_proto::DoubleTopPattern> = Vec::new();
 
-        // Get the current timestamp from the cursor
         let current_timestamp = self.get_cursor_timestamp();
 
         for interval in TIME_INTERVALS {
-            let mut interval_block = [0.0_f64; INDICATORS_PER_INTERVAL];
+            let mut interval_ta = modelenv_proto::IntervalIndicators::default();
             if let Some(bars) = self.bars.get(*interval) {
                 if let Some(interval_cursor) =
                     self.interval_cursor_at_or_before(interval, current_timestamp)
@@ -150,69 +150,67 @@ impl Episode {
                     }
 
                     let start_idx = interval_cursor.saturating_sub(RECENT_WINDOW);
-                    let end_idx = interval_cursor;
+                    // +1 because range end is exclusive; include the bar at interval_cursor
+                    let end_idx = interval_cursor + 1;
                     let recent: Vec<Bar> = bars
                         .get(start_idx..end_idx)
                         .map(|slice| slice.to_vec())
                         .unwrap_or_default();
 
-                    interval_block = compute_interval_indicators(&recent);
+                    interval_ta = compute_interval_indicators(&recent);
 
-                    let mut reversed = recent;
-                    reversed.reverse();
-                    recent_bars.insert(interval.to_string(), BarList { bars: reversed });
+                    // Collect detected patterns from the primary interval (M1 only to
+                    // avoid duplicates; M1 has the finest granularity).
+                    // Use all bars up to the cursor, patterns can span much wider
+                    // than the indicator lookback window.
+                    if *interval == "M15" {
+                        let all_bars: Vec<Bar> = bars
+                            .get(0..end_idx)
+                            .map(|slice| slice.to_vec())
+                            .unwrap_or_default();
+                        let (dbs, dts) = detect_all_patterns(&all_bars);
+                        double_bottoms = dbs;
+                        double_tops = dts;
+                    }
                 }
             }
-            indicators.extend_from_slice(&interval_block);
+            ta.push(interval_ta);
         }
 
         let live_lower = previous_timestamp_ns
             .map(|prev| prev.max(current_timestamp - LIVE_TICK_WINDOW_NS))
             .unwrap_or_else(|| current_timestamp - LIVE_TICK_WINDOW_NS);
 
-        let recent_ticks = self.recent_ticks(live_lower);
         let live_ticks = self.live_ticks(live_lower, current_timestamp);
 
-        Observation {
+        Reference {
             timestamp_ns: current_timestamp,
             symbol: self.symbol.clone(),
             live_bars,
-            recent_bars,
             positions: positions.to_vec(),
             realised_pnl_12m,
             recent_fills: Vec::new(),
-            indicators,
-            recent_ticks,
+            ta,
+            double_bottoms,
+            double_tops,
             live_ticks,
-            recent_news: self.recent_news(current_timestamp),
             done: self.done,
+            state_columns: state_columns(),
         }
     }
 
     /// All ticks in `[live_lower - RECENT_TICK_WINDOW_NS, live_lower)`; the
     /// 60-second window right before live_ticks starts.
-    fn recent_ticks(&self, live_lower: i64) -> Vec<Tick> {
+    /// Return ticks with `lower <= timestamp_ns < upper`, sorted oldest first.
+    pub fn ticks_in_range(&self, lower: i64, upper: i64) -> Vec<Tick> {
         if self.ticks.is_empty() {
             return Vec::new();
         }
-        let recent_lower = live_lower - RECENT_TICK_WINDOW_NS;
-        let end_idx = self
-            .ticks
-            .partition_point(|tick| tick.timestamp_ns < live_lower);
-        let start_idx = self
-            .ticks
-            .partition_point(|tick| tick.timestamp_ns < recent_lower);
-        let mut window: Vec<Tick> = self
-            .ticks
-            .get(start_idx..end_idx)
-            .map(|slice| slice.to_vec())
-            .unwrap_or_default();
-        window.reverse();
-        window
+        let end = self.ticks.partition_point(|t| t.timestamp_ns < upper);
+        let start = self.ticks.partition_point(|t| t.timestamp_ns < lower);
+        self.ticks.get(start..end).map(|s| s.to_vec()).unwrap_or_default()
     }
 
-    /// Ticks in `(live_lower, current_timestamp]`, what changed since the last observation,
-    /// capped to the most recent LIVE_TICK_WINDOW_NS.
     fn live_ticks(&self, live_lower: i64, current_timestamp: i64) -> Vec<Tick> {
         if self.ticks.is_empty() {
             return Vec::new();
@@ -232,7 +230,7 @@ impl Episode {
         window
     }
 
-    fn recent_news(&self, current_timestamp: i64) -> Vec<News> {
+    pub fn recent_news(&self, current_timestamp: i64) -> Vec<News> {
         let mut recent: Vec<News> = self
             .news
             .iter()
@@ -622,10 +620,12 @@ mod tests {
         assert!(episode.advance(60_000_000_000));
 
         let obs = episode.get_observation(&[], 0.0, Some(0));
-        assert_eq!(obs.recent_ticks.len(), 1);
-        assert_eq!(obs.recent_ticks[0].timestamp_ns, 1_000_000_000);
         assert_eq!(obs.live_ticks.len(), 1);
         assert_eq!(obs.live_ticks[0].timestamp_ns, 59_000_000_000);
+
+        let recent = episode.ticks_in_range(0, 55_000_000_000);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].timestamp_ns, 1_000_000_000);
     }
 
     #[test]
@@ -811,14 +811,14 @@ mod tests {
         .with_news(news);
         assert!(episode.advance(cursor_ts));
 
-        let obs = episode.get_observation(&[], 0.0, None);
-        assert_eq!(obs.recent_news.len(), RECENT_WINDOW);
-        assert_eq!(obs.recent_news[0].timestamp_ns, cursor_ts);
-        assert!(obs.recent_news[0].timestamp_ns > obs.recent_news[1].timestamp_ns);
+        let recent = episode.recent_news(cursor_ts);
+        assert_eq!(recent.len(), RECENT_WINDOW);
+        assert_eq!(recent[0].timestamp_ns, cursor_ts);
+        assert!(recent[0].timestamp_ns > recent[1].timestamp_ns);
     }
 
     #[test]
-    fn test_recent_bars_capped_and_sorted_latest_first() {
+    fn test_live_bar_and_ta_present_in_observation() {
         let bars = (0..(RECENT_WINDOW as i64 + 10))
             .map(|i| Bar {
                 timestamp_ns: i * 60_000_000_000,
@@ -843,12 +843,8 @@ mod tests {
 
         let obs = episode.get_observation(&[], 0.0, Some(0));
 
-        let recent = &obs.recent_bars["M1"].bars;
-        assert_eq!(recent.len(), RECENT_WINDOW);
-        let last_bar_ts = cursor_ts - 60_000_000_000;
-        assert_eq!(recent[0].timestamp_ns, last_bar_ts);
-        assert!(recent[0].timestamp_ns > recent[1].timestamp_ns);
-        assert!(recent.last().unwrap().timestamp_ns < recent[0].timestamp_ns);
+        assert!(obs.live_bars.contains_key("M1"));
+        assert_eq!(obs.ta.len(), crate::data_loader::TIME_INTERVALS.len());
     }
 
     #[test]
@@ -882,18 +878,17 @@ mod tests {
 
         // previous=60s, so live_lower = max(60s, 120s-5s) = 115s.
         // recent window = [115s-60s, 115s) = [55s, 115s) → ticks at 55s–114s = 60 ticks.
-        let obs = episode.get_observation(&[], 0.0, Some(60_000_000_000));
-        assert_eq!(obs.recent_ticks.len(), 60);
-        assert_eq!(obs.recent_ticks[0].timestamp_ns, 114_000_000_000);
-        assert_eq!(obs.recent_ticks[59].timestamp_ns, 55_000_000_000);
-        assert!(obs.recent_ticks[0].timestamp_ns > obs.recent_ticks[1].timestamp_ns);
+        let recent = episode.ticks_in_range(55_000_000_000, 115_000_000_000);
+        assert_eq!(recent.len(), 60);
+        assert_eq!(recent[0].timestamp_ns, 55_000_000_000);
+        assert_eq!(recent[59].timestamp_ns, 114_000_000_000);
+        assert!(recent[0].timestamp_ns < recent[1].timestamp_ns);
 
-        // live_ticks = (115s, 120s] → ticks at 116s–119s = 4 ticks (ts 116,117,118,119).
-        // tick at 115s falls on the boundary (not > live_lower) → excluded.
-        // tick at 120s doesn't exist (ticks go to 119s).
-        assert_eq!(obs.live_ticks.len(), 4);
-        assert_eq!(obs.live_ticks[0].timestamp_ns, 119_000_000_000);
-        assert_eq!(obs.live_ticks[3].timestamp_ns, 116_000_000_000);
+        // live_ticks = [115s, 120s) → ticks at 115s–119s = 5 ticks.
+        let live = episode.ticks_in_range(115_000_000_000, 120_000_000_000);
+        assert_eq!(live.len(), 5);
+        assert_eq!(live[0].timestamp_ns, 115_000_000_000);
+        assert_eq!(live[4].timestamp_ns, 119_000_000_000);
     }
 
     #[test]
@@ -1050,13 +1045,6 @@ pub async fn initialize_episode(
         .await
         {
             Ok(bars) => bars,
-            Err(err) if is_missing_interval_data_error(&err) => {
-                warn!(
-                    "Skipping unavailable training interval {} for {} at {}: {}",
-                    interval, symbol, interval_source, err
-                );
-                continue;
-            }
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
@@ -1076,8 +1064,6 @@ pub async fn initialize_episode(
             ));
         }
 
-        // Only enforce the upper bound, episode_start_ts constrains ticks,
-        // not bar history.  Bars before the cursor provide recent_bars lookback.
         if episode_end_ts > 0 {
             bars = bars
                 .into_iter()
@@ -1121,13 +1107,6 @@ pub async fn initialize_episode(
     .await
     {
         Ok(news) => news,
-        Err(err) if is_missing_interval_data_error(&err) => {
-            warn!(
-                "Skipping unavailable training news for {} at {}: {}",
-                symbol, news_source, err
-            );
-            Vec::new()
-        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1151,13 +1130,6 @@ pub async fn initialize_episode(
     .await
     {
         Ok(ticks) => ticks,
-        Err(err) if is_missing_interval_data_error(&err) => {
-            warn!(
-                "Skipping unavailable training ticks for {} at {}: {}",
-                symbol, tick_source, err
-            );
-            Vec::new()
-        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1216,12 +1188,6 @@ pub async fn preload_training_market_data(
                     reference_bars = Some(bars);
                 }
             }
-            Err(err) if is_missing_interval_data_error(&err) => {
-                warn!(
-                    "Skipping unavailable training interval {} for {} at {} during startup preload: {}",
-                    interval, symbol, interval_source, err
-                );
-            }
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
@@ -1267,12 +1233,6 @@ pub async fn preload_training_market_data(
         Ok(_) => {
             info!("Finished preloading training news for {}", symbol);
         }
-        Err(err) if is_missing_interval_data_error(&err) => {
-            warn!(
-                "Skipping unavailable training news for {} at {} during startup preload: {}",
-                symbol, news_source, err
-            );
-        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1302,12 +1262,6 @@ pub async fn preload_training_market_data(
         Ok(_) => {
             info!("Finished preloading training ticks for {}", symbol);
         }
-        Err(err) if is_missing_interval_data_error(&err) => {
-            warn!(
-                "Skipping unavailable training ticks for {} at {} during startup preload: {}",
-                symbol, tick_source, err
-            );
-        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1319,13 +1273,4 @@ pub async fn preload_training_market_data(
     }
 
     Ok(())
-}
-
-pub(crate) fn is_missing_interval_data_error(err: &anyhow::Error) -> bool {
-    let message = err.to_string();
-    message.contains("No parquet files found under S3 prefix")
-        || message.contains("No parquet files found under s3://")
-        || message.contains("No child prefixes found under s3://")
-        || message.contains("No parquet files found under local path")
-        || message.contains("Local parquet path does not exist")
 }

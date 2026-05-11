@@ -207,43 +207,10 @@ pub fn normalise_tick_data_prefix(prefix: &str) -> String {
     if trimmed.is_empty() || trimmed.starts_with("file://") || trimmed.ends_with(".parquet") {
         return trimmed.to_string();
     }
-
-    if trimmed.ends_with(EOD_TICK_SNAPSHOT_BRANCH)
-        || trimmed.contains("/marketdata/eod-tick-snapshot/")
-    {
+    if trimmed.contains("/symbol=") && trimmed.contains("/interval=") {
         return trimmed.to_string();
     }
-
-    if trimmed.contains("/symbol=")
-        && (trimmed.contains("/interval=ticks")
-            || trimmed.contains("/marketdata/eod-tick-snapshot/"))
-    {
-        return trimmed.to_string();
-    }
-
-    if trimmed.ends_with(TRAINING_DATA_BRANCH) || trimmed.contains("/marketdata/interval-price/") {
-        return trimmed.replacen(TRAINING_DATA_BRANCH, EOD_TICK_SNAPSHOT_BRANCH, 1);
-    }
-
-    if let Some(branch) = known_price_data_branches()
-        .into_iter()
-        .find(|branch| trimmed.ends_with(branch))
-    {
-        return format!(
-            "{}{}",
-            trimmed.trim_end_matches(branch).trim_end_matches('/'),
-            format!("/{EOD_TICK_SNAPSHOT_BRANCH}")
-        );
-    }
-
-    for branch in known_price_data_branches() {
-        let from = format!("/{branch}/");
-        if trimmed.contains(&from) {
-            return trimmed.replacen(&from, &format!("/{EOD_TICK_SNAPSHOT_BRANCH}/"), 1);
-        }
-    }
-
-    format!("{trimmed}/{EOD_TICK_SNAPSHOT_BRANCH}")
+    trimmed.to_string()
 }
 
 pub fn build_tick_data_source(prefix: &str, symbol: &str) -> String {
@@ -251,12 +218,19 @@ pub fn build_tick_data_source(prefix: &str, symbol: &str) -> String {
     if base.ends_with(".parquet") || base.contains("/symbol=") {
         base
     } else {
-        format!("{base}/symbol={symbol}")
+        // Ticks live under the interval-price branch with interval=ticks.
+        let branch = snapshot_branch("ticks");
+        format!("{base}/{branch}/symbol={symbol}/interval=ticks")
     }
 }
 
 fn tick_source_schedule(source_uri: &str) -> IntervalSchedule {
-    if source_uri.contains(EOD_TICK_SNAPSHOT_BRANCH) {
+    if source_uri.contains("/interval=ticks") || source_uri.contains(TRAINING_DATA_BRANCH) {
+        IntervalSchedule {
+            partition_tier: PartitionTier::Hour,
+            cadence: ExecutionCadence::Hourly,
+        }
+    } else if source_uri.contains(EOD_TICK_SNAPSHOT_BRANCH) {
         IntervalSchedule {
             partition_tier: PartitionTier::Day,
             cadence: ExecutionCadence::Daily,
@@ -455,7 +429,8 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
             } else {
                 None
             };
-        if let Some(local_sources) = local_cached_sources {
+        // Try local cache; if no sources match the time range, fall back to S3
+        let selected_from_cache = if let Some(local_sources) = local_cached_sources {
             let selected = if let Some(start_timestamp_ns) = start_timestamp_ns {
                 let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
                 if effective_end_ns < start_timestamp_ns {
@@ -496,14 +471,20 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
                     Some(schedule),
                 )?
             };
-            cache_latest_selection(
-                cache,
-                source_uri,
-                start_timestamp_ns,
-                end_timestamp_ns,
-                &selected,
-            )
-            .await;
+            if !selected.is_empty() {
+                cache_latest_selection(
+                    cache, source_uri, start_timestamp_ns, end_timestamp_ns, &selected,
+                )
+                .await;
+                Some(selected)
+            } else {
+                None // fall through to S3
+            }
+        } else {
+            None
+        };
+
+        if let Some(selected) = selected_from_cache {
             selected
         } else if let Some(cached_sources) =
             cached_latest_sources(cache, source_uri, start_timestamp_ns, end_timestamp_ns).await?
@@ -678,6 +659,102 @@ pub async fn load_news_from_parquet_with_range_cached(
     .await
 }
 
+/// Select candidate sources from local cache. Returns `Ok(None)` when local
+/// cache has files but none match the time range; the caller should fall
+/// back to listing S3.
+async fn try_select_from_local_cache(
+    cache: &MarketDataCache,
+    source_uri: &str,
+    schedule: IntervalSchedule,
+    local_sources: Vec<String>,
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> Result<Option<Vec<String>>> {
+    let result = if let Some(start) = start_timestamp_ns {
+        let effective_end = end_timestamp_ns.unwrap_or_else(now_ns);
+        if effective_end < start {
+            return Err(anyhow!(
+                "Invalid time range for {}: start {} is after end {}",
+                source_uri, start, effective_end
+            ));
+        }
+        select_candidate_sources(
+            local_sources, "D1",
+            Some(start), Some(effective_end),
+            Some(source_uri), Some(schedule),
+        )
+    } else if let Some(end) = end_timestamp_ns {
+        select_candidate_sources(
+            local_sources, "D1",
+            None, Some(end),
+            Some(source_uri), Some(schedule),
+        )
+    } else {
+        select_candidate_sources(
+            local_sources, "D1",
+            None, None,
+            Some(source_uri), Some(schedule),
+        )
+    };
+    match result {
+        Ok(selected) => {
+            cache_latest_selection(cache, source_uri, start_timestamp_ns, end_timestamp_ns, &selected)
+                .await;
+            Ok(Some(selected))
+        }
+        Err(_) => Ok(None), // local cache doesn't cover this range, fall back to S3
+    }
+}
+
+/// Resolve news parquet sources, falling back to S3 when the local cache
+/// doesn't cover the requested time range.
+async fn resolve_news_sources(
+    cache: &MarketDataCache,
+    local_cache_dir: &str,
+    source_uri: &str,
+    schedule: IntervalSchedule,
+    local_cached_sources: Option<Vec<String>>,
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> Result<Vec<String>> {
+    if let Some(local_sources) = local_cached_sources {
+        if let Some(selected) = try_select_from_local_cache(
+            cache, source_uri, schedule, local_sources, start_timestamp_ns, end_timestamp_ns,
+        )
+        .await?
+        {
+            return Ok(selected);
+        }
+    }
+    if let Some(cached) =
+        cached_latest_sources(cache, source_uri, start_timestamp_ns, end_timestamp_ns).await?
+    {
+        return Ok(cached);
+    }
+    if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
+        return determine_s3_sources_cached(
+            local_cache_dir,
+            Some(cache),
+            source_uri,
+            schedule,
+            start_timestamp_ns,
+            end_timestamp_ns,
+        )
+        .await;
+    }
+    let selected = select_candidate_sources(
+        list_parquet_sources(source_uri).await?,
+        "D1",
+        start_timestamp_ns,
+        end_timestamp_ns,
+        Some(source_uri),
+        Some(schedule),
+    )?;
+    cache_latest_selection(cache, source_uri, start_timestamp_ns, end_timestamp_ns, &selected)
+        .await;
+    Ok(selected)
+}
+
 pub(crate) async fn load_news_from_parquet_with_range_cached_from_local_cache_dir(
     local_cache_dir: &str,
     cache: &MarketDataCache,
@@ -695,86 +772,16 @@ pub(crate) async fn load_news_from_parquet_with_range_cached_from_local_cache_di
         } else {
             None
         };
-    let sources = if let Some(local_sources) = local_cached_sources {
-        let selected = if let Some(start_timestamp_ns) = start_timestamp_ns {
-            let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
-            if effective_end_ns < start_timestamp_ns {
-                return Err(anyhow!(
-                    "Invalid time range for {}: start {} is after end {}",
-                    source_uri,
-                    start_timestamp_ns,
-                    effective_end_ns
-                ));
-            }
-            select_candidate_sources(
-                local_sources,
-                "D1",
-                Some(start_timestamp_ns),
-                Some(effective_end_ns),
-                Some(source_uri),
-                Some(schedule),
-            )?
-        } else if let Some(end_timestamp_ns) = end_timestamp_ns {
-            select_candidate_sources(
-                local_sources,
-                "D1",
-                None,
-                Some(end_timestamp_ns),
-                Some(source_uri),
-                Some(schedule),
-            )?
-        } else {
-            select_candidate_sources(
-                local_sources,
-                "D1",
-                None,
-                None,
-                Some(source_uri),
-                Some(schedule),
-            )?
-        };
-        cache_latest_selection(
-            cache,
-            source_uri,
-            start_timestamp_ns,
-            end_timestamp_ns,
-            &selected,
-        )
-        .await;
-        selected
-    } else if let Some(cached_sources) =
-        cached_latest_sources(cache, source_uri, start_timestamp_ns, end_timestamp_ns).await?
-    {
-        cached_sources
-    } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
-        determine_s3_sources_cached(
-            local_cache_dir,
-            Some(cache),
-            source_uri,
-            schedule,
-            start_timestamp_ns,
-            end_timestamp_ns,
-        )
-        .await?
-    } else {
-        let selected = select_candidate_sources(
-            list_parquet_sources(source_uri).await?,
-            "D1",
-            start_timestamp_ns,
-            end_timestamp_ns,
-            Some(source_uri),
-            Some(schedule),
-        )?;
-        cache_latest_selection(
-            cache,
-            source_uri,
-            start_timestamp_ns,
-            end_timestamp_ns,
-            &selected,
-        )
-        .await;
-        selected
-    };
+    let sources = resolve_news_sources(
+        cache,
+        local_cache_dir,
+        source_uri,
+        schedule,
+        local_cached_sources,
+        start_timestamp_ns,
+        end_timestamp_ns,
+    )
+    .await?;
 
     collect_news_from_sources(
         local_cache_dir,
@@ -1195,46 +1202,38 @@ async fn determine_s3_sources_cached(
 
     if let Some(local_sources) = list_existing_local_cached_s3_sources(local_cache_dir, source_uri)?
     {
-        if let Some(start_timestamp_ns) = start_timestamp_ns {
+        let result = if let Some(start_timestamp_ns) = start_timestamp_ns {
             let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
             if effective_end_ns < start_timestamp_ns {
                 return Err(anyhow!(
                     "Invalid time range for {}: start {} is after end {}",
-                    source_uri,
-                    start_timestamp_ns,
-                    effective_end_ns
+                    source_uri, start_timestamp_ns, effective_end_ns
                 ));
             }
-
-            return select_candidate_sources(
-                local_sources,
-                "D1",
-                Some(start_timestamp_ns),
-                Some(effective_end_ns),
-                Some(source_uri),
-                Some(schedule),
-            );
+            select_candidate_sources(
+                local_sources, "D1",
+                Some(start_timestamp_ns), Some(effective_end_ns),
+                Some(source_uri), Some(schedule),
+            )
+        } else if let Some(end_timestamp_ns) = end_timestamp_ns {
+            select_candidate_sources(
+                local_sources, "D1",
+                None, Some(end_timestamp_ns),
+                Some(source_uri), Some(schedule),
+            )
+        } else {
+            select_candidate_sources(
+                local_sources, "D1",
+                None, None,
+                Some(source_uri), Some(schedule),
+            )
+        };
+        if let Ok(selected) = result {
+            if !selected.is_empty() {
+                return Ok(selected);
+            }
         }
-
-        if let Some(end_timestamp_ns) = end_timestamp_ns {
-            return select_candidate_sources(
-                local_sources,
-                "D1",
-                None,
-                Some(end_timestamp_ns),
-                Some(source_uri),
-                Some(schedule),
-            );
-        }
-
-        return select_candidate_sources(
-            local_sources,
-            "D1",
-            None,
-            None,
-            Some(source_uri),
-            Some(schedule),
-        );
+        // local cache doesn't cover this time range, fall through to S3 listing
     }
 
     if let Some(start_timestamp_ns) = start_timestamp_ns {
@@ -2081,11 +2080,19 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
 /// Parse timestamp from parquet data (handles both nanosecond and millisecond formats)
 pub fn parse_timestamp(value: &arrow::array::Int64Array, index: usize) -> i64 {
     let ts = value.value(index);
-    // If timestamp is in milliseconds (less than 1600000000000), convert to nanoseconds
-    if ts < 1600000000000 {
-        ts * 1_000_000
+    // Normalise to nanoseconds.  Timestamps from 2020–2026 are roughly:
+    //   seconds:      ~1.6e9      (< 1e10)
+    //   milliseconds: ~1.6e12     (1e10 .. 1e14)
+    //   microseconds: ~1.6e15     (1e14 .. 1e17)
+    //   nanoseconds:  ~1.6e18     (>= 1e17)
+    if ts < 10_000_000_000 {
+        ts * 1_000_000_000 // seconds → ns
+    } else if ts < 100_000_000_000_000 {
+        ts * 1_000_000 // milliseconds → ns
+    } else if ts < 1_000_000_000_000_000_000 {
+        ts * 1_000 // microseconds → ns
     } else {
-        ts
+        ts // already nanoseconds
     }
 }
 
@@ -2146,7 +2153,18 @@ pub fn parse_bar_from_batch(batch: &RecordBatch, index: usize) -> Result<Bar> {
         .as_any()
         .downcast_ref::<arrow::array::TimestampNanosecondArray>()
     {
-        arr.value(index)
+        // The column name says nanoseconds but the actual values may be
+        // micro- or milliseconds.  Normalise via the same heuristic.
+        let raw = arr.value(index);
+        if raw < 10_000_000_000 {
+            raw * 1_000_000_000
+        } else if raw < 100_000_000_000_000 {
+            raw * 1_000_000
+        } else if raw < 1_000_000_000_000_000_000 {
+            raw * 1_000
+        } else {
+            raw
+        }
     } else if let Some(arr) = timestamp
         .as_any()
         .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
@@ -2731,7 +2749,7 @@ mod tests {
         );
         assert_eq!(
             build_tick_data_source("s3://bucket", "USDJPY"),
-            "s3://bucket/marketdata/eod-tick-snapshot/symbol=USDJPY"
+            "s3://bucket/marketdata/interval-price/symbol=USDJPY/interval=ticks"
         );
     }
 
@@ -3514,7 +3532,7 @@ exit 255
         let dir = tempdir().unwrap();
         let base = dir
             .path()
-            .join("marketdata/eod-tick-snapshot/symbol=USDJPY/year=2012/month=01/day=02");
+            .join("marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02");
         std::fs::create_dir_all(&base).unwrap();
 
         write_typed_tick_parquet(
@@ -3561,7 +3579,7 @@ exit 255
         let dir = tempdir().unwrap();
         let base = dir
             .path()
-            .join("marketdata/eod-tick-snapshot/symbol=USDJPY/year=2012/month=01/day=02");
+            .join("marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02");
         std::fs::create_dir_all(&base).unwrap();
 
         write_tick_parquet(
@@ -3597,7 +3615,7 @@ exit 255
     async fn tick_range_error_lists_expected_partitions_and_candidates() {
         let dir = tempdir().unwrap();
         let base = dir.path().join(
-            "prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY/year=2025/month=01/day=13",
+            "prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2025/month=01/day=13",
         );
         std::fs::create_dir_all(&base).unwrap();
 
@@ -3612,7 +3630,7 @@ exit 255
 
         let cache = MarketDataCache::new();
         let source_uri =
-            "s3://prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY";
+            "s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks";
         let err = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
             &dir.path().to_string_lossy(),
             &cache,
@@ -3629,22 +3647,23 @@ exit 255
         assert!(message.contains("Requested range: 1596844800000000000"));
         assert!(message.contains("2020-08-08T00:00:00+00:00"));
         assert!(message.contains(
-            "Expected parquet partitions: s3://prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY/year=2020/month=08/day=08/20200808T000000Z.parquet .. s3://prod-fintech-forex-sg-731833471586/marketdata/eod-tick-snapshot/symbol=USDJPY/year=2020/month=08/day=09/20200809T000000Z.parquet"
+            "Expected parquet partitions: s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2020/month=08/day=08/hour=00/20200808T000000Z.parquet .. s3://prod-fintech-forex-sg-731833471586/marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2020/month=08/day=08/hour=01/20200808T010000Z.parquet"
         ));
         assert!(message.contains("Candidate sources:"));
         assert!(message.contains("20250113T000000Z.parquet"));
     }
 
     #[tokio::test]
-    async fn timestamped_tick_lookup_uses_exact_daily_snapshot() {
+    async fn timestamped_tick_lookup_uses_exact_hourly_snapshot() {
         let dir = tempdir().unwrap();
+        // With hourly schedule, the snapshot at 2012-01-02T06:02:03 maps to hour=06
         let base = dir
             .path()
-            .join("marketdata/eod-tick-snapshot/symbol=USDJPY/year=2012/month=01/day=02");
+            .join("marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02/hour=06");
         std::fs::create_dir_all(&base).unwrap();
 
         write_tick_parquet(
-            &base.join("20120102T000000Z.parquet"),
+            &base.join("20120102T060000Z.parquet"),
             &[1_325_480_400_000_000, 1_325_480_401_000_000],
             &["USDJPY", "USDJPY"],
             &[76.947, 76.948],

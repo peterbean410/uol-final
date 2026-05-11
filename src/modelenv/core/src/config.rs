@@ -193,6 +193,11 @@ impl Config {
         Self::load_from_sources(&args, |key| env::var(key).ok())
     }
 
+    /// Load configuration from explicit args (useful when the caller filters argv).
+    pub fn load_from_args(args: &[String]) -> Result<Self> {
+        Self::load_from_sources(args, |key| env::var(key).ok())
+    }
+
     fn load_from_sources<F>(args: &[String], env_get: F) -> Result<Self>
     where
         F: Fn(&str) -> Option<String>,

@@ -3,10 +3,13 @@ syntax = "proto3";
 package environment;
 
 service Environment {
-  rpc Reset(ResetRequest) returns (Observation);
+  rpc Reset(ResetRequest) returns (Reference);
   rpc Step(Action) returns (StepResponse);
-  rpc Observe(ObserveRequest) returns (Observation);
-  rpc StreamObservations(ObserveRequest) returns (stream Observation);
+  rpc Observe(ObserveRequest) returns (Reference);
+  rpc StreamReferences(ObserveRequest) returns (stream Reference);
+  rpc RecentBars(RecentBarsRequest) returns (RecentBarsResponse);
+  rpc RecentTicks(RecentTicksRequest) returns (RecentTicksResponse);
+  rpc RecentNews(RecentNewsRequest) returns (RecentNewsResponse);
 }
 
 enum Mode {
@@ -50,6 +53,32 @@ message ResetRequest {
 
 message ObserveRequest {
   string symbol = 1;
+}
+
+message RecentBarsRequest {
+  string symbol = 1;
+}
+
+message RecentBarsResponse {
+  map<string, BarList> bars = 1;
+}
+
+message RecentTicksRequest {
+  string symbol = 1;
+}
+
+message RecentTicksResponse {
+  // ticks in the 60-second window before live_ticks, sorted latest -> earliest
+  repeated Tick ticks = 1;
+}
+
+message RecentNewsRequest {
+  string symbol = 1;
+}
+
+message RecentNewsResponse {
+  // news items sorted latest -> earliest, capped at 64
+  repeated News news = 1;
 }
 
 message Action {
@@ -102,34 +131,114 @@ message BarList {
   repeated Bar bars = 1;
 }
 
-message Observation {
+message MomentumIndicators {
+  double rsi_14 = 1;
+  double cci_14 = 2;
+}
+
+message TrendIndicators {
+  double adx_14 = 1;
+  double macd = 2;
+  double macd_signal = 3;
+  double macd_hist = 4;
+  double sma_10 = 5;
+  double sma_20 = 6;
+  double sma_50 = 7;
+  double ema_10 = 8;
+  double ema_20 = 9;
+  double ema_50 = 10;
+  double ichimoku_tenkan = 11;
+  double ichimoku_kijun = 12;
+  double ichimoku_senkou_a = 13;
+  double ichimoku_senkou_b = 14;
+  double ichimoku_chikou = 15;
+}
+
+message VolatilityIndicators {
+  double bb_upper = 1;
+  double bb_middle = 2;
+  double bb_lower = 3;
+}
+
+message SupportIndicators {
+  double fr_000 = 1;
+  double fr_236 = 2;
+  double fr_382 = 3;
+  double fr_500 = 4;
+  double fr_618 = 5;
+  double fr_786 = 6;
+  double fr_1000 = 7;
+}
+
+message PatternScores {}
+
+message IntervalIndicators {
+  MomentumIndicators momentum = 1;
+  TrendIndicators trend = 2;
+  VolatilityIndicators volatility = 3;
+  SupportIndicators support = 4;
+  PatternScores patterns = 5;
+}
+
+message DoubleBottomPattern {
+  int64 idx1 = 1;
+  int64 idx2 = 2;
+  int64 ts1 = 3;
+  int64 ts2 = 4;
+  double low1 = 5;
+  double low2 = 6;
+  double neckline = 7;
+  int64 neckline_idx = 8;
+  double depth_pct = 9;
+  int64 width_bars = 10;
+  bool confirmed = 11;
+  double min_before_val = 12;
+  int64 min_before_ts = 13;
+  double max_before_val = 14;
+  int64 max_before_ts = 15;
+}
+
+message DoubleTopPattern {
+  int64 idx1 = 1;
+  int64 idx2 = 2;
+  int64 ts1 = 3;
+  int64 ts2 = 4;
+  double high1 = 5;
+  double high2 = 6;
+  double neckline = 7;
+  int64 neckline_idx = 8;
+  double depth_pct = 9;
+  int64 width_bars = 10;
+  bool confirmed = 11;
+  double min_before_val = 12;
+  int64 min_before_ts = 13;
+  double max_before_val = 14;
+  int64 max_before_ts = 15;
+}
+
+message Reference {
   int64 timestamp_ns = 1;
   string symbol = 2;
   map<string, Bar> live_bars = 3;
-  // recent_bars[interval] holds up to 64 bars sorted latest -> earliest.
-  map<string, BarList> recent_bars = 4;
   // positions are sorted latest -> earliest by open_timestamp_ns.
   repeated Position positions = 5;
   double realised_pnl_12m = 9;
   // recent_fills holds up to 64 fills sorted latest -> earliest.
   repeated Fill recent_fills = 6;
-  // indicators is a flat block of per-interval scalars. Layout:
-  //   indicators[i * INDICATORS_PER_INTERVAL + j]
-  // where i indexes TIME_INTERVALS (M1, M5, M15, H1, H4, D1, W1, MN) and j
-  // is the indicator slot. Current slots:
-  //   [0] double-bottom pattern score in [0.0, 1.0] (0 = no pattern)
-  repeated double indicators = 7;
-  // recent_ticks holds up to 64 ticks sorted latest -> earliest.
-  repeated Tick recent_ticks = 10;
+  // per-interval technical indicators (M1, M5, M15, H1, H4, D1, W1, MN)
+  repeated IntervalIndicators ta = 13;
+  // detected chart patterns
+  repeated DoubleBottomPattern double_bottoms = 14;
+  repeated DoubleTopPattern double_tops = 15;
   // live_ticks are ticks since the previous observation, sorted latest -> earliest.
   repeated Tick live_ticks = 11;
-  // recent_news holds up to 64 news items sorted latest -> earliest.
-  repeated News recent_news = 12;
   bool done = 8;
+  // ordered names of every scalar in a flattened state vector
+  repeated string state_columns = 16;
 }
 
 message StepResponse {
-  Observation observation = 1;
+  Reference data = 1;
   double reward = 2;
   bool done = 3;
   string info = 4;

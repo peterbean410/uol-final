@@ -80,7 +80,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         .await?;
 
     assert!(!step_response.done);
-    let step_observation = step_response.observation.expect("step observation");
+    let step_observation = step_response.data.expect("step observation");
     assert_eq!(step_observation.recent_fills.len(), 1);
     assert_eq!(
         step_observation.recent_fills[0].order_id,
@@ -106,7 +106,6 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         "order-USDJPY-live-step-order"
     );
     assert!(observe_response.live_bars["M1"].close > 100.0);
-    assert!(!observe_response.recent_ticks.is_empty());
 
     Ok(())
 }

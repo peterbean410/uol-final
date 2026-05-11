@@ -8,8 +8,10 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use modelenv_proto::{
-    environment_server::Environment, Action, Observation, ObserveRequest, ResetRequest,
-    StepResponse,
+    environment_server::Environment, Action, ObserveRequest, RecentBarsRequest,
+    RecentBarsResponse, RecentNewsRequest, RecentNewsResponse, RecentTicksRequest,
+    RecentTicksResponse, Reference,
+    ResetRequest, StepResponse,
 };
 
 use modelenv_core::environment::Environment as CoreEnvironment;
@@ -40,13 +42,13 @@ impl EnvironmentService {
 }
 
 /// Response type for streaming observations
-type StreamObservationsResponse = Pin<Box<dyn Stream<Item = Result<Observation, Status>> + Send>>;
+type StreamReferencesResponse = Pin<Box<dyn Stream<Item = Result<Reference, Status>> + Send>>;
 
 #[tonic::async_trait]
 impl Environment for EnvironmentService {
-    type StreamObservationsStream = StreamObservationsResponse;
+    type StreamReferencesStream = StreamReferencesResponse;
 
-    async fn reset(&self, req: Request<ResetRequest>) -> Result<Response<Observation>, Status> {
+    async fn reset(&self, req: Request<ResetRequest>) -> Result<Response<Reference>, Status> {
         let reset_req = req.into_inner();
 
         // Call the environment reset method
@@ -72,7 +74,7 @@ impl Environment for EnvironmentService {
         Ok(Response::new(step_response))
     }
 
-    async fn observe(&self, req: Request<ObserveRequest>) -> Result<Response<Observation>, Status> {
+    async fn observe(&self, req: Request<ObserveRequest>) -> Result<Response<Reference>, Status> {
         let observe_req = req.into_inner();
 
         // Call the environment observe method
@@ -85,10 +87,49 @@ impl Environment for EnvironmentService {
         Ok(Response::new(observation))
     }
 
-    async fn stream_observations(
+    async fn recent_bars(
+        &self,
+        req: Request<RecentBarsRequest>,
+    ) -> Result<Response<RecentBarsResponse>, Status> {
+        let request = req.into_inner();
+        let env = self.environment.lock().await;
+        let response = env
+            .recent_bars(request)
+            .await
+            .map_err(|e| internal_error_status("RecentBars", e))?;
+        Ok(Response::new(response))
+    }
+
+    async fn recent_ticks(
+        &self,
+        req: Request<RecentTicksRequest>,
+    ) -> Result<Response<RecentTicksResponse>, Status> {
+        let request = req.into_inner();
+        let env = self.environment.lock().await;
+        let response = env
+            .recent_ticks(request)
+            .await
+            .map_err(|e| internal_error_status("RecentTicks", e))?;
+        Ok(Response::new(response))
+    }
+
+    async fn recent_news(
+        &self,
+        req: Request<RecentNewsRequest>,
+    ) -> Result<Response<RecentNewsResponse>, Status> {
+        let request = req.into_inner();
+        let env = self.environment.lock().await;
+        let response = env
+            .recent_news(request)
+            .await
+            .map_err(|e| internal_error_status("RecentNews", e))?;
+        Ok(Response::new(response))
+    }
+
+    async fn stream_references(
         &self,
         req: Request<ObserveRequest>,
-    ) -> Result<Response<StreamObservationsResponse>, Status> {
+    ) -> Result<Response<StreamReferencesResponse>, Status> {
         let observe_req = req.into_inner();
 
         // Create a channel for streaming observations

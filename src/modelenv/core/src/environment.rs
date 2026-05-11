@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use log::info;
 use modelenv_proto::{
-    Action, ActionType, Bar, BarList, FillSide, Observation, ObserveRequest, ResetRequest,
-    StepResponse, Tick,
+    Action, ActionType, Bar, BarList, FillSide, ObserveRequest, RecentBarsRequest,
+    RecentBarsResponse, Reference, ResetRequest, StepResponse, Tick,
 };
 
 use crate::broker_gateway::BrokerGateway;
 use crate::config::Mode;
 use crate::data_loader::{now_ns, DEFAULT_LOCAL_CACHE_DIR, TIME_INTERVALS};
 use crate::episode::{initialize_episode, preload_training_market_data, Episode, RECENT_WINDOW};
-use crate::indicators::{compute_interval_indicators, INDICATORS_PER_INTERVAL};
+use crate::indicators::{compute_interval_indicators, detect_all_patterns, state_columns};
 use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
 use crate::reconciliation::reconcile_positions;
@@ -54,6 +54,10 @@ pub struct Environment {
     reward_running_sum_sq: f64,
     reward_count: u64,
     last_observation_timestamp_ns: Option<i64>,
+    // In-memory bar storage shared by training and live modes.
+    // Training: populated from Episode after parquet load.
+    // Live: updated from broker gateway on each observation.
+    bars: HashMap<String, Vec<Bar>>,
 }
 
 /// Represents a trade execution record
@@ -96,6 +100,7 @@ impl Environment {
             reward_running_sum_sq: 0.0,
             reward_count: 0,
             last_observation_timestamp_ns: None,
+            bars: HashMap::new(),
         }
     }
 
@@ -217,7 +222,7 @@ impl Environment {
     }
 
     /// Reset the environment and initialize a new episode
-    pub async fn reset(&mut self, req: ResetRequest) -> Result<Observation> {
+    pub async fn reset(&mut self, req: ResetRequest) -> Result<Reference> {
         self.reset_episode_state();
 
         match self.mode {
@@ -267,6 +272,7 @@ impl Environment {
                 // Advance the cursor by one step so the first observation has a
                 // populated live tick window (cursor lands at first_bar_ts + step_size).
                 episode.advance(self.step_size_ns);
+                self.bars = episode.bars.clone();
                 self.episode = Some(episode);
 
                 // Get initial observation
@@ -363,49 +369,47 @@ impl Environment {
             .collect()
     }
 
-    async fn build_live_observation(&mut self, symbol: String) -> Result<Observation> {
+    async fn build_live_observation(&mut self, symbol: String) -> Result<Reference> {
         let mut live_bars: HashMap<String, Bar> = HashMap::new();
-        let mut recent_bars: HashMap<String, BarList> = HashMap::new();
         let mut fallback_current_bar: Option<Bar> = None;
-        let mut indicators: Vec<f64> =
-            Vec::with_capacity(TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL);
+        let mut ta: Vec<modelenv_proto::IntervalIndicators> =
+            Vec::with_capacity(TIME_INTERVALS.len());
+        let mut double_bottoms: Vec<modelenv_proto::DoubleBottomPattern> = Vec::new();
+        let mut double_tops: Vec<modelenv_proto::DoubleTopPattern> = Vec::new();
         let recent_ticks_raw: Vec<Tick> = if let Some(broker) = &self.broker_gateway {
+            // Fetch bars from broker and store in the shared in-memory dataframe.
             for interval in TIME_INTERVALS {
-                let bars = broker.recent_bars(&symbol, interval, RECENT_WINDOW).await?;
-                let interval_block = compute_interval_indicators(&bars);
-                indicators.extend_from_slice(&interval_block);
-                if let Some(latest) = bars.last().cloned() {
-                    live_bars.insert(interval.to_string(), latest.clone());
-                    if *interval == "M1" {
-                        fallback_current_bar = Some(latest);
+                let broker_bars =
+                    broker.recent_bars(&symbol, interval, RECENT_WINDOW).await?;
+                self.bars.insert(interval.to_string(), broker_bars);
+            }
+            // Compute indicators and patterns from in-memory bars (same source as training).
+            for interval in TIME_INTERVALS {
+                if let Some(bars) = self.bars.get(*interval) {
+                    let interval_ta = compute_interval_indicators(bars);
+                    if *interval == "M15" {
+                        let (dbs, dts) = detect_all_patterns(bars);
+                        double_bottoms = dbs;
+                        double_tops = dts;
                     }
-                    let recent: Vec<Bar> = if bars.len() > 1 {
-                        bars[..bars.len() - 1]
-                            .iter()
-                            .rev()
-                            .take(RECENT_WINDOW)
-                            .cloned()
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    recent_bars.insert(interval.to_string(), BarList { bars: recent });
+                    ta.push(interval_ta);
+                    if let Some(latest) = bars.last().cloned() {
+                        live_bars.insert(interval.to_string(), latest.clone());
+                        if *interval == "M1" {
+                            fallback_current_bar = Some(latest);
+                        }
+                    }
+                } else {
+                    ta.push(modelenv_proto::IntervalIndicators::default());
                 }
             }
             broker.current_ticks(&symbol).await?
         } else {
-            indicators.resize(TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL, 0.0);
             Vec::new()
         };
 
-        let current_bar = fallback_current_bar.unwrap_or(Bar {
-            timestamp_ns: now_ns(),
-            open: 0.0,
-            high: 0.0,
-            low: 0.0,
-            close: 0.0,
-            volume: 0.0,
-        });
+        let current_bar = fallback_current_bar
+            .ok_or_else(|| anyhow::anyhow!("No M1 bar available for live observation"))?;
         if !live_bars.contains_key("M1") {
             live_bars.insert("M1".to_string(), current_bar.clone());
         }
@@ -421,31 +425,23 @@ impl Environment {
 
         let recent_fills = self.recent_fills_for_observation();
 
-        let recent_lower = live_lower - crate::episode::RECENT_TICK_WINDOW_NS;
-        let recent_ticks: Vec<Tick> = recent_ticks_raw
-            .iter()
-            .filter(|t| t.timestamp_ns >= recent_lower && t.timestamp_ns < live_lower)
-            .rev()
-            .cloned()
-            .collect();
-
         let proto_positions = self.positions_for_observation();
 
-        let observation = Observation {
+        let observation = Reference {
             timestamp_ns: current_timestamp,
             symbol,
             live_bars,
-            recent_bars,
             positions: proto_positions,
             realised_pnl_12m: self
                 .closed_position_window
                 .total_realised_pnl_12m(current_timestamp),
             recent_fills,
-            indicators,
-            recent_ticks,
+            ta,
+            double_bottoms,
+            double_tops,
             live_ticks,
-            recent_news: vec![],
             done: false,
+            state_columns: state_columns(),
         };
         self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
         Ok(observation)
@@ -505,7 +501,7 @@ impl Environment {
                 };
 
                 Ok(StepResponse {
-                    observation: Some(observation),
+                    data: Some(observation),
                     reward,
                     done: !still_running,
                     info: "".to_string(),
@@ -620,7 +616,7 @@ impl Environment {
                 };
 
                 Ok(StepResponse {
-                    observation: Some(observation),
+                    data: Some(observation),
                     reward,
                     done: false,
                     info: "".to_string(),
@@ -630,7 +626,7 @@ impl Environment {
     }
 
     /// Get current observation without advancing
-    pub async fn observe(&mut self, req: ObserveRequest) -> Result<Observation> {
+    pub async fn observe(&mut self, req: ObserveRequest) -> Result<Reference> {
         match self.mode {
             Mode::Training => {
                 let episode = self.episode.as_ref().ok_or_else(|| {
@@ -651,6 +647,101 @@ impl Environment {
             }
             Mode::Live => self.build_live_observation(req.symbol).await,
         }
+    }
+
+    /// Return recent bars from the current timestamp cursor for all intervals.
+    pub async fn recent_bars(
+        &self,
+        req: RecentBarsRequest,
+    ) -> Result<RecentBarsResponse> {
+        use crate::episode::RECENT_WINDOW;
+        let mut bars: HashMap<String, BarList> = HashMap::new();
+        match self.mode {
+            Mode::Training => {
+                let episode = self.episode.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                })?;
+                let cursor = episode.get_cursor_timestamp();
+                for interval in crate::data_loader::TIME_INTERVALS {
+                    if let Some(all_bars) = self.bars.get(*interval) {
+                        if let Some(idx) =
+                            episode.interval_cursor_at_or_before(interval, cursor)
+                        {
+                            let start = idx.saturating_sub(RECENT_WINDOW);
+                            let recent: Vec<modelenv_proto::Bar> = all_bars
+                                .get(start..idx)
+                                .map(|s| s.to_vec())
+                                .unwrap_or_default()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            bars.insert(interval.to_string(), BarList {
+                                bars: recent,
+                            });
+                        }
+                    }
+                }
+            }
+            Mode::Live => {
+                let broker = self.get_broker_gateway()?;
+                for interval in crate::data_loader::TIME_INTERVALS {
+                    let recent = broker
+                        .recent_bars(&req.symbol, interval, RECENT_WINDOW)
+                        .await?;
+                    bars.insert(interval.to_string(), BarList {
+                        bars: recent.into_iter().rev().collect(),
+                    });
+                }
+            }
+        }
+        Ok(RecentBarsResponse { bars })
+    }
+
+    /// Return ticks in the 60-second window before live_ticks.
+    pub async fn recent_ticks(
+        &self,
+        req: modelenv_proto::RecentTicksRequest,
+    ) -> Result<modelenv_proto::RecentTicksResponse> {
+        let ticks = match self.mode {
+            Mode::Training => {
+                let episode = self.episode.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                })?;
+                let cursor = episode.get_cursor_timestamp();
+                let live_lower = self
+                    .last_observation_timestamp_ns
+                    .map(|prev| {
+                        prev.max(cursor - crate::episode::LIVE_TICK_WINDOW_NS)
+                    })
+                    .unwrap_or_else(|| cursor - crate::episode::LIVE_TICK_WINDOW_NS);
+                let recent_lower = live_lower - crate::episode::RECENT_TICK_WINDOW_NS;
+                episode.ticks_in_range(recent_lower, live_lower)
+            }
+            Mode::Live => {
+                let broker = self.get_broker_gateway()?;
+                broker.current_ticks(&req.symbol).await?
+            }
+        };
+        Ok(modelenv_proto::RecentTicksResponse {
+            ticks: ticks.into_iter().rev().collect(),
+        })
+    }
+
+    /// Return recent news from the current cursor, capped at RECENT_WINDOW.
+    pub async fn recent_news(
+        &self,
+        _req: modelenv_proto::RecentNewsRequest,
+    ) -> Result<modelenv_proto::RecentNewsResponse> {
+        let news = match self.mode {
+            Mode::Training => {
+                let episode = self.episode.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                })?;
+                episode.recent_news(episode.get_cursor_timestamp())
+            }
+            Mode::Live => vec![],
+        };
+        Ok(modelenv_proto::RecentNewsResponse { news })
     }
 
     /// Calculate the rolling 12-month realised P/L
@@ -715,17 +806,15 @@ impl Environment {
             0.0
         };
 
-        // Calculate holding penalty (c_h) for position duration
-        // Sum the duration of each open position
+        // Calculate holding penalty (c_h) for position duration in days
         let holding_penalty = if !self.positions.is_empty() {
             let total_duration_ns: i64 = self
                 .positions
                 .iter()
                 .map(|p| current_timestamp - p.open_timestamp_ns)
                 .sum();
-            // Convert nanoseconds to a reasonable time unit and apply penalty
-            // Using 1e-6 as the holding penalty coefficient
-            self.reward_holding_penalty * (total_duration_ns as f64)
+            let total_days = total_duration_ns as f64 / crate::position::NANOS_PER_DAY as f64;
+            self.reward_holding_penalty * total_days
         } else {
             0.0
         };
@@ -943,7 +1032,7 @@ impl Environment {
 mod tests {
     use super::*;
     use crate::position::{ClosedPosition, Position, NANOS_PER_DAY};
-    use arrow::array::{Float64Array, Int64Array};
+    use arrow::array::{Float64Array, Int64Array, StringArray};
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
     use std::path::PathBuf;
@@ -985,6 +1074,52 @@ mod tests {
             ],
         )?;
 
+        let file = std::fs::File::create(path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(())
+    }
+
+    fn write_news_parquet(path: &PathBuf, timestamps: &[i64]) -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("timestamp_ns", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("headline", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("source", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("sentiment_score", arrow::datatypes::DataType::Float64, false),
+        ]));
+        let n = timestamps.len();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(timestamps.to_vec())),
+                Arc::new(StringArray::from(vec!["test"; n])),
+                Arc::new(StringArray::from(vec!["source"; n])),
+                Arc::new(Float64Array::from(vec![0.0; n])),
+            ],
+        )?;
+        let file = std::fs::File::create(path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(())
+    }
+
+    fn write_tick_parquet(path: &PathBuf, timestamps: &[i64]) -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("timestamp_ns", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("bid", arrow::datatypes::DataType::Float64, false),
+            arrow::datatypes::Field::new("ask", arrow::datatypes::DataType::Float64, false),
+        ]));
+        let n = timestamps.len();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(timestamps.to_vec())),
+                Arc::new(Float64Array::from(vec![100.0; n])),
+                Arc::new(Float64Array::from(vec![100.01; n])),
+            ],
+        )?;
         let file = std::fs::File::create(path)?;
         let mut writer = ArrowWriter::try_new(file, schema, None)?;
         writer.write(&batch)?;
@@ -1208,9 +1343,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
-        assert!(response.observation.is_some());
+        assert!(response.data.is_some());
         assert!(environment.recent_fills.is_empty());
-        assert_eq!(response.observation.as_ref().unwrap().live_ticks.len(), 2);
+        assert_eq!(response.data.as_ref().unwrap().live_ticks.len(), 2);
     }
 
     #[tokio::test]
@@ -1238,18 +1373,23 @@ mod tests {
     #[tokio::test]
     async fn test_training_reset_clears_reward_state() {
         let dir = tempdir().unwrap();
-        let base = dir.path().join(
-            "marketdata/eoh-snapshot/symbol=USDJPY/interval=M1/year=2012/month=01/day=02/hour=06",
-        );
-        std::fs::create_dir_all(&base).unwrap();
-
-        let parquet_path = base.join("20120102T060000Z.parquet");
-        write_test_parquet(
-            &parquet_path,
-            &[1_325_484_000_000_000_000, 1_325_484_060_000_000_000],
-            &[102.0, 103.0],
-        )
-        .unwrap();
+        let root = dir.path();
+        let ts = &[1_325_484_000_000_000_000, 1_325_484_060_000_000_000];
+        let prices = &[102.0, 103.0];
+        write_test_parquet_for_interval(root, "marketdata/eoh-snapshot", "M1", "year=2012/month=01/day=02/hour=06", "20120102T060000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eoh-snapshot", "M5", "year=2012/month=01/day=02/hour=06", "20120102T060000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eoh-snapshot", "M15", "year=2012/month=01/day=02/hour=06", "20120102T060000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eod-snapshot", "H1", "year=2012/month=01/day=02", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eod-snapshot", "H4", "year=2012/month=01/day=02", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eod-snapshot", "D1", "year=2012/month=01/day=02", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eow-snapshot", "W1", "year=2012/month=01", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eom-snapshot", "MN1", "year=2012/month=01", "20120101T000000Z.parquet", ts, prices);
+        let news_dir = root.join("marketdata/eod-news-snapshot/symbol=USD-JPY/year=2012/month=01/day=01");
+        std::fs::create_dir_all(&news_dir).unwrap();
+        write_news_parquet(&news_dir.join("20120101T000000Z.parquet"), ts).unwrap();
+        let tick_dir = root.join("marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=01/hour=00");
+        std::fs::create_dir_all(&tick_dir).unwrap();
+        write_tick_parquet(&tick_dir.join("20120101T000000Z.parquet"), ts).unwrap();
 
         let mut environment = Environment::new(
             Mode::Training,
@@ -1325,7 +1465,7 @@ mod tests {
             .unwrap();
 
         assert!(response.done);
-        assert!(response.observation.unwrap().done);
+        assert!(response.data.unwrap().done);
     }
 
     #[tokio::test]
@@ -1396,7 +1536,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            first.observation.as_ref().unwrap().timestamp_ns,
+            first.data.as_ref().unwrap().timestamp_ns,
             60_000_000_000
         );
 
@@ -1408,17 +1548,16 @@ mod tests {
             .await
             .unwrap();
 
-        let observation = second.observation.unwrap();
+        let observation = second.data.unwrap();
         assert_eq!(observation.timestamp_ns, 120_000_000_000);
         assert_eq!(observation.live_bars["M5"].timestamp_ns, 0);
         assert_eq!(observation.positions.len(), 1);
         assert_eq!(observation.positions[0].open_timestamp_ns, 120_000_000_000);
         assert_eq!(observation.live_ticks.len(), 1);
-        assert_eq!(observation.recent_ticks.len(), 1);
     }
 
     #[tokio::test]
-    async fn test_live_observation_indicators_length_matches_intervals() {
+    async fn test_live_observation_ta_has_one_entry_per_interval() {
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let broker_gateway = Arc::new(MockBrokerGateway {
             submit_calls: Arc::clone(&submit_calls),
@@ -1435,30 +1574,24 @@ mod tests {
             })
             .await
             .unwrap();
-        let observation = response.observation.unwrap();
-        assert_eq!(
-            observation.indicators.len(),
-            TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL
-        );
-        // MockBrokerGateway returns 1 bar per interval, so:
-        // - Pattern indicators (indices 0, 1) should be 0.0 (not enough bars for patterns)
-        // - Most technical indicators will be NaN (insufficient data)
-        // - Fibonacci retracements (indices 22-28) will have valid values (min_periods=1)
-        for interval_idx in 0..TIME_INTERVALS.len() {
-            let base = interval_idx * INDICATORS_PER_INTERVAL;
-            // Index 0: double_bottom_score should be 0.0 (needs more bars)
-            assert_eq!(observation.indicators[base], 0.0, "double_bottom_score should be 0.0 with 1 bar");
-            // Index 1: double_top_score should be 0.0 (needs more bars)
-            assert_eq!(observation.indicators[base + 1], 0.0, "double_top_score should be 0.0 with 1 bar");
-            // Fibonacci retracements (indices 22-28) should have valid values due to min_periods=1
-            for i in 22..INDICATORS_PER_INTERVAL {
-                assert!(!observation.indicators[base + i].is_nan(), "Fibonacci index {} should not be NaN with 1 bar", i);
-            }
+        let observation = response.data.unwrap();
+        assert_eq!(observation.ta.len(), TIME_INTERVALS.len());
+        for interval_ta in &observation.ta {
+            let m = interval_ta.momentum.as_ref().unwrap();
+            let t = interval_ta.trend.as_ref().unwrap();
+            let v = interval_ta.volatility.as_ref().unwrap();
+            let s = interval_ta.support.as_ref().unwrap();
+            let p = interval_ta.patterns.as_ref().unwrap();
+            assert!(m.rsi_14.is_nan());
+            assert!(t.adx_14.is_nan());
+            assert!(v.bb_middle.is_nan());
+            assert!(!s.fr_000.is_nan());
+            assert!(!s.fr_1000.is_nan());
         }
     }
 
     #[tokio::test]
-    async fn test_training_observation_indicators_length_matches_intervals() {
+    async fn test_training_observation_ta_has_one_entry_per_interval() {
         let bars = (0..3)
             .map(|i| Bar {
                 timestamp_ns: i * 60_000_000_000,
@@ -1492,11 +1625,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let observation = response.observation.unwrap();
-        assert_eq!(
-            observation.indicators.len(),
-            TIME_INTERVALS.len() * INDICATORS_PER_INTERVAL
-        );
+        let observation = response.data.unwrap();
+        assert_eq!(observation.ta.len(), TIME_INTERVALS.len());
     }
 
     #[tokio::test]
@@ -1541,7 +1671,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_live_observation_populates_recent_bars_and_reverses_live_ticks() {
+    async fn test_live_observation_populates_live_bars_and_reverses_live_ticks() {
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let broker_gateway = Arc::new(MockBrokerGateway {
             submit_calls: Arc::clone(&submit_calls),
@@ -1558,17 +1688,13 @@ mod tests {
             })
             .await
             .unwrap();
-        let observation = response.observation.unwrap();
+        let observation = response.data.unwrap();
 
-        assert!(observation.recent_bars.contains_key("M1"));
-        assert_eq!(observation.recent_bars["M1"].bars.len(), 0);
         assert_eq!(observation.live_bars["M1"].close, 155.21);
 
         assert_eq!(observation.live_ticks.len(), 2);
         assert_eq!(observation.live_ticks[0].timestamp_ns, 2);
         assert_eq!(observation.live_ticks[1].timestamp_ns, 1);
-
-        assert_eq!(observation.recent_ticks.len(), 0);
     }
 
     #[tokio::test]
@@ -1688,21 +1814,45 @@ mod tests {
         assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002));
     }
 
+    fn write_test_parquet_for_interval(
+        root: &std::path::Path,
+        branch: &str,
+        interval: &str,
+        date_parts: &str,
+        filename: &str,
+        timestamps: &[i64],
+        opens: &[f64],
+    ) {
+        let dir = root.join(format!(
+            "{}/symbol=USDJPY/interval={}/{}",
+            branch, interval, date_parts
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_test_parquet(&dir.join(filename), timestamps, opens).unwrap();
+    }
+
     #[tokio::test]
     async fn test_training_preload_warms_first_reset() {
         let dir = tempdir().unwrap();
-        let base = dir.path().join(
-            "marketdata/eoh-snapshot/symbol=USDJPY/interval=M1/year=2012/month=01/day=02/hour=06",
-        );
-        std::fs::create_dir_all(&base).unwrap();
+        let root = dir.path();
+        let ts = &[1_325_484_000_000_000_000, 1_325_484_060_000_000_000];
+        let prices = &[102.0, 103.0];
 
-        let parquet_path = base.join("20120102T060000Z.parquet");
-        write_test_parquet(
-            &parquet_path,
-            &[1_325_484_000_000_000_000, 1_325_484_060_000_000_000],
-            &[102.0, 103.0],
-        )
-        .unwrap();
+        // Write one parquet file per interval so preload doesn't fail
+        write_test_parquet_for_interval(root, "marketdata/eoh-snapshot", "M1", "year=2012/month=01/day=02/hour=06", "20120102T060000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eoh-snapshot", "M5", "year=2012/month=01/day=02/hour=06", "20120102T060000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eoh-snapshot", "M15", "year=2012/month=01/day=02/hour=06", "20120102T060000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eod-snapshot", "H1", "year=2012/month=01/day=02", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eod-snapshot", "H4", "year=2012/month=01/day=02", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eod-snapshot", "D1", "year=2012/month=01/day=02", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eow-snapshot", "W1", "year=2012/month=01", "20120102T000000Z.parquet", ts, prices);
+        write_test_parquet_for_interval(root, "marketdata/eom-snapshot", "MN1", "year=2012/month=01", "20120101T000000Z.parquet", ts, prices);
+        let news_dir = root.join("marketdata/eod-news-snapshot/symbol=USD-JPY/year=2012/month=01/day=01");
+        std::fs::create_dir_all(&news_dir).unwrap();
+        write_news_parquet(&news_dir.join("20120101T000000Z.parquet"), ts).unwrap();
+        let tick_dir = root.join("marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=01/hour=00");
+        std::fs::create_dir_all(&tick_dir).unwrap();
+        write_tick_parquet(&tick_dir.join("20120101T000000Z.parquet"), ts).unwrap();
 
         let mut environment = Environment::new(
             Mode::Training,
@@ -1711,7 +1861,6 @@ mod tests {
         );
 
         environment.preload_training_data().await.unwrap();
-        std::fs::remove_file(&parquet_path).unwrap();
 
         let observation = environment
             .reset(ResetRequest {
