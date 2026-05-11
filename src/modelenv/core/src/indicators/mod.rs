@@ -733,18 +733,30 @@ pub fn state_columns() -> Vec<String> {
         for field in &["open", "volume"] {
             cols.push(format!("{iv}_bar_{field}"));
         }
-        // ta sub-messages
-        let fields: &[&str] = if iv == "H1" || iv == "W1" {
-            &["rsi_14", "ema_10", "ema_20", "ema_50"]
-        } else {
-            &[
+        // ta sub-messages, per-interval curation
+        let fields: &[&str] = match iv {
+            "M5" => &[
+                // Tactical / Momentum: fast-reacting
+                "rsi_14", "macd", "macd_signal", "macd_hist",
+                "ema_10", "ema_20",
+                "bb_upper", "bb_middle", "bb_lower",
+            ],
+            "M15" => &[
+                // Structural / Anchor: stability and support/resistance
+                "adx_14", "sma_50",
+                "ichimoku_tenkan", "ichimoku_kijun", "ichimoku_senkou_a",
+                "ichimoku_senkou_b", "ichimoku_chikou",
+                "fr_000", "fr_236", "fr_382", "fr_500", "fr_618", "fr_786", "fr_1000",
+            ],
+            "H1" | "W1" => &["rsi_14", "ema_10", "ema_20", "ema_50"],
+            _ => &[
                 "rsi_14", "cci_14", "adx_14", "macd", "macd_signal", "macd_hist",
                 "sma_10", "sma_20", "sma_50", "ema_10", "ema_20", "ema_50",
                 "ichimoku_tenkan", "ichimoku_kijun", "ichimoku_senkou_a",
                 "ichimoku_senkou_b", "ichimoku_chikou",
                 "bb_upper", "bb_middle", "bb_lower",
                 "fr_000", "fr_236", "fr_382", "fr_500", "fr_618", "fr_786", "fr_1000",
-            ]
+            ],
         };
         for field in fields {
             cols.push(format!("{iv}_ta_{field}"));
@@ -760,8 +772,8 @@ pub fn state_columns() -> Vec<String> {
     cols.push("swap_fees".to_string());
     cols.push("tick_bid".to_string());
     cols.push("tick_ask".to_string());
-    cols.push("num_double_bottoms".to_string());
-    cols.push("num_double_tops".to_string());
+    cols.push("double_bottom_low_min".to_string());
+    cols.push("double_top_high_min".to_string());
 
     // -- done flag --
     cols.push("done".to_string());
