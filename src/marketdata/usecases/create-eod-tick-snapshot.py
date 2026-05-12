@@ -116,6 +116,13 @@ def create_snapshot(fx_symbol: str, end_dt: datetime, s3, bucket: str) -> pd.Dat
 
     df.drop_duplicates(subset=TICK_DEDUP_KEYS, keep="last", inplace=True)
     _log_memory("after dedup")
+
+    # Keep only the last 24 months of tick data.
+    cutoff = pd.Timestamp(end_dt) - pd.DateOffset(months=24)
+    before = len(df)
+    df = df[df["Timestamp"] >= cutoff.value]
+    _log_memory(f"after 24m trim (dropped {before - len(df)} rows)")
+
     df.sort_values("Timestamp", inplace=True)
     df.reset_index(drop=True, inplace=True)
     _log_memory("after sort + reset_index")
