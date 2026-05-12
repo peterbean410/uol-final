@@ -730,7 +730,7 @@ pub fn state_columns() -> Vec<String> {
         }
         let iv = *interval;
         // live bar
-        for field in &["open", "volume"] {
+        for field in &["close", "volume"] {
             cols.push(format!("{iv}_bar_{field}"));
         }
         // ta sub-messages, per-interval curation
