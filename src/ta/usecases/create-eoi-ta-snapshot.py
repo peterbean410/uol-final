@@ -55,10 +55,13 @@ def _ta_snapshot_root(time_window_minutes: int) -> str:
     return "ta/eod-ta-snapshot"
 
 
-def _build_snapshot_key(root: str, fx_symbol: str, interval: str, dt: datetime,
-                        time_window_minutes: int) -> str:
+def _build_snapshot_key(root: str, fx_symbol: str, interval: str,
+                        dt: datetime, time_window_minutes: int,
+                        tatype: str = "") -> str:
     ts = dt.strftime("%Y%m%dT%H%M%SZ")
     base = f"{root}/symbol={fx_symbol}/interval={interval}"
+    if tatype:
+        base += f"/tatype={tatype}"
     key = f"{base}/year={dt.year}/month={dt.month:02d}"
     if time_window_minutes > DAILY_MINUTES:
         return f"{key}/{ts}.parquet"
@@ -117,7 +120,9 @@ def create_ta_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
         )
 
     price_root = _price_snapshot_root(time_window_minutes)
-    price_key = _build_snapshot_key(price_root, fx_symbol, interval, end_dt, time_window_minutes)
+    price_key = _build_snapshot_key(
+        price_root, fx_symbol, interval, end_dt, time_window_minutes,
+    )
     print(f"Loading price snapshot: {price_key}")
     df = _load_snapshot_file(s3, bucket, price_key)
 
@@ -128,20 +133,30 @@ def create_ta_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
     df = _compute_indicators(df)
 
     ta_root = _ta_snapshot_root(time_window_minutes)
-    ta_key = _build_snapshot_key(ta_root, fx_symbol, interval, end_dt, time_window_minutes)
+
+    # Main indicator snapshot
+    ta_key = _build_snapshot_key(
+        ta_root, fx_symbol, interval, end_dt, time_window_minutes,
+        tatype="INDICATOR",
+    )
     _upload_to_s3(df, bucket, ta_key, s3)
 
-    # ── Patterns (separate parquet files alongside the main snapshot) ──
-    prefix = ta_key.rsplit("/", 1)[0]
-    ts = end_dt.strftime("%Y%m%dT%H%M%SZ")
-
+    # ── Patterns (separate parquet files under their own tatype partitions) ──
     db_patterns, _, _ = doublebottom.detect_double_bottoms(df)
     if not db_patterns.empty:
-        _upload_to_s3(db_patterns, bucket, f"{prefix}/{ts}_doublebottom.parquet", s3)
+        db_key = _build_snapshot_key(
+            ta_root, fx_symbol, interval, end_dt, time_window_minutes,
+            tatype="DOUBLE_BOTTOM",
+        )
+        _upload_to_s3(db_patterns, bucket, db_key, s3)
 
     dt_patterns, _, _ = doubletop.detect_double_tops(df)
     if not dt_patterns.empty:
-        _upload_to_s3(dt_patterns, bucket, f"{prefix}/{ts}_doubletop.parquet", s3)
+        dt_key = _build_snapshot_key(
+            ta_root, fx_symbol, interval, end_dt, time_window_minutes,
+            tatype="DOUBLE_TOP",
+        )
+        _upload_to_s3(dt_patterns, bucket, dt_key, s3)
 
     print(df.tail(10).to_string(index=False))
     return df
