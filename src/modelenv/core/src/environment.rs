@@ -13,7 +13,10 @@ use crate::broker_gateway::BrokerGateway;
 use crate::config::Mode;
 use crate::data_loader::{now_ns, DEFAULT_LOCAL_CACHE_DIR, TIME_INTERVALS};
 use crate::episode::{initialize_episode, preload_training_market_data, Episode, RECENT_WINDOW};
-use crate::indicators::{compute_interval_indicators, detect_all_patterns, state_columns};
+use crate::indicators::{
+    compute_interval_indicators, compute_m15_double_bottom_low, detect_all_patterns,
+    state_columns,
+};
 use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
 use crate::reconciliation::reconcile_positions;
@@ -388,7 +391,9 @@ impl Environment {
                 if let Some(bars) = self.bars.get(*interval) {
                     let interval_ta = compute_interval_indicators(bars);
                     if *interval == "M15" {
-                        let (dbs, dts) = detect_all_patterns(bars);
+                        let (mut dbs, mut dts) = detect_all_patterns(bars);
+                        dbs.reverse();
+                        dts.reverse();
                         double_bottoms = dbs;
                         double_tops = dts;
                     }
@@ -427,6 +432,9 @@ impl Environment {
 
         let proto_positions = self.positions_for_observation();
 
+        let m15_double_bottom_low =
+            compute_m15_double_bottom_low(&double_bottoms, &live_ticks);
+
         let observation = Reference {
             timestamp_ns: current_timestamp,
             symbol,
@@ -442,6 +450,7 @@ impl Environment {
             live_ticks,
             done: false,
             state_columns: state_columns(),
+            m15_double_bottom_low,
         };
         self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
         Ok(observation)

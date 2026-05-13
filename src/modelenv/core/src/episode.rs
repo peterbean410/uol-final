@@ -11,7 +11,10 @@ use crate::data_loader::{
     load_news_from_parquet_with_range_cached_from_local_cache_dir,
     load_ticks_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
 };
-use crate::indicators::{compute_interval_indicators, detect_all_patterns, state_columns};
+use crate::indicators::{
+    compute_interval_indicators, compute_m15_double_bottom_low, detect_all_patterns,
+    state_columns,
+};
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
 
@@ -168,7 +171,9 @@ impl Episode {
                             .get(0..end_idx)
                             .map(|slice| slice.to_vec())
                             .unwrap_or_default();
-                        let (dbs, dts) = detect_all_patterns(&all_bars);
+                        let (mut dbs, mut dts) = detect_all_patterns(&all_bars);
+                        dbs.reverse();
+                        dts.reverse();
                         double_bottoms = dbs;
                         double_tops = dts;
                     }
@@ -183,6 +188,9 @@ impl Episode {
 
         let live_ticks = self.live_ticks(live_lower, current_timestamp);
 
+        let m15_double_bottom_low =
+            compute_m15_double_bottom_low(&double_bottoms, &live_ticks);
+
         Reference {
             timestamp_ns: current_timestamp,
             symbol: self.symbol.clone(),
@@ -196,6 +204,7 @@ impl Episode {
             live_ticks,
             done: self.done,
             state_columns: state_columns(),
+            m15_double_bottom_low,
         }
     }
 

@@ -772,13 +772,40 @@ pub fn state_columns() -> Vec<String> {
     cols.push("swap_fees".to_string());
     cols.push("tick_bid".to_string());
     cols.push("tick_ask".to_string());
-    cols.push("double_bottom_low_min".to_string());
-    cols.push("double_top_high_min".to_string());
-
+    cols.push("tick_count".to_string());
+    cols.push("M15_double_bottom_low".to_string());
+    cols.push("M15_double_bottom_high".to_string());
+    cols.push("M15_double_top_high".to_string());
+    cols.push("M15_double_top_low".to_string());
     // -- done flag --
     cols.push("done".to_string());
 
     cols
+}
+
+/// Returns `MIN(low1, low2)` of the most recent confirmed M15 double bottom
+/// whose `MIN(low1, low2) <= tick_ask <= neckline` and `depth_pct >= 0.15`.
+///
+/// `double_bottoms` must be sorted latest-first (most recent at index 0).
+/// `live_ticks` must be latest-first. Returns 0.0 when no pattern qualifies.
+pub fn compute_m15_double_bottom_low(
+    double_bottoms: &[modelenv_proto::DoubleBottomPattern],
+    live_ticks: &[modelenv_proto::Tick],
+) -> f64 {
+    let tick_ask = match live_ticks.first() {
+        Some(t) => t.ask,
+        None => return 0.0,
+    };
+    for db in double_bottoms {
+        if !db.confirmed || db.depth_pct < 0.15 {
+            continue;
+        }
+        let min_low = db.low1.min(db.low2);
+        if min_low <= tick_ask && tick_ask <= db.neckline {
+            return min_low;
+        }
+    }
+    0.0
 }
 
 fn empty_interval_indicators() -> modelenv_proto::IntervalIndicators {
@@ -1383,6 +1410,170 @@ mod tests {
         // Empty input returns empty vector
         let indicators = result.unwrap();
         assert!(indicators.is_empty(), "Empty input should return empty vector");
+    }
+    #[test]
+    fn compute_m15_double_bottom_low_empty_patterns_returns_zero() {
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 150.0,
+            ask: 150.1,
+        }];
+        assert_eq!(
+            compute_m15_double_bottom_low(&[], &ticks),
+            0.0
+        );
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_empty_ticks_returns_zero() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &[]), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_skips_unconfirmed() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: false,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 150.0,
+            ask: 150.1,
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_skips_shallow_depth() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.10,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 150.0,
+            ask: 150.1,
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_skips_when_tick_ask_above_neckline() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 151.5,
+            ask: 151.6,
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_skips_when_tick_ask_below_min_low() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 148.5,
+            ask: 148.6,
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_returns_min_low_when_qualified() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 150.0,
+            ask: 150.1,
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 149.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_picks_most_recent_qualified() {
+        // Two confirmed patterns both with tick_ask inside their ranges.
+        // Patterns are latest-first; the first (most recent) should win.
+        let dbs = vec![
+            modelenv_proto::DoubleBottomPattern {
+                low1: 149.0,
+                low2: 149.5,
+                neckline: 152.0,
+                depth_pct: 0.2,
+                confirmed: true,
+                ..Default::default()
+            },
+            modelenv_proto::DoubleBottomPattern {
+                low1: 148.0,
+                low2: 148.5,
+                neckline: 150.0,
+                depth_pct: 0.2,
+                confirmed: true,
+                ..Default::default()
+            },
+        ];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 150.0,
+            ask: 150.1,
+        }];
+        // Both qualify, but the first is more recent → returns 149.0
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 149.0);
+    }
+
+    #[test]
+    fn compute_m15_double_bottom_low_depth_pct_exactly_at_threshold() {
+        let dbs = vec![modelenv_proto::DoubleBottomPattern {
+            low1: 149.0,
+            low2: 149.5,
+            neckline: 151.0,
+            depth_pct: 0.15,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 150.0,
+            ask: 150.1,
+        }];
+        assert_eq!(compute_m15_double_bottom_low(&dbs, &ticks), 149.0);
     }
 }
 
