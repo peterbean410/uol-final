@@ -114,6 +114,11 @@ def create_snapshot(fx_symbol: str, end_dt: datetime, s3, bucket: str) -> pd.Dat
         print("No data found in either partition.")
         return df
 
+    # Normalise Timestamp to nanosecond int64, raw tick data uses microsecond
+    # parquet timestamps which produce a different dtype than snapshot data.
+    if not pd.api.types.is_integer_dtype(df["Timestamp"]):
+        df["Timestamp"] = df["Timestamp"].astype("int64")
+
     df.drop_duplicates(subset=TICK_DEDUP_KEYS, keep="last", inplace=True)
     _log_memory("after dedup")
 
