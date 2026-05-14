@@ -977,7 +977,12 @@ impl Environment {
         };
 
         let current_timestamp = self.current_timestamp();
-        let close_price = self.get_current_mid_price()?;
+        // Closing a BUY → SELL, closing a SELL → BUY
+        let close_side = match position.side {
+            Side::Buy => Side::Sell,
+            Side::Sell => Side::Buy,
+        };
+        let close_price = self.fill_price(close_side)?;
 
         let closed_position =
             position.to_closed_position(close_price, current_timestamp, self.transaction_cost);
@@ -1037,18 +1042,58 @@ impl Environment {
         Ok(())
     }
 
+    /// Return the worst-case fill price for `side` in the current step window.
+    ///
+    /// BUY  → highest `tick.ask` in `(last_obs_ts, current_ts]`.
+    /// SELL → lowest  `tick.bid` in `(last_obs_ts, current_ts]`.
+    /// Falls back to the bar mid ± half spread when no ticks are available.
+    fn fill_price(&self, side: Side) -> Result<f64> {
+        let to_ns = self.current_timestamp();
+        let from_ns = self.last_observation_timestamp_ns.unwrap_or(to_ns);
+
+        let episode = self
+            .episode
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Episode not initialized"))?;
+        let ticks = episode.ticks_in_range(from_ns + 1, to_ns + 1);
+
+        match side {
+            Side::Buy => {
+                if let Some(max_ask) = ticks.iter().map(|t| t.ask).fold(None, |acc, a| {
+                    Some(acc.map_or(a, |prev: f64| prev.max(a)))
+                }) {
+                    return Ok(max_ask);
+                }
+            }
+            Side::Sell => {
+                if let Some(min_bid) = ticks.iter().map(|t| t.bid).fold(None, |acc, b| {
+                    Some(acc.map_or(b, |prev: f64| prev.min(b)))
+                }) {
+                    return Ok(min_bid);
+                }
+            }
+        }
+
+        // Fallback to bar-based pricing
+        let mid = self.get_current_mid_price()?;
+        let spread = self.get_current_spread()?;
+        match side {
+            Side::Buy => Ok(mid + spread / 2.0),
+            Side::Sell => Ok(mid - spread / 2.0),
+        }
+    }
+
     /// Open `volume` 1-unit positions on `side`.
     fn open_position(&mut self, volume: f64, side: Side) -> Result<()> {
         let current_timestamp = self.current_timestamp();
-        let mid_price = self.get_current_mid_price()?;
-        let spread = self.get_current_spread()?;
+        let fill = self.fill_price(side)?;
 
         let count = volume as usize;
         for i in 0..count {
             let position = Position::new(
                 format!("pos_{}_{}", current_timestamp, i),
-                mid_price,
-                spread,
+                fill,   // entry_price = fill (pass spread=0 so no adjustment)
+                0.0,
                 1.0,
                 side,
                 current_timestamp,
