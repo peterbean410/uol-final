@@ -176,6 +176,7 @@ impl ColumnNormaliser {
 
 /// Holds per-column normalisers for the full state vector and orchestrates
 /// the normalisation pass for a single observation.
+#[derive(Clone)]
 pub struct Normaliser {
     columns: Vec<ColumnNormaliser>,
 }

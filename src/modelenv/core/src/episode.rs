@@ -25,6 +25,21 @@ pub const RECENT_WINDOW: usize = 64;
 pub const LIVE_TICK_WINDOW_NS: i64 = 5_000_000_000;
 pub const RECENT_TICK_WINDOW_NS: i64 = 60_000_000_000;
 
+/// Nanosecond duration of a single bar for the given interval.
+pub fn interval_duration_ns(interval: &str) -> i64 {
+    match interval {
+        "M1" => 60_000_000_000,
+        "M5" => 300_000_000_000,
+        "M15" => 900_000_000_000,
+        "H1" => 3_600_000_000_000,
+        "H4" => 14_400_000_000_000,
+        "D1" => 86_400_000_000_000,
+        "W1" => 604_800_000_000_000,
+        "MN" => 2_592_000_000_000_000,
+        _ => 60_000_000_000,
+    }
+}
+
 /// Represents a loaded episode with price bars for all time intervals
 #[derive(Clone)]
 pub struct Episode {
@@ -130,6 +145,21 @@ impl Episode {
         self.forming_bar(interval, current_timestamp)
     }
 
+    /// Return the last **completed** bar for `interval` at `current_timestamp`.
+    ///
+    /// A bar is complete when `bar.timestamp_ns + interval_duration_ns(interval) <= current_timestamp`,
+    /// i.e. the full bar period has elapsed. Returns `None` when no bar has completed yet.
+    pub fn completed_bar(&self, interval: &str, current_timestamp: i64) -> Option<Bar> {
+        let duration = interval_duration_ns(interval);
+        let cutoff = current_timestamp.saturating_sub(duration);
+        // A negative cutoff means no bar can possibly have completed yet
+        if cutoff < 0 {
+            return None;
+        }
+        let idx = self.interval_cursor_at_or_before(interval, cutoff)?;
+        self.bars.get(interval)?.get(idx).cloned()
+    }
+
     /// Get the current observation for the episode
     pub fn get_observation(
         &self,
@@ -151,13 +181,14 @@ impl Episode {
                 if let Some(interval_cursor) =
                     self.interval_cursor_at_or_before(interval, current_timestamp)
                 {
-                    if let Some(forming) = self.forming_bar(interval, current_timestamp) {
-                        live_bars.insert(interval.to_string(), forming);
+                    if let Some(completed) = self.completed_bar(interval, current_timestamp) {
+                        live_bars.insert(interval.to_string(), completed);
                     }
 
                     let start_idx = interval_cursor.saturating_sub(RECENT_WINDOW);
-                    // +1 because range end is exclusive; include the bar at interval_cursor
-                    let end_idx = interval_cursor + 1;
+                    // Exclude the forming bar at interval_cursor; TA/patterns must only
+                    // see completed bars to avoid future-data leakage.
+                    let end_idx = interval_cursor;
                     let recent: Vec<Bar> = bars
                         .get(start_idx..end_idx)
                         .map(|slice| slice.to_vec())
@@ -548,8 +579,11 @@ mod tests {
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 300_000_000_000);
-        assert_eq!(obs.live_bars["M1"].timestamp_ns, 300_000_000_000);
-        assert_eq!(obs.live_bars["M5"].timestamp_ns, 300_000_000_000);
+        // At cursor=300s the M1 bar starting at 300s is still forming;
+        // the last completed M1 bar closed at 240s (240+60=300).
+        assert_eq!(obs.live_bars["M1"].timestamp_ns, 240_000_000_000);
+        // M5 bar starting at 0s completed at 300s; the bar at 300s is forming.
+        assert_eq!(obs.live_bars["M5"].timestamp_ns, 0);
     }
 
     #[test]
@@ -596,8 +630,10 @@ mod tests {
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 360_000_000_000);
-        assert_eq!(obs.live_bars["M1"].timestamp_ns, 360_000_000_000);
-        assert_eq!(obs.live_bars["M5"].timestamp_ns, 300_000_000_000);
+        // At cursor=360s, M1 bar at 300s completed at 360s; bar at 360s is forming.
+        assert_eq!(obs.live_bars["M1"].timestamp_ns, 300_000_000_000);
+        // M5 bar at 0s completed at 300s; bar at 300s is forming until 600s.
+        assert_eq!(obs.live_bars["M5"].timestamp_ns, 0);
     }
 
     #[test]

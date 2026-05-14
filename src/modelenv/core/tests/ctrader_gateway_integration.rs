@@ -78,8 +78,9 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
     let vals = &obs.state_data[0].values;
     assert!(!cols.is_empty());
     assert_eq!(vals.len(), cols.len());
-    // tick_ask is populated from broker mock
-    assert!(first_row_value(cols, vals, "tick_ask") > 0.0);
+    // tick_ask is present (z-scored → 0.0 before warmup)
+    assert!(cols.contains(&"tick_ask".to_string()));
+    assert!(first_row_value(cols, vals, "tick_ask").is_finite());
 
     let step_response = environment
         .step(Action {

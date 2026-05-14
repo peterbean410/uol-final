@@ -59,7 +59,9 @@ impl LiveData {
     }
 
     /// Flatten this observation into an [`Observation`] proto.
-    pub fn into_observation(self) -> Observation {
+    /// Values are **raw** (un-normalised); callers must apply
+    /// [`Normaliser::normalise_all`] if normalisation is desired.
+    pub fn into_observation(&self) -> Observation {
         let columns = state_columns();
         let values = self.flatten(&columns);
         Observation {

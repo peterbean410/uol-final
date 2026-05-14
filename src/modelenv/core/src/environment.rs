@@ -17,8 +17,9 @@ use crate::live_data::LiveData;
 use crate::indicators::{
     compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
     compute_m15_double_top_high, compute_m15_double_top_low, compute_time_features,
-    detect_all_patterns,
+    detect_all_patterns, state_columns,
 };
+use crate::normalisation::Normaliser;
 use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
 use crate::reconciliation::reconcile_positions;
@@ -59,6 +60,8 @@ pub struct Environment {
     reward_running_sum_sq: f64,
     reward_count: u64,
     last_observation_timestamp_ns: Option<i64>,
+    // State feature normaliser (rolling z-scores, volume log-transform, etc.).
+    normaliser: Normaliser,
     // In-memory bar storage shared by training and live modes.
     // Training: populated from Episode after parquet load.
     // Live: updated from broker gateway on each observation.
@@ -105,6 +108,7 @@ impl Environment {
             reward_running_sum_sq: 0.0,
             reward_count: 0,
             last_observation_timestamp_ns: None,
+            normaliser: Normaliser::new(&state_columns()),
             bars: HashMap::new(),
         }
     }
@@ -528,7 +532,7 @@ impl Environment {
                 observation.reward = reward;
                 observation.done = !still_running;
                 Ok(StepResponse {
-                    data: Some(observation.into_observation()),
+                    data: Some(self.normalise_observation(observation.into_observation())),
                     info: "".to_string(),
                 })
             }
@@ -642,7 +646,7 @@ impl Environment {
 
                 observation.reward = reward;
                 Ok(StepResponse {
-                    data: Some(observation.into_observation()),
+                    data: Some(self.normalise_observation(observation.into_observation())),
                     info: "".to_string(),
                 })
             }
@@ -696,14 +700,25 @@ impl Environment {
                 );
                 observation.recent_fills = recent_fills;
                 self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
-                Ok(observation.into_observation())
+                Ok(self.normalise_observation(observation.into_observation()))
             }
             Mode::Live => {
                 self.build_live_observation(req.symbol)
                     .await
-                    .map(|obs| obs.into_observation())
+                    .map(|obs| self.normalise_observation(obs.into_observation()))
             }
         }
+    }
+
+    /// Update running normalisation statistics from raw values and return the
+    /// normalised feature vector for the observation.
+    fn normalise_observation(&mut self, mut obs: modelenv_proto::Observation) -> modelenv_proto::Observation {
+        if let Some(row) = obs.state_data.first() {
+            self.normaliser.update(&row.values);
+            let normalised = self.normaliser.normalise_all(&row.values);
+            obs.state_data = vec![modelenv_proto::StateRow { values: normalised }];
+        }
+        obs
     }
 
     /// Return recent bars from the current timestamp cursor for all intervals.
@@ -918,15 +933,18 @@ impl Environment {
     }
 
     /// Open `volume` on `side`. When hedging is disabled, first reduce
-    /// opposite-side positions by `volume` (LIFO: newest first), then open
-    /// any remainder on the desired side.
+    /// opposite-side positions by `volume`, then open any remainder on the
+    /// desired side.  Reducing sells uses FIFO (oldest first); reducing
+    /// buys uses LIFO (newest first).
     fn net_open(&mut self, volume: f64, side: Side) -> Result<()> {
         if self.disable_hedging {
             let opposite = match side {
                 Side::Buy => Side::Sell,
                 Side::Sell => Side::Buy,
             };
-            let remaining = self.reduce_side(opposite, volume)?;
+            // Buy action → FIFO on existing sells; Sell action → LIFO on existing buys.
+            let newest_first = matches!(side, Side::Sell);
+            let remaining = self.reduce_side(opposite, volume, newest_first)?;
             if remaining > 0.0 {
                 self.open_position(remaining, side)?;
             }
@@ -936,18 +954,26 @@ impl Environment {
         Ok(())
     }
 
-    /// Reduce positions of `side` by up to `volume` units (LIFO: newest
-    /// first). Returns the volume that could NOT be covered, zero means
-    /// existing positions fully absorbed the request.
-    fn reduce_side(&mut self, side: Side, volume: f64) -> Result<f64> {
+    /// Reduce positions of `side` by up to `volume` units. Returns the volume
+    /// that could NOT be covered, zero means existing positions fully absorbed
+    /// the request.
+    ///
+    /// When `newest_first` is true, close the newest matching positions first
+    /// (LIFO).  When false, close the oldest first (FIFO).
+    fn reduce_side(&mut self, side: Side, volume: f64, newest_first: bool) -> Result<f64> {
         let mut remaining = volume as usize;
         if remaining == 0 {
             return Ok(0.0);
         }
 
-        // Collect position IDs to close, newest first
+        // Collect position IDs to close in the requested order
         let mut to_close: Vec<String> = Vec::new();
-        for pos in self.positions.iter().rev() {
+        let iter: Box<dyn Iterator<Item = &Position>> = if newest_first {
+            Box::new(self.positions.iter().rev())
+        } else {
+            Box::new(self.positions.iter())
+        };
+        for pos in iter {
             if remaining == 0 {
                 break;
             }
@@ -1457,10 +1483,8 @@ mod tests {
         assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
         assert!(response.data.is_some());
         assert!(environment.recent_fills.is_empty());
-        assert_eq!(
-            obs_value(response.data.as_ref().unwrap(), "tick_count") as i64,
-            2
-        );
+        // tick_count normalised as Count { cap: 100 } → 2 / 100
+        assert!((obs_value(response.data.as_ref().unwrap(), "tick_count") - 0.02).abs() < 1e-9);
     }
 
     #[tokio::test]
@@ -1660,9 +1684,10 @@ mod tests {
             .unwrap();
 
         let observation = second.data.unwrap();
-        // Position count and tick data accessible via state columns
-        assert_eq!(obs_value(&observation, "num_positions_buy") as i64, 1);
-        assert_eq!(obs_value(&observation, "tick_count") as i64, 1);
+        // num_positions_buy normalised as Count { cap: 5 } → 1 / 5
+        assert!((obs_value(&observation, "num_positions_buy") - 0.2).abs() < 1e-9);
+        // tick_count normalised as Count { cap: 100 } → 1 / 100
+        assert!((obs_value(&observation, "tick_count") - 0.01).abs() < 1e-9);
     }
 
     #[tokio::test]
@@ -1802,10 +1827,10 @@ mod tests {
             .unwrap();
         let observation = response.data.unwrap();
 
-        // Mock broker returns close=155.21 for all intervals
-        assert_eq!(obs_value(&observation, "M5_bar_close"), 155.21);
-        assert_eq!(obs_value(&observation, "tick_count") as i64, 2);
-        assert_eq!(obs_value(&observation, "tick_ask"), 155.22);
+        // All columns present (M5_bar_close, tick_ask are z-scored → 0.0 before warmup).
+        assert!(observation.state_columns.contains(&"M5_bar_close".to_string()));
+        assert!((obs_value(&observation, "tick_count") - 0.02).abs() < 1e-9);
+        assert!(observation.state_columns.contains(&"tick_ask".to_string()));
     }
 
     #[tokio::test]
@@ -1984,8 +2009,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Training data loaded: M5 bars from parquet are present
-        assert!(obs_value(&observation, "M5_bar_close") > 0.0);
+        // Training data loaded: M5 columns are present (z-scored → 0.0 before warmup).
+        assert!(observation.state_columns.contains(&"M5_bar_close".to_string()));
+        // sin_hour is passthrough, so raw value is present regardless of warmup.
+        assert!(obs_value(&observation, "sin_hour").abs() <= 1.0);
     }
 
     #[tokio::test]
@@ -2193,5 +2220,113 @@ mod tests {
 
         // Both positions coexist (hedging allowed)
         assert_eq!(environment.positions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_disable_hedging_fifo_sells_lifo_buys() {
+        // Buy action reduces sells FIFO (oldest sell first).
+        // Sell action reduces buys LIFO (newest buy first).
+        let m1_bars = (0..10)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 145.0 + i as f64,
+                high: 146.0 + i as f64,
+                low: 144.0 + i as f64,
+                close: 145.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+
+        // --- Buy action (reduce sells) → FIFO ---
+        {
+            let episode = Episode::new(
+                "USDJPY".to_string(),
+                [("M1".to_string(), m1_bars.clone())]
+                    .into_iter()
+                    .collect(),
+                0,
+                600_000_000_000,
+            );
+
+            let mut env = Environment::new(
+                Mode::Training,
+                "USDJPY".to_string(),
+                "s3://unused".to_string(),
+            )
+            .with_disable_hedging(true);
+            env.step_size_ns = 60_000_000_000;
+            env.episode = Some(episode);
+
+            // Push three sells with distinct timestamps.
+            env.positions.push(Position::new(
+                "sell_old".to_string(), 145.0, 0.0, 1.0, Side::Sell, 1_000,
+            ));
+            env.positions.push(Position::new(
+                "sell_mid".to_string(), 145.0, 0.0, 1.0, Side::Sell, 2_000,
+            ));
+            env.positions.push(Position::new(
+                "sell_new".to_string(), 145.0, 0.0, 1.0, Side::Sell, 3_000,
+            ));
+
+            // Buy1 → should close oldest sell (sell_old, t=1000).
+            env.step(Action {
+                action: ActionType::ActionBuy1 as i32,
+                client_order_id: "buy-reduce-sells".to_string(),
+            })
+            .await
+            .unwrap();
+
+            assert_eq!(env.positions.len(), 2);
+            assert!(env.positions.iter().all(|p| p.side == Side::Sell));
+            let ids: Vec<&str> = env.positions.iter().map(|p| p.position_id.as_str()).collect();
+            assert!(ids.contains(&"sell_mid"));
+            assert!(ids.contains(&"sell_new"));
+        }
+
+        // --- Sell action (reduce buys) → LIFO ---
+        {
+            let episode = Episode::new(
+                "USDJPY".to_string(),
+                [("M1".to_string(), m1_bars.clone())]
+                    .into_iter()
+                    .collect(),
+                0,
+                600_000_000_000,
+            );
+
+            let mut env = Environment::new(
+                Mode::Training,
+                "USDJPY".to_string(),
+                "s3://unused".to_string(),
+            )
+            .with_disable_hedging(true);
+            env.step_size_ns = 60_000_000_000;
+            env.episode = Some(episode);
+
+            // Push three buys with distinct timestamps.
+            env.positions.push(Position::new(
+                "buy_old".to_string(), 145.0, 0.0, 1.0, Side::Buy, 1_000,
+            ));
+            env.positions.push(Position::new(
+                "buy_mid".to_string(), 145.0, 0.0, 1.0, Side::Buy, 2_000,
+            ));
+            env.positions.push(Position::new(
+                "buy_new".to_string(), 145.0, 0.0, 1.0, Side::Buy, 3_000,
+            ));
+
+            // Sell1 → should close newest buy (buy_new, t=3000).
+            env.step(Action {
+                action: ActionType::ActionSell1 as i32,
+                client_order_id: "sell-reduce-buys".to_string(),
+            })
+            .await
+            .unwrap();
+
+            assert_eq!(env.positions.len(), 2);
+            assert!(env.positions.iter().all(|p| p.side == Side::Buy));
+            let ids: Vec<&str> = env.positions.iter().map(|p| p.position_id.as_str()).collect();
+            assert!(ids.contains(&"buy_old"));
+            assert!(ids.contains(&"buy_mid"));
+        }
     }
 }
