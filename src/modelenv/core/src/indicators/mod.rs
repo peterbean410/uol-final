@@ -720,9 +720,6 @@ pub fn compute_interval_indicators_with(bars: &[Bar], set: &IndicatorSet) -> Vec
 pub fn state_columns() -> Vec<String> {
     let mut cols = Vec::new();
 
-    // -- scalar metadata --
-    cols.push("timestamp_ns".to_string());
-
     // -- per-interval bars and indicators --
     for interval in crate::data_loader::TIME_INTERVALS {
         if *interval == "M1" || *interval == "D1" || *interval == "H4" || *interval == "MN" {
@@ -770,8 +767,7 @@ pub fn state_columns() -> Vec<String> {
     cols.push("num_positions_buy".to_string());
     cols.push("num_positions_sell".to_string());
     cols.push("swap_fees".to_string());
-    cols.push("tick_bid".to_string());
-    cols.push("tick_ask".to_string());
+    cols.push("tick_spread".to_string());
     cols.push("tick_count".to_string());
     cols.push("M15_double_bottom_low".to_string());
     cols.push("M15_double_bottom_high".to_string());
