@@ -1,0 +1,4 @@
+# Component-specific dependencies for data_preparation
+# Base image already provides: torch, numpy, pandas, boto3, PyYAML
+
+pyarrow==16.1.0

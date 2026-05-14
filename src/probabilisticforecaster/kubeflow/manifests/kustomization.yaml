@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Kustomize entrypoint for the Probabilistic Forecaster ML pipeline.
+# Referenced by FluxCD via app/base/ProbabilisticForecaster.yaml.
+
+namespace: forecaster
+
+resources:
+  - namespace.yaml
+  - resource_quotas.yaml
+  - ../serving/inferenceservice.yaml
+  - ../monitoring/prometheus_rules.yaml
+  - pytorchjob.yaml
+
+commonLabels:
+  app.kubernetes.io/name: probabilistic-forecaster
+  app.kubernetes.io/part-of: fintech-forex
+  app.kubernetes.io/managed-by: fluxcd

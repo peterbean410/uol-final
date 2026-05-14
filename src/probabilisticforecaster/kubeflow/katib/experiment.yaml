@@ -1,0 +1,147 @@
+# Katib Hyperparameter Tuning Experiment
+# Requirements: 3.1, 3.2, 3.3, 3.4, 3.7
+#
+# Bayesian optimisation over 7 hyperparameters with validation NLL as objective.
+# Max 30 trials, 5 parallel, 2h trial timeout.
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: forecaster-hp-tuning
+  namespace: kubeflow
+spec:
+  objective:
+    type: minimize
+    goal: 0.5
+    objectiveMetricName: validation_nll
+  algorithm:
+    algorithmName: bayesianoptimization
+    algorithmSettings:
+      - name: random_state
+        value: "42"
+  maxTrialCount: 30
+  parallelTrialCount: 5
+  maxFailedTrialCount: 5
+  parameters:
+    - name: learning_rate
+      parameterType: double
+      feasibleSpace:
+        min: "0.0001"
+        max: "0.01"
+    - name: num_layers
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "2"
+          - "3"
+          - "4"
+    - name: num_heads
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "2"
+          - "4"
+          - "8"
+    - name: d_ff
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "32"
+          - "64"
+          - "128"
+    - name: dropout
+      parameterType: double
+      feasibleSpace:
+        min: "0.05"
+        max: "0.3"
+    - name: batch_size
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "32"
+          - "64"
+          - "128"
+    - name: lookback_window
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "24"
+          - "36"
+          - "48"
+  metricsCollectorSpec:
+    collector:
+      kind: StdOut
+    source:
+      filter:
+        metricsFormat:
+          - "\"validation_nll\":\\s*([\\d.e+-]+)"
+  trialTemplate:
+    primaryContainerName: training
+    trialParameters:
+      - name: learningRate
+        description: "Learning rate for Adam optimizer"
+        reference: learning_rate
+      - name: numLayers
+        description: "Number of Transformer encoder layers"
+        reference: num_layers
+      - name: numHeads
+        description: "Number of attention heads"
+        reference: num_heads
+      - name: dFf
+        description: "Feed-forward hidden dimension"
+        reference: d_ff
+      - name: dropout
+        description: "Dropout rate"
+        reference: dropout
+      - name: batchSize
+        description: "Training batch size"
+        reference: batch_size
+      - name: lookbackWindow
+        description: "Lookback window in bars"
+        reference: lookback_window
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            containers:
+              - name: training
+                image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-model-training:latest
+                command:
+                  - python
+                  - component.py
+                args:
+                  - "--train-dataset-path"
+                  - "kubeflow/katib/datasets/train_dataset.pkl"
+                  - "--checkpoint-path"
+                  - "kubeflow/katib/checkpoints/${trialName}/model.pt"
+                  - "--training-mode"
+                  - "scratch"
+                  - "--learning-rate"
+                  - "${trialParameters.learningRate}"
+                  - "--num-layers"
+                  - "${trialParameters.numLayers}"
+                  - "--num-heads"
+                  - "${trialParameters.numHeads}"
+                  - "--d-ff"
+                  - "${trialParameters.dFf}"
+                  - "--dropout"
+                  - "${trialParameters.dropout}"
+                  - "--batch-size"
+                  - "${trialParameters.batchSize}"
+                  - "--lookback-window"
+                  - "${trialParameters.lookbackWindow}"
+                resources:
+                  requests:
+                    cpu: "2"
+                    memory: "8Gi"
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "4"
+                    memory: "16Gi"
+                    nvidia.com/gpu: "1"
+            activeDeadlineSeconds: 7200
+            restartPolicy: Never

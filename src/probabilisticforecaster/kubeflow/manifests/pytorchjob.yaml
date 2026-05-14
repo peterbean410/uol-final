@@ -1,0 +1,89 @@
+# PyTorchJob manifest for distributed model training
+# Orchestrates distributed PyTorch training using the Training Operator
+# with configurable Master + Worker replicas (1-4 total pods)
+#
+# Requirements: 4.1, 4.8, 10.1, 10.2
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: forecaster-distributed-training
+  namespace: kubeflow
+  labels:
+    app: probabilistic-forecaster
+    component: training
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - rpivn
+                          - beanpi03
+          containers:
+            - name: pytorch
+              image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-model-training:latest
+              command:
+                - python
+                - distributed_train.py
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: 16Gi
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "4"
+                  memory: 32Gi
+                  nvidia.com/gpu: "1"
+              env:
+                - name: S3_CHECKPOINT_PATH
+                  value: "s3://prod-fintech-forex-sg-731833471586/models/forecaster/checkpoints"
+                - name: S3_BUCKET
+                  value: "prod-fintech-forex-sg-731833471586"
+                - name: CHECKPOINT_PREFIX
+                  value: "models/forecaster/checkpoints"
+    Worker:
+      replicas: 3
+      restartPolicy: OnFailure
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - rpivn
+                          - beanpi03
+          containers:
+            - name: pytorch
+              image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-model-training:latest
+              command:
+                - python
+                - distributed_train.py
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: 16Gi
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "4"
+                  memory: 32Gi
+                  nvidia.com/gpu: "1"
+              env:
+                - name: S3_CHECKPOINT_PATH
+                  value: "s3://prod-fintech-forex-sg-731833471586/models/forecaster/checkpoints"
+                - name: S3_BUCKET
+                  value: "prod-fintech-forex-sg-731833471586"
+                - name: CHECKPOINT_PREFIX
+                  value: "models/forecaster/checkpoints"

@@ -1,0 +1,6 @@
+# Component-specific dependencies for model_evaluation
+# Base image already provides: torch, numpy, pandas, boto3, PyYAML
+
+# No additional dependencies required, evaluation uses only
+# torch (model inference), numpy (metric computation), and pandas
+# which are all in the base image.

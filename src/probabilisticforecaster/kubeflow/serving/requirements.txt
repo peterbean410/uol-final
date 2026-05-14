@@ -1,0 +1,5 @@
+# Serving-specific dependencies for the KServe custom predictor
+# Base image already provides: torch, numpy, pandas, boto3, PyYAML
+# All versions pinned for reproducibility (Requirement 2.1)
+
+kserve==0.12.1

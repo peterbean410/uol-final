@@ -1,0 +1,4 @@
+# Component-specific dependencies for model_training
+# Base image already provides: torch, numpy, pandas, boto3, PyYAML
+
+# No additional dependencies required, training uses only PyTorch (from base)

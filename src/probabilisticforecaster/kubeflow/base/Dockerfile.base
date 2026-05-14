@@ -1,0 +1,25 @@
+# Shared base image for all Kubeflow pipeline components
+# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-base
+# Requirements: 2.1, 2.2
+
+FROM python:3.11-slim
+
+LABEL maintainer="ml-platform"
+LABEL description="Shared base image for probabilistic forecaster pipeline components"
+
+# Install system dependencies required for PyTorch and data processing
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install pinned Python dependencies
+COPY requirements-base.txt /app/requirements-base.txt
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r /app/requirements-base.txt
+
+# Set Python to run unbuffered for proper log streaming
+ENV PYTHONUNBUFFERED=1

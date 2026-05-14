@@ -1,0 +1,6 @@
+# Component-specific dependencies for backtesting
+# Base image already provides: torch, numpy, pandas, boto3, PyYAML
+
+# No additional dependencies required, backtesting uses only
+# torch (model inference), numpy, and pandas (PnL computation)
+# which are all in the base image.

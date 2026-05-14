@@ -1,0 +1,175 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: forecaster-pipeline-alerts
+  namespace: kubeflow
+  labels:
+    app: probabilistic-forecaster
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # --- Pipeline Run Failure Alerts (Requirement 9.1, 9.3) ---
+    - name: forecaster.pipeline.failures
+      rules:
+        - alert: ForecasterPipelineRunFailed
+          expr: |
+            increase(forecaster_pipeline_runs_total{status="failed"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "Forecaster pipeline run failed"
+            description: >-
+              Pipeline run for symbol={{ $labels.symbol }} failed.
+              Component={{ $labels.component }}.
+              Run ID={{ $labels.run_id }}.
+            runbook_url: "https://wiki.internal/runbooks/forecaster-pipeline-failure"
+
+        - alert: ForecasterPipelineHighFailureRate
+          expr: |
+            (
+              sum(rate(forecaster_pipeline_runs_total{status="failed"}[1h]))
+              /
+              sum(rate(forecaster_pipeline_runs_total[1h]))
+            ) > 0.5
+          for: 15m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "Forecaster pipeline failure rate exceeds 50%"
+            description: >-
+              More than 50% of pipeline runs have failed in the last hour.
+              Current failure rate: {{ $value | humanizePercentage }}.
+
+    # --- Component Duration Anomaly Alerts (Requirement 9.1) ---
+    - name: forecaster.pipeline.duration
+      rules:
+        - alert: ForecasterComponentDurationAnomaly
+          expr: |
+            forecaster_component_duration_seconds
+            > 2 * avg_over_time(forecaster_component_duration_seconds[7d])
+          for: 5m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "Pipeline component {{ $labels.component }} taking longer than expected"
+            description: >-
+              Component {{ $labels.component }} for symbol={{ $labels.symbol }}
+              is taking {{ $value | humanizeDuration }}, which is more than 2x
+              the 7-day average duration.
+
+        - alert: ForecasterPipelineWallTimeExceeded
+          expr: |
+            forecaster_pipeline_duration_seconds > 28800
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "Pipeline run exceeded 8-hour wall time limit"
+            description: >-
+              Pipeline run for symbol={{ $labels.symbol }} has been running for
+              {{ $value | humanizeDuration }}, exceeding the 8-hour maximum.
+
+    # --- Model Degradation Alerts (Requirement 9.2, 9.4) ---
+    - name: forecaster.model.degradation
+      rules:
+        - alert: ForecasterModelNLLDegraded
+          expr: |
+            forecaster_evaluation_nll
+            > forecaster_production_nll * (1 + 0.1)
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "Model NLL degraded beyond threshold"
+            description: >-
+              Candidate model NLL ({{ $value }}) exceeds production NLL by more
+              than 10% for symbol={{ $labels.symbol }},
+              horizon={{ $labels.forecast_horizon }}.
+
+        - alert: ForecasterModelDADegraded
+          expr: |
+            forecaster_evaluation_directional_accuracy
+            < forecaster_production_directional_accuracy - 0.05
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "Model directional accuracy degraded beyond threshold"
+            description: >-
+              Candidate model DA ({{ $value }}) is more than 5 percentage points
+              below production DA for symbol={{ $labels.symbol }},
+              horizon={{ $labels.forecast_horizon }}.
+
+        - alert: ForecasterPredictionDistributionShift
+          expr: |
+            abs(
+              avg_over_time(forecaster_inference_mu[1h])
+              - avg_over_time(forecaster_inference_mu[7d])
+            ) > 3 * stddev_over_time(forecaster_inference_mu[7d])
+          for: 30m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "Prediction distribution shift detected"
+            description: >-
+              Mean prediction (mu) has shifted more than 3 standard deviations
+              from the 7-day baseline for symbol={{ $labels.symbol }}.
+
+    # --- KServe Latency and Error Rate Alerts (Requirement 5.5, 5.7, 9.2) ---
+    - name: forecaster.serving.latency
+      rules:
+        - alert: ForecasterInferenceP99LatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(forecaster_inference_request_duration_seconds_bucket[5m])) by (le, symbol)
+            ) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "KServe inference p99 latency exceeds 100ms"
+            description: >-
+              The 99th percentile inference latency for symbol={{ $labels.symbol }}
+              is {{ $value }}s, exceeding the 100ms SLO.
+
+        - alert: ForecasterInferenceErrorRateHigh
+          expr: |
+            (
+              sum(rate(forecaster_inference_requests_total{status="error"}[5m])) by (symbol)
+              /
+              sum(rate(forecaster_inference_requests_total[5m])) by (symbol)
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "KServe inference error rate exceeds 5%"
+            description: >-
+              Inference error rate for symbol={{ $labels.symbol }} is
+              {{ $value | humanizePercentage }}, exceeding the 5% threshold.
+
+        - alert: ForecasterInferenceDown
+          expr: |
+            sum(rate(forecaster_inference_requests_total[5m])) by (symbol) == 0
+            and
+            sum(kserve_inferenceservice_replicas{name="forecaster-predictor"}) > 0
+          for: 10m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "KServe inference service receiving no traffic despite active replicas"
+            description: >-
+              The forecaster inference service for symbol={{ $labels.symbol }}
+              has active replicas but is receiving no requests for 10 minutes.

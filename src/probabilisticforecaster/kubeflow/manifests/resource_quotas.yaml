@@ -1,0 +1,55 @@
+---
+# ResourceQuota: Enforces aggregate resource limits for the forecaster namespace.
+# Satisfies Requirements 10.1, 10.2, 10.5, CPU, memory, GPU, and pod count limits.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: forecaster-resource-quota
+  namespace: forecaster
+  labels:
+    app.kubernetes.io/name: probabilistic-forecaster
+    app.kubernetes.io/component: resource-management
+spec:
+  hard:
+    # CPU limits (Req 10.1)
+    requests.cpu: "8"
+    limits.cpu: "16"
+    # Memory limits (Req 10.1, 10.5)
+    requests.memory: 32Gi
+    limits.memory: 64Gi
+    # GPU limits (Req 10.2)
+    requests.nvidia.com/gpu: "4"
+    # Pod count limit (Req 10.5, bounds replica count)
+    pods: "20"
+
+---
+# LimitRange: Sets default resource requests/limits for containers that don't specify them.
+# Ensures all Pipeline_Component containers have resource bounds (Req 10.1).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: forecaster-limit-range
+  namespace: forecaster
+  labels:
+    app.kubernetes.io/name: probabilistic-forecaster
+    app.kubernetes.io/component: resource-management
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "2"
+        memory: 4Gi
+      defaultRequest:
+        cpu: "500m"
+        memory: 1Gi
+      max:
+        cpu: "4"
+        memory: 32Gi
+        nvidia.com/gpu: "1"
+      min:
+        cpu: "100m"
+        memory: 128Mi
+    - type: Pod
+      max:
+        cpu: "8"
+        memory: 32Gi
