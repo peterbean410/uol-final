@@ -12,8 +12,8 @@ use crate::data_loader::{
     load_ticks_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
 };
 use crate::indicators::{
-    compute_interval_indicators, compute_m15_double_bottom_low, detect_all_patterns,
-    state_columns,
+    compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
+    detect_all_patterns, state_columns,
 };
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
@@ -190,6 +190,8 @@ impl Episode {
 
         let m15_double_bottom_low =
             compute_m15_double_bottom_low(&double_bottoms, &live_ticks);
+        let m15_double_bottom_high =
+            compute_m15_double_bottom_high(&double_bottoms, &live_ticks, m15_double_bottom_low);
 
         Reference {
             timestamp_ns: current_timestamp,
@@ -205,6 +207,7 @@ impl Episode {
             done: self.done,
             state_columns: state_columns(),
             m15_double_bottom_low,
+            m15_double_bottom_high,
         }
     }
 

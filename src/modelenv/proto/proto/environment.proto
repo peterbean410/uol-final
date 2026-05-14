@@ -233,6 +233,10 @@ message Reference {
   // MIN(low1, low2) of the most recent confirmed double bottom satisfying
   // MIN(low1, low2) <= tick_ask <= neckline and depth_pct >= 0.15, or 0.0.
   double m15_double_bottom_low = 17;
+  // MIN(low1, low2) of the most recent confirmed double bottom satisfying
+  // MIN(low1, low2) >= tick_ask, depth_pct >= 0.15, and
+  // m15_double_bottom_high - m15_double_bottom_low >= 0.2, or 0.0.
+  double m15_double_bottom_high = 18;
   // live_ticks are ticks since the previous observation, sorted latest -> earliest.
   repeated Tick live_ticks = 11;
   bool done = 8;
