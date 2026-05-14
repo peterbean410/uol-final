@@ -13,7 +13,7 @@ use crate::data_loader::{
 };
 use crate::indicators::{
     compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
-    compute_m15_double_top_high, detect_all_patterns, state_columns,
+    compute_m15_double_top_high, compute_m15_double_top_low, detect_all_patterns, state_columns,
 };
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
@@ -194,6 +194,8 @@ impl Episode {
             compute_m15_double_bottom_high(&double_bottoms, &live_ticks, m15_double_bottom_low);
         let m15_double_top_high =
             compute_m15_double_top_high(&double_tops, &live_ticks);
+        let m15_double_top_low =
+            compute_m15_double_top_low(&double_tops, &live_ticks, m15_double_top_high);
 
         Reference {
             timestamp_ns: current_timestamp,
@@ -211,6 +213,7 @@ impl Episode {
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,
+            m15_double_top_low,
         }
     }
 

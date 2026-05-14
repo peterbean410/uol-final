@@ -860,6 +860,33 @@ pub fn compute_m15_double_top_high(
     0.0
 }
 
+/// Returns `MAX(high1, high2)` of the most recent confirmed M15 double top
+/// whose `MAX(high1, high2) >= tick_bid`, `depth_pct >= 0.15`, and
+/// `m15_double_top_high - max_high >= 0.2`.
+///
+/// `double_tops` must be sorted latest-first (most recent at index 0).
+/// `live_ticks` must be latest-first. Returns 0.0 when no pattern qualifies.
+pub fn compute_m15_double_top_low(
+    double_tops: &[modelenv_proto::DoubleTopPattern],
+    live_ticks: &[modelenv_proto::Tick],
+    m15_double_top_high: f64,
+) -> f64 {
+    let tick_bid = match live_ticks.first() {
+        Some(t) => t.bid,
+        None => return 0.0,
+    };
+    for dt in double_tops {
+        if !dt.confirmed || dt.depth_pct < 0.15 {
+            continue;
+        }
+        let max_high = dt.high1.max(dt.high2);
+        if max_high >= tick_bid && (m15_double_top_high - max_high) >= 0.2 {
+            return max_high;
+        }
+    }
+    0.0
+}
+
 fn empty_interval_indicators() -> modelenv_proto::IntervalIndicators {
     use modelenv_proto::{
         MomentumIndicators, PatternScores, SupportIndicators, TrendIndicators,
@@ -1905,6 +1932,156 @@ mod tests {
         }];
         // First (more recent): tick_bid=156.0 within [155.0, 158.5] → returns 158.5
         assert_eq!(compute_m15_double_top_high(&dts, &ticks), 158.5);
+    }
+
+    // --- compute_m15_double_top_low ---
+
+    #[test]
+    fn compute_m15_double_top_low_empty_patterns_returns_zero() {
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 152.0,
+            ask: 152.1,
+        }];
+        assert_eq!(compute_m15_double_top_low(&[], &ticks, 155.0), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_empty_ticks_returns_zero() {
+        let dts = vec![modelenv_proto::DoubleTopPattern {
+            high1: 153.5,
+            high2: 153.0,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        assert_eq!(compute_m15_double_top_low(&dts, &[], 155.0), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_skips_unconfirmed() {
+        let dts = vec![modelenv_proto::DoubleTopPattern {
+            high1: 153.5,
+            high2: 153.0,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: false,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 152.0,
+            ask: 152.1,
+        }];
+        assert_eq!(compute_m15_double_top_low(&dts, &ticks, 155.0), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_skips_shallow_depth() {
+        let dts = vec![modelenv_proto::DoubleTopPattern {
+            high1: 153.5,
+            high2: 153.0,
+            neckline: 151.0,
+            depth_pct: 0.10,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 152.0,
+            ask: 152.1,
+        }];
+        assert_eq!(compute_m15_double_top_low(&dts, &ticks, 155.0), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_skips_when_tick_bid_above_max_high() {
+        let dts = vec![modelenv_proto::DoubleTopPattern {
+            high1: 153.5,
+            high2: 153.0,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 154.0,
+            ask: 154.1,
+        }];
+        assert_eq!(compute_m15_double_top_low(&dts, &ticks, 155.0), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_skips_when_spread_too_small() {
+        let dts = vec![modelenv_proto::DoubleTopPattern {
+            high1: 154.9,
+            high2: 154.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 152.0,
+            ask: 152.1,
+        }];
+        // top_high - max_high = 155.0 - 154.9 = 0.1 < 0.2
+        assert_eq!(compute_m15_double_top_low(&dts, &ticks, 155.0), 0.0);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_returns_max_high_when_qualified() {
+        let dts = vec![modelenv_proto::DoubleTopPattern {
+            high1: 153.0,
+            high2: 153.5,
+            neckline: 151.0,
+            depth_pct: 0.2,
+            confirmed: true,
+            ..Default::default()
+        }];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 152.0,
+            ask: 152.1,
+        }];
+        // top_high - max_high = 155.0 - 153.5 = 1.5 >= 0.2
+        assert_eq!(compute_m15_double_top_low(&dts, &ticks, 155.0), 153.5);
+    }
+
+    #[test]
+    fn compute_m15_double_top_low_picks_most_recent_qualified() {
+        let dts = vec![
+            modelenv_proto::DoubleTopPattern {
+                high1: 154.0,
+                high2: 154.5,
+                neckline: 151.0,
+                depth_pct: 0.2,
+                confirmed: true,
+                ..Default::default()
+            },
+            modelenv_proto::DoubleTopPattern {
+                high1: 152.5,
+                high2: 152.0,
+                neckline: 150.0,
+                depth_pct: 0.2,
+                confirmed: true,
+                ..Default::default()
+            },
+        ];
+        let ticks = vec![modelenv_proto::Tick {
+            timestamp_ns: 1000,
+            bid: 151.0,
+            ask: 151.1,
+        }];
+        let m15_double_top_high = 156.0;
+        // First (more recent): 156.0 - 154.5 = 1.5 >= 0.2 → returns 154.5
+        assert_eq!(
+            compute_m15_double_top_low(&dts, &ticks, m15_double_top_high),
+            154.5
+        );
     }
 
     #[test]

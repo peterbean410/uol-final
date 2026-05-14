@@ -15,7 +15,7 @@ use crate::data_loader::{now_ns, DEFAULT_LOCAL_CACHE_DIR, TIME_INTERVALS};
 use crate::episode::{initialize_episode, preload_training_market_data, Episode, RECENT_WINDOW};
 use crate::indicators::{
     compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
-    compute_m15_double_top_high, detect_all_patterns, state_columns,
+    compute_m15_double_top_high, compute_m15_double_top_low, detect_all_patterns, state_columns,
 };
 use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
@@ -438,6 +438,8 @@ impl Environment {
             compute_m15_double_bottom_high(&double_bottoms, &live_ticks, m15_double_bottom_low);
         let m15_double_top_high =
             compute_m15_double_top_high(&double_tops, &live_ticks);
+        let m15_double_top_low =
+            compute_m15_double_top_low(&double_tops, &live_ticks, m15_double_top_high);
 
         let observation = Reference {
             timestamp_ns: current_timestamp,
@@ -457,6 +459,7 @@ impl Environment {
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,
+            m15_double_top_low,
         };
         self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
         Ok(observation)
