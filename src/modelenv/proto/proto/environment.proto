@@ -5,6 +5,7 @@ package environment;
 service Environment {
   rpc Reset(ResetRequest) returns (Observation);
   rpc Step(Action) returns (StepResponse);
+  rpc LiveData(ObserveRequest) returns (Reference);
   rpc StreamObservations(ObserveRequest) returns (stream Observation);
   rpc RecentBars(RecentBarsRequest) returns (RecentBarsResponse);
   rpc RecentTicks(RecentTicksRequest) returns (RecentTicksResponse);
@@ -260,10 +261,11 @@ message StateRow {
 
 // Flattened observation ready for model consumption.
 message Observation {
-  // Ordered column names (same order as StateRow.values).
+  // Ordered column names (same order as each StateRow.values).
   repeated string state_columns = 1;
-  // Feature rows.  Currently a single row; future extensions may stack
-  // multiple observations for sequence models.
+  // Feature matrix: one or more rows, each with values in column order.
+  // Multiple rows within a single Observation represent e.g. a sequence
+  // of recent states for a sequence model.
   repeated StateRow state_data = 2;
 }
 

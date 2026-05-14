@@ -6,7 +6,7 @@ use std::sync::Arc;
 use log::info;
 use modelenv_proto::{
     Action, ActionType, Bar, BarList, FillSide, ObserveRequest, RecentBarsRequest,
-    RecentBarsResponse, ResetRequest, StepResponse, Tick,
+    RecentBarsResponse, Reference, ResetRequest, StepResponse, Tick,
 };
 
 use crate::broker_gateway::BrokerGateway;
@@ -650,6 +650,35 @@ impl Environment {
     }
 
     /// Get current observation without advancing
+    /// Return the raw structured observation (for debugging / inspection).
+    pub async fn live_data(&mut self, _req: ObserveRequest) -> Result<Reference> {
+        match self.mode {
+            Mode::Training => {
+                let episode = self.episode.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("Episode not initialized. Call reset() first.")
+                })?;
+                let proto_positions = self.positions_for_observation();
+                let recent_fills = self.recent_fills_for_observation();
+                let realised_pnl = self.realised_pnl_12m();
+                let mut live = episode.get_observation(
+                    proto_positions.as_slice(),
+                    realised_pnl,
+                    self.last_observation_timestamp_ns,
+                );
+                live.recent_fills = recent_fills;
+                self.last_observation_timestamp_ns = Some(live.timestamp_ns);
+                Ok(live.into_reference())
+            }
+            Mode::Live => {
+                let live = self
+                    .build_live_observation(self.symbol.clone())
+                    .await?;
+                self.last_observation_timestamp_ns = Some(live.timestamp_ns);
+                Ok(live.into_reference())
+            }
+        }
+    }
+
     pub async fn observe(&mut self, req: ObserveRequest) -> Result<modelenv_proto::Observation> {
         match self.mode {
             Mode::Training => {

@@ -10,7 +10,7 @@ use tonic::{Request, Response, Status};
 use modelenv_proto::{
     environment_server::Environment, Action, Observation, ObserveRequest, RecentBarsRequest,
     RecentBarsResponse, RecentNewsRequest, RecentNewsResponse, RecentTicksRequest,
-    RecentTicksResponse, ResetRequest, StepResponse,
+    RecentTicksResponse, Reference, ResetRequest, StepResponse,
 };
 
 use modelenv_core::environment::Environment as CoreEnvironment;
@@ -75,6 +75,19 @@ impl Environment for EnvironmentService {
             .map_err(|e| internal_error_status("Step", e))?;
 
         Ok(Response::new(step_response))
+    }
+
+    async fn live_data(
+        &self,
+        req: Request<ObserveRequest>,
+    ) -> Result<Response<Reference>, Status> {
+        let request = req.into_inner();
+        let mut env = self.environment.lock().await;
+        let reference = env
+            .live_data(request)
+            .await
+            .map_err(|e| internal_error_status("LiveData", e))?;
+        Ok(Response::new(reference))
     }
 
     async fn recent_bars(
