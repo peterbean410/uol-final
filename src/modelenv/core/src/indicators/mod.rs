@@ -773,6 +773,8 @@ pub fn state_columns() -> Vec<String> {
     cols.push("M15_double_bottom_high".to_string());
     cols.push("M15_double_top_high".to_string());
     cols.push("M15_double_top_low".to_string());
+    cols.push("sin_hour".to_string());
+    cols.push("cos_hour".to_string());
     // -- done flag --
     cols.push("done".to_string());
 
@@ -881,6 +883,14 @@ pub fn compute_m15_double_top_low(
         }
     }
     0.0
+}
+
+/// Return `(sin_hour, cos_hour)` for the given `timestamp_ns`, each in [-1, 1].
+pub fn compute_time_features(timestamp_ns: i64) -> (f64, f64) {
+    let total_seconds = timestamp_ns / 1_000_000_000;
+    let hour_of_day = ((total_seconds / 3600) % 24) as f64;
+    let theta = 2.0 * std::f64::consts::PI * hour_of_day / 24.0;
+    (theta.sin(), theta.cos())
 }
 
 fn empty_interval_indicators() -> modelenv_proto::IntervalIndicators {

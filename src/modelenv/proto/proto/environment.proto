@@ -244,6 +244,9 @@ message Reference {
   // MAX(high1, high2) >= tick_bid, depth_pct >= 0.15, and
   // m15_double_top_high - m15_double_top_low >= 0.2, or 0.0.
   double m15_double_top_low = 20;
+  // Cyclical time encodings derived from timestamp_ns, each in [-1, 1].
+  double sin_hour = 21;
+  double cos_hour = 22;
   // live_ticks are ticks since the previous observation, sorted latest -> earliest.
   repeated Tick live_ticks = 11;
   bool done = 8;
