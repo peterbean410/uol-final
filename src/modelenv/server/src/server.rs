@@ -77,16 +77,16 @@ impl Environment for EnvironmentService {
         Ok(Response::new(step_response))
     }
 
-    async fn live_data(
+    async fn reference_data(
         &self,
         req: Request<ObserveRequest>,
     ) -> Result<Response<Reference>, Status> {
         let request = req.into_inner();
         let mut env = self.environment.lock().await;
         let reference = env
-            .live_data(request)
+            .reference_data(request)
             .await
-            .map_err(|e| internal_error_status("LiveData", e))?;
+            .map_err(|e| internal_error_status("ReferenceData", e))?;
         Ok(Response::new(reference))
     }
 

@@ -651,7 +651,7 @@ impl Environment {
 
     /// Get current observation without advancing
     /// Return the raw structured observation (for debugging / inspection).
-    pub async fn live_data(&mut self, _req: ObserveRequest) -> Result<Reference> {
+    pub async fn reference_data(&mut self, _req: ObserveRequest) -> Result<Reference> {
         match self.mode {
             Mode::Training => {
                 let episode = self.episode.as_ref().ok_or_else(|| {

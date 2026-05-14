@@ -5,7 +5,7 @@ package environment;
 service Environment {
   rpc Reset(ResetRequest) returns (Observation);
   rpc Step(Action) returns (StepResponse);
-  rpc LiveData(ObserveRequest) returns (Reference);
+  rpc ReferenceData(ObserveRequest) returns (Reference);
   rpc StreamObservations(ObserveRequest) returns (stream Observation);
   rpc RecentBars(RecentBarsRequest) returns (RecentBarsResponse);
   rpc RecentTicks(RecentTicksRequest) returns (RecentTicksResponse);
