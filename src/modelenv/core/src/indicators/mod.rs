@@ -123,6 +123,9 @@ pub struct IndicatorSet {
 /// Total: 2 + 15 + 3 + 7 = 27
 pub const INDICATORS_PER_INTERVAL: usize = 27;
 
+/// Intervals included in the flat state vector (per-interval bars + TA).
+pub const STATE_INTERVALS: &[&str] = &["M5", "M15", "H1", "W1"];
+
 // Compile-time assertion to verify INDICATORS_PER_INTERVAL matches the actual count
 // of indicators in IndicatorSet. This ensures the constant stays in sync with the
 // number of indicator fields.
@@ -721,17 +724,13 @@ pub fn state_columns() -> Vec<String> {
     let mut cols = Vec::new();
 
     // -- per-interval bars and indicators --
-    for interval in crate::data_loader::TIME_INTERVALS {
-        if *interval == "M1" || *interval == "D1" || *interval == "H4" || *interval == "MN" {
-            continue;
-        }
-        let iv = *interval;
+    for iv in STATE_INTERVALS {
         // live bar
         for field in &["close", "volume"] {
             cols.push(format!("{iv}_bar_{field}"));
         }
         // ta sub-messages, per-interval curation
-        let fields: &[&str] = match iv {
+        let fields: &[&str] = match *iv {
             "M5" => &[
                 // Tactical / Momentum: fast-reacting
                 "rsi_14", "macd", "macd_signal", "macd_hist",
@@ -746,14 +745,7 @@ pub fn state_columns() -> Vec<String> {
                 "fr_000", "fr_236", "fr_382", "fr_500", "fr_618", "fr_786", "fr_1000",
             ],
             "H1" | "W1" => &["rsi_14", "ema_10", "ema_20", "ema_50"],
-            _ => &[
-                "rsi_14", "cci_14", "adx_14", "macd", "macd_signal", "macd_hist",
-                "sma_10", "sma_20", "sma_50", "ema_10", "ema_20", "ema_50",
-                "ichimoku_tenkan", "ichimoku_kijun", "ichimoku_senkou_a",
-                "ichimoku_senkou_b", "ichimoku_chikou",
-                "bb_upper", "bb_middle", "bb_lower",
-                "fr_000", "fr_236", "fr_382", "fr_500", "fr_618", "fr_786", "fr_1000",
-            ],
+            _ => unreachable!(),
         };
         for field in fields {
             cols.push(format!("{iv}_ta_{field}"));
