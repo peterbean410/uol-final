@@ -393,7 +393,9 @@ impl Environment {
                     if *interval == "M15" {
                         let (mut dbs, mut dts) = detect_all_patterns(bars);
                         dbs.reverse();
+                        dbs.truncate(12);
                         dts.reverse();
+                        dts.truncate(12);
                         double_bottoms = dbs;
                         double_tops = dts;
                     }
