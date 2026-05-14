@@ -767,6 +767,7 @@ pub fn state_columns() -> Vec<String> {
     cols.push("num_positions_buy".to_string());
     cols.push("num_positions_sell".to_string());
     cols.push("swap_fees".to_string());
+    cols.push("tick_ask".to_string());
     cols.push("tick_spread".to_string());
     cols.push("tick_count".to_string());
     cols.push("M15_double_bottom_low".to_string());
