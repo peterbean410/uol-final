@@ -10,6 +10,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration as TokioDuration};
 
@@ -29,7 +30,7 @@ const EOD_TICK_SNAPSHOT_BRANCH: &str = "marketdata/eod-tick-snapshot";
 const NEWS_DATA_BRANCH: &str = "marketdata/interval-news";
 const EOD_NEWS_SNAPSHOT_BRANCH: &str = "marketdata/eod-news-snapshot";
 const SOURCE_SELECTION_LOOKBACK_NS: i64 = 31 * 24 * 60 * 60 * 1_000_000_000;
-const CACHE_DOWNLOAD_LOCK_STALE_SECS: u64 = 60 * 60;
+const CACHE_DOWNLOAD_LOCK_STALE_SECS: u64 = 5 * 60;
 const CACHE_DOWNLOAD_LOCK_POLL_MS: u64 = 250;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -218,7 +219,6 @@ pub fn build_tick_data_source(prefix: &str, symbol: &str) -> String {
     if base.ends_with(".parquet") || base.contains("/symbol=") {
         base
     } else {
-        // Ticks live under the interval-price branch with interval=ticks.
         let branch = snapshot_branch("ticks");
         format!("{base}/{branch}/symbol={symbol}/interval=ticks")
     }
@@ -376,29 +376,24 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
     end_timestamp_ns: Option<i64>,
 ) -> Result<Vec<Tick>> {
     let schedule = tick_source_schedule(source_uri);
-    let sources = if let Some(snapshot_selection_timestamp_ns) = snapshot_selection_timestamp_ns {
-        if source_uri.ends_with(".parquet") {
+    let sources = if let Some(snapshot_ts) = snapshot_selection_timestamp_ns {
+        // When a time range is given, enumerate all hourly sources covering it.
+        if let (Some(start_ns), Some(end_ns)) = (start_timestamp_ns, end_timestamp_ns) {
+            generate_s3_sources_for_range(source_uri, schedule, start_ns, end_ns.min(snapshot_ts))
+        } else if source_uri.ends_with(".parquet") {
             vec![source_uri.to_string()]
         } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
             determine_price_snapshot_s3_sources_cached(
-                local_cache_dir,
-                Some(cache),
-                source_uri,
-                schedule,
-                Some(snapshot_selection_timestamp_ns),
+                local_cache_dir, Some(cache), source_uri, schedule, Some(snapshot_ts),
             )
             .await?
         } else if let Some(cached_sources) =
-            cached_price_snapshot_sources(cache, source_uri, Some(snapshot_selection_timestamp_ns))
-                .await?
+            cached_price_snapshot_sources(cache, source_uri, Some(snapshot_ts)).await?
         {
             cached_sources
         } else {
-            let speculative_source = speculative_price_snapshot_source_uri(
-                source_uri,
-                schedule,
-                snapshot_selection_timestamp_ns,
-            );
+            let speculative_source =
+                speculative_price_snapshot_source_uri(source_uri, schedule, snapshot_ts);
             let speculative_path = Path::new(
                 speculative_source
                     .strip_prefix("file://")
@@ -407,19 +402,11 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
             if !speculative_path.exists() {
                 return Err(anyhow!(
                     "Exact parquet tick key {} for configured snapshot timestamp {} ({}) was not found",
-                    speculative_source,
-                    snapshot_selection_timestamp_ns,
-                    format_timestamp_ns(snapshot_selection_timestamp_ns)
+                    speculative_source, snapshot_ts, format_timestamp_ns(snapshot_ts)
                 ));
             }
             let selected = vec![speculative_source];
-            cache_price_snapshot_selection(
-                cache,
-                source_uri,
-                Some(snapshot_selection_timestamp_ns),
-                &selected,
-            )
-            .await;
+            cache_price_snapshot_selection(cache, source_uri, Some(snapshot_ts), &selected).await;
             selected
         }
     } else {
@@ -1901,12 +1888,36 @@ async fn ensure_local_cached_s3_source(
             .open(&lock_path)
             .await
         {
-            Ok(_) => {
-                let download_result =
-                    download_s3_source_to_local_cache(source_uri, &local_path).await;
-                let cleanup_result = remove_file_if_exists(&lock_path).await;
+            Ok(mut lock_file) => {
+                // Write our PID into the lock file so other waiters can
+                // detect a dead owner (server crash / OOM) instantly via
+                // kill(0) instead of waiting for the mtime-based timeout.
+                let pid = std::process::id();
+                let _ = lock_file
+                    .write_all(format!("{}\n", pid).as_bytes())
+                    .await;
+                let _ = lock_file.flush().await;
+                drop(lock_file);
+                // Spawn the download into a detached task so the lock is
+                // cleaned up even if the caller's future is cancelled (e.g.
+                // gRPC client timeout).  Dropping a tokio JoinHandle does
+                // NOT abort the spawned task; it keeps running to
+                // completion, so the lock file is always removed.
+                let local = local_path.clone();
+                let src = source_uri.to_string();
+                let lock = lock_path.clone();
+                let handle = tokio::spawn(async move {
+                    let download_result =
+                        download_s3_source_to_local_cache(&src, &local).await;
+                    let cleanup_result = remove_file_if_exists(&lock).await;
+                    (download_result, cleanup_result, local)
+                });
+                let (download_result, cleanup_result, local) =
+                    handle.await.map_err(|e| {
+                        anyhow!("Download task panicked for {}: {}", source_uri, e)
+                    })?;
                 match (download_result, cleanup_result) {
-                    (Ok(downloaded), Ok(())) => return Ok(downloaded.then_some(local_path)),
+                    (Ok(downloaded), Ok(())) => return Ok(downloaded.then_some(local)),
                     (Err(err), Ok(())) => return Err(err),
                     (Ok(_), Err(err)) => return Err(err),
                     (Err(download_err), Err(cleanup_err)) => {
@@ -2026,7 +2037,35 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
     Ok(true)
 }
 
+#[cfg(unix)]
+fn pid_alive(pid: i32) -> bool {
+    // kill(pid, 0) does not send a signal; it only checks whether the
+    // process exists and the caller has permission to signal it.
+    // Returns 0 if alive, -1 with ESRCH if the PID is gone.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: i32) -> bool {
+    true // can't check on non-unix; fall through to mtime
+}
+
 async fn cache_download_lock_is_stale(lock_path: &Path) -> Result<bool> {
+    // If the lock file contains a PID and that process is no longer
+    // alive (server crash / OOM), the lock is immediately stale.
+    if let Ok(content) = tokio::fs::read_to_string(lock_path).await {
+        if let Ok(pid) = content.trim().parse::<i32>() {
+            if !pid_alive(pid) {
+                info!(
+                    "Cache download lock owner PID {} is dead; lock {} is stale",
+                    pid,
+                    lock_path.display(),
+                );
+                return Ok(true);
+            }
+        }
+    }
+
     let metadata = match tokio::fs::metadata(lock_path).await {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
@@ -3656,7 +3695,6 @@ exit 255
     #[tokio::test]
     async fn timestamped_tick_lookup_uses_exact_hourly_snapshot() {
         let dir = tempdir().unwrap();
-        // With hourly schedule, the snapshot at 2012-01-02T06:02:03 maps to hour=06
         let base = dir
             .path()
             .join("marketdata/interval-price/symbol=USDJPY/interval=ticks/year=2012/month=01/day=02/hour=06");
