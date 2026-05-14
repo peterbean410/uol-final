@@ -215,6 +215,7 @@ impl Episode {
             double_tops,
             live_ticks,
             done: self.done,
+            reward: 0.0,
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,

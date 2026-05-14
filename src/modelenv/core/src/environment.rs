@@ -460,6 +460,7 @@ impl Environment {
             double_tops,
             live_ticks,
             done: false,
+            reward: 0.0,
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,
@@ -524,10 +525,10 @@ impl Environment {
                     Err(_) => None,
                 };
 
+                observation.reward = reward;
+                observation.done = !still_running;
                 Ok(StepResponse {
                     data: Some(observation.into_observation()),
-                    reward,
-                    done: !still_running,
                     info: "".to_string(),
                 })
             }
@@ -628,7 +629,7 @@ impl Environment {
                     position.unrealised_pnl = position.calculate_unrealised_pnl(current_mid_price);
                 }
 
-                let observation = self.build_live_observation(self.symbol.clone()).await?;
+                let mut observation = self.build_live_observation(self.symbol.clone()).await?;
 
                 // Calculate reward
                 let reward = self.calculate_reward(&action)?;
@@ -639,10 +640,9 @@ impl Environment {
                     Err(_) => None,
                 };
 
+                observation.reward = reward;
                 Ok(StepResponse {
                     data: Some(observation.into_observation()),
-                    reward,
-                    done: false,
                     info: "".to_string(),
                 })
             }
@@ -1497,7 +1497,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.reward, 0.0);
+        assert_eq!(response.data.as_ref().unwrap().reward, 0.0);
     }
 
     #[tokio::test]
@@ -1534,8 +1534,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response.done);
-        assert!(obs_value(&response.data.unwrap(), "done") > 0.5);
+        assert!(response.data.as_ref().unwrap().done);
     }
 
     #[tokio::test]
@@ -1829,7 +1828,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(first.reward, 0.0);
+        assert_eq!(first.data.as_ref().unwrap().reward, 0.0);
 
         let second = environment
             .step(Action {
@@ -1839,7 +1838,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(second.reward < -0.9);
+        assert!(second.data.as_ref().unwrap().reward < -0.9);
         assert_eq!(environment.last_action, Some(ActionType::ActionBuy1));
     }
 

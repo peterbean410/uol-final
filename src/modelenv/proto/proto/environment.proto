@@ -267,11 +267,14 @@ message Observation {
   // Multiple rows within a single Observation represent e.g. a sequence
   // of recent states for a sequence model.
   repeated StateRow state_data = 2;
+  // Scalar reward for the action that produced this observation.
+  // 0.0 for Reset / LiveData.
+  double reward = 3;
+  // Whether the episode has terminated.
+  bool done = 4;
 }
 
 message StepResponse {
   Observation data = 1;
-  double reward = 2;
-  bool done = 3;
   string info = 4;
 }

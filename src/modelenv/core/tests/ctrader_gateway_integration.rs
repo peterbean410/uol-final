@@ -88,7 +88,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         })
         .await?;
 
-    assert!(!step_response.done);
+    assert!(!step_response.data.as_ref().unwrap().done);
     let step_obs = step_response.data.expect("step observation");
     let step_cols = &step_obs.state_columns;
     let step_vals = &step_obs.state_data[0].values;

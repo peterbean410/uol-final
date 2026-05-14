@@ -768,8 +768,6 @@ pub fn state_columns() -> Vec<String> {
     cols.push("M15_double_top_low".to_string());
     cols.push("sin_hour".to_string());
     cols.push("cos_hour".to_string());
-    // -- done flag --
-    cols.push("done".to_string());
 
     cols
 }

@@ -25,6 +25,7 @@ pub struct LiveData {
     pub double_tops: Vec<DoubleTopPattern>,
     pub live_ticks: Vec<Tick>,
     pub done: bool,
+    pub reward: f64,
     pub m15_double_bottom_low: f64,
     pub m15_double_bottom_high: f64,
     pub m15_double_top_high: f64,
@@ -64,6 +65,8 @@ impl LiveData {
         Observation {
             state_columns: columns,
             state_data: vec![StateRow { values }],
+            reward: self.reward,
+            done: self.done,
         }
     }
 
@@ -149,7 +152,6 @@ impl LiveData {
             "M15_double_top_low" => self.m15_double_top_low,
             "sin_hour" => self.sin_hour,
             "cos_hour" => self.cos_hour,
-            "done" => if self.done { 1.0 } else { 0.0 },
             _ => 0.0,
         }
     }
