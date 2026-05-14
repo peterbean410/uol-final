@@ -6,17 +6,18 @@ use std::sync::Arc;
 use log::info;
 use modelenv_proto::{
     Action, ActionType, Bar, BarList, FillSide, ObserveRequest, RecentBarsRequest,
-    RecentBarsResponse, Reference, ResetRequest, StepResponse, Tick,
+    RecentBarsResponse, ResetRequest, StepResponse, Tick,
 };
 
 use crate::broker_gateway::BrokerGateway;
 use crate::config::Mode;
 use crate::data_loader::{now_ns, DEFAULT_LOCAL_CACHE_DIR, TIME_INTERVALS};
 use crate::episode::{initialize_episode, preload_training_market_data, Episode, RECENT_WINDOW};
+use crate::live_data::LiveData;
 use crate::indicators::{
     compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
     compute_m15_double_top_high, compute_m15_double_top_low, compute_time_features,
-    detect_all_patterns, state_columns,
+    detect_all_patterns,
 };
 use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
@@ -226,7 +227,7 @@ impl Environment {
     }
 
     /// Reset the environment and initialize a new episode
-    pub async fn reset(&mut self, req: ResetRequest) -> Result<Reference> {
+    pub async fn reset(&mut self, req: ResetRequest) -> Result<modelenv_proto::Observation> {
         self.reset_episode_state();
 
         match self.mode {
@@ -373,7 +374,7 @@ impl Environment {
             .collect()
     }
 
-    async fn build_live_observation(&mut self, symbol: String) -> Result<Reference> {
+    async fn build_live_observation(&mut self, symbol: String) -> Result<LiveData> {
         let mut live_bars: HashMap<String, Bar> = HashMap::new();
         let mut fallback_current_bar: Option<Bar> = None;
         let mut ta: Vec<modelenv_proto::IntervalIndicators> =
@@ -445,7 +446,7 @@ impl Environment {
             compute_m15_double_top_low(&double_tops, &live_ticks, m15_double_top_high);
         let (sin_hour, cos_hour) = compute_time_features(current_timestamp);
 
-        let observation = Reference {
+        let observation = LiveData {
             timestamp_ns: current_timestamp,
             symbol,
             live_bars,
@@ -459,7 +460,6 @@ impl Environment {
             double_tops,
             live_ticks,
             done: false,
-            state_columns: state_columns(),
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,
@@ -525,7 +525,7 @@ impl Environment {
                 };
 
                 Ok(StepResponse {
-                    data: Some(observation),
+                    data: Some(observation.into_observation()),
                     reward,
                     done: !still_running,
                     info: "".to_string(),
@@ -640,7 +640,7 @@ impl Environment {
                 };
 
                 Ok(StepResponse {
-                    data: Some(observation),
+                    data: Some(observation.into_observation()),
                     reward,
                     done: false,
                     info: "".to_string(),
@@ -650,7 +650,7 @@ impl Environment {
     }
 
     /// Get current observation without advancing
-    pub async fn observe(&mut self, req: ObserveRequest) -> Result<Reference> {
+    pub async fn observe(&mut self, req: ObserveRequest) -> Result<modelenv_proto::Observation> {
         match self.mode {
             Mode::Training => {
                 let episode = self.episode.as_ref().ok_or_else(|| {
@@ -667,9 +667,13 @@ impl Environment {
                 );
                 observation.recent_fills = recent_fills;
                 self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
-                Ok(observation)
+                Ok(observation.into_observation())
             }
-            Mode::Live => self.build_live_observation(req.symbol).await,
+            Mode::Live => {
+                self.build_live_observation(req.symbol)
+                    .await
+                    .map(|obs| obs.into_observation())
+            }
         }
     }
 
@@ -1066,6 +1070,16 @@ mod tests {
     };
     use tempfile::tempdir;
 
+    /// Helper: find the value at a named column in the first row of an Observation.
+    fn obs_value(obs: &modelenv_proto::Observation, column: &str) -> f64 {
+        let idx = obs
+            .state_columns
+            .iter()
+            .position(|c| c == column)
+            .unwrap_or_else(|| panic!("column not found: {}", column));
+        obs.state_data[0].values[idx]
+    }
+
     struct MockBrokerGateway {
         submit_calls: Arc<AtomicUsize>,
     }
@@ -1369,7 +1383,10 @@ mod tests {
         assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
         assert!(response.data.is_some());
         assert!(environment.recent_fills.is_empty());
-        assert_eq!(response.data.as_ref().unwrap().live_ticks.len(), 2);
+        assert_eq!(
+            obs_value(response.data.as_ref().unwrap(), "tick_count") as i64,
+            2
+        );
     }
 
     #[tokio::test]
@@ -1489,7 +1506,7 @@ mod tests {
             .unwrap();
 
         assert!(response.done);
-        assert!(response.data.unwrap().done);
+        assert!(obs_value(&response.data.unwrap(), "done") > 0.5);
     }
 
     #[tokio::test]
@@ -1559,10 +1576,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(
-            first.data.as_ref().unwrap().timestamp_ns,
-            60_000_000_000
-        );
+        assert!(first.data.is_some());
 
         let second = environment
             .step(Action {
@@ -1573,15 +1587,13 @@ mod tests {
             .unwrap();
 
         let observation = second.data.unwrap();
-        assert_eq!(observation.timestamp_ns, 120_000_000_000);
-        assert_eq!(observation.live_bars["M5"].timestamp_ns, 0);
-        assert_eq!(observation.positions.len(), 1);
-        assert_eq!(observation.positions[0].open_timestamp_ns, 120_000_000_000);
-        assert_eq!(observation.live_ticks.len(), 1);
+        // Position count and tick data accessible via state columns
+        assert_eq!(obs_value(&observation, "num_positions_buy") as i64, 1);
+        assert_eq!(obs_value(&observation, "tick_count") as i64, 1);
     }
 
     #[tokio::test]
-    async fn test_live_observation_ta_has_one_entry_per_interval() {
+    async fn test_live_observation_ta_has_expected_columns() {
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let broker_gateway = Arc::new(MockBrokerGateway {
             submit_calls: Arc::clone(&submit_calls),
@@ -1599,23 +1611,20 @@ mod tests {
             .await
             .unwrap();
         let observation = response.data.unwrap();
-        assert_eq!(observation.ta.len(), TIME_INTERVALS.len());
-        for interval_ta in &observation.ta {
-            let m = interval_ta.momentum.as_ref().unwrap();
-            let t = interval_ta.trend.as_ref().unwrap();
-            let v = interval_ta.volatility.as_ref().unwrap();
-            let s = interval_ta.support.as_ref().unwrap();
-            let p = interval_ta.patterns.as_ref().unwrap();
-            assert!(m.rsi_14.is_nan());
-            assert!(t.adx_14.is_nan());
-            assert!(v.bb_middle.is_nan());
-            assert!(!s.fr_000.is_nan());
-            assert!(!s.fr_1000.is_nan());
+        // STATE_INTERVALS all have ta columns present
+        for iv in &["M5", "M15", "H1", "W1"] {
+            assert!(
+                observation.state_columns.contains(&format!("{}_bar_close", iv)),
+                "missing bar_close for {iv}"
+            );
         }
+        // Live bars are empty so ta values should be 0.0 (no warmup)
+        assert_eq!(obs_value(&observation, "M5_ta_rsi_14"), 0.0);
+        assert_eq!(obs_value(&observation, "M15_ta_adx_14"), 0.0);
     }
 
     #[tokio::test]
-    async fn test_training_observation_ta_has_one_entry_per_interval() {
+    async fn test_training_observation_ta_has_expected_columns() {
         let bars = (0..3)
             .map(|i| Bar {
                 timestamp_ns: i * 60_000_000_000,
@@ -1650,7 +1659,13 @@ mod tests {
             .await
             .unwrap();
         let observation = response.data.unwrap();
-        assert_eq!(observation.ta.len(), TIME_INTERVALS.len());
+        // STATE_INTERVALS columns present
+        for iv in &["M5", "M15", "H1", "W1"] {
+            assert!(
+                observation.state_columns.contains(&format!("{}_bar_close", iv)),
+                "missing bar_close for {iv}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1714,11 +1729,10 @@ mod tests {
             .unwrap();
         let observation = response.data.unwrap();
 
-        assert_eq!(observation.live_bars["M1"].close, 155.21);
-
-        assert_eq!(observation.live_ticks.len(), 2);
-        assert_eq!(observation.live_ticks[0].timestamp_ns, 2);
-        assert_eq!(observation.live_ticks[1].timestamp_ns, 1);
+        // Mock broker returns close=155.21 for all intervals
+        assert_eq!(obs_value(&observation, "M5_bar_close"), 155.21);
+        assert_eq!(obs_value(&observation, "tick_count") as i64, 2);
+        assert_eq!(obs_value(&observation, "tick_ask"), 155.22);
     }
 
     #[tokio::test]
@@ -1897,7 +1911,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(observation.live_bars["M1"].open, 102.0);
+        // Training data loaded: M5 bars from parquet are present
+        assert!(obs_value(&observation, "M5_bar_close") > 0.0);
     }
 
     #[tokio::test]

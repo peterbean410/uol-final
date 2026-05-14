@@ -3,7 +3,9 @@ use anyhow::{Context, Result};
 use log::info;
 use std::collections::HashMap;
 
-use modelenv_proto::{Bar, News, Reference, Tick};
+use modelenv_proto::{Bar, News, Tick};
+
+use crate::live_data::LiveData;
 
 use crate::data_loader::{
     build_interval_data_source, build_news_data_source, build_tick_data_source,
@@ -14,7 +16,7 @@ use crate::data_loader::{
 use crate::indicators::{
     compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
     compute_m15_double_top_high, compute_m15_double_top_low, compute_time_features,
-    detect_all_patterns, state_columns,
+    detect_all_patterns,
 };
 use crate::market_data_cache::MarketDataCache;
 use crate::position::NANOS_PER_DAY;
@@ -134,7 +136,7 @@ impl Episode {
         positions: &[modelenv_proto::Position],
         realised_pnl_12m: f64,
         previous_timestamp_ns: Option<i64>,
-    ) -> Reference {
+    ) -> LiveData {
         let mut live_bars = HashMap::new();
         let mut ta: Vec<modelenv_proto::IntervalIndicators> =
             Vec::with_capacity(TIME_INTERVALS.len());
@@ -201,7 +203,7 @@ impl Episode {
             compute_m15_double_top_low(&double_tops, &live_ticks, m15_double_top_high);
         let (sin_hour, cos_hour) = compute_time_features(current_timestamp);
 
-        Reference {
+        LiveData {
             timestamp_ns: current_timestamp,
             symbol: self.symbol.clone(),
             live_bars,
@@ -213,7 +215,6 @@ impl Episode {
             double_tops,
             live_ticks,
             done: self.done,
-            state_columns: state_columns(),
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,

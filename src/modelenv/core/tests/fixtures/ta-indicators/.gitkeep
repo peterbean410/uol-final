@@ -1,0 +1,14 @@
+# This directory holds JSON fixtures for parity testing of TA indicators
+# against Python ta/ package outputs.
+#
+# Fixture files will include:
+# - rsi_14.json
+# - cci_14.json
+# - adx_14.json
+# - macd_12_26_9.json
+# - sma_10.json, ema_20.json, wma_50.json, dema_10.json, tema_20.json, kama_10.json, trima_20.json
+# - ichimoku_9_26_52.json
+# - bollinger_20_2.json
+# - fibonacci_50.json
+# - double_bottom.json
+# - double_top.json

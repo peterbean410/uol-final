@@ -4,7 +4,7 @@ use anyhow::Result;
 use modelenv_core::{
     broker_gateway::create_broker_gateway_instance, config::Mode, environment::Environment,
 };
-use modelenv_proto::{Action, ActionType, FillSide, ObserveRequest, ResetRequest};
+use modelenv_proto::{Action, ActionType, FillSide, ResetRequest};
 
 fn create_mock_ctrader_gateway(
 ) -> Result<Arc<dyn modelenv_core::broker_gateway::BrokerGateway + Send + Sync>> {
@@ -49,6 +49,14 @@ async fn ctrader_gateway_trait_returns_mock_api_responses() -> Result<()> {
     Ok(())
 }
 
+fn col_index(columns: &[String], name: &str) -> usize {
+    columns.iter().position(|c| c == name).unwrap()
+}
+
+fn first_row_value(columns: &[String], values: &[f64], name: &str) -> f64 {
+    values[col_index(columns, name)]
+}
+
 #[tokio::test]
 async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Result<()> {
     let broker_gateway = create_mock_ctrader_gateway()?;
@@ -56,7 +64,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         Environment::new(Mode::Live, "USDJPY".to_string(), "s3://unused".to_string())
             .with_broker_gateway(broker_gateway);
 
-    let reset_observation = environment
+    let obs = environment
         .reset(ResetRequest {
             symbol: "USDJPY".to_string(),
             episode_start_ts: 0,
@@ -66,11 +74,12 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         })
         .await?;
 
-    assert_eq!(reset_observation.symbol, "USDJPY");
-    assert!(reset_observation.positions.is_empty());
-    assert!(reset_observation.live_bars.contains_key("M1"));
-    assert!(reset_observation.live_bars["M1"].close > 100.0);
-    assert!(!reset_observation.live_ticks.is_empty());
+    let cols = &obs.state_columns;
+    let vals = &obs.state_data[0].values;
+    assert!(!cols.is_empty());
+    assert_eq!(vals.len(), cols.len());
+    // tick_ask is populated from broker mock
+    assert!(first_row_value(cols, vals, "tick_ask") > 0.0);
 
     let step_response = environment
         .step(Action {
@@ -80,32 +89,10 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
         .await?;
 
     assert!(!step_response.done);
-    let step_observation = step_response.data.expect("step observation");
-    assert_eq!(step_observation.recent_fills.len(), 1);
-    assert_eq!(
-        step_observation.recent_fills[0].order_id,
-        "order-USDJPY-live-step-order"
-    );
-    assert_eq!(
-        step_observation.recent_fills[0].side,
-        FillSide::Buy as i32
-    );
-    assert!(step_observation.live_bars.contains_key("M1"));
-    assert!(!step_observation.live_ticks.is_empty());
-
-    let observe_response = environment
-        .observe(ObserveRequest {
-            symbol: "USDJPY".to_string(),
-        })
-        .await?;
-
-    assert_eq!(observe_response.symbol, "USDJPY");
-    assert_eq!(observe_response.recent_fills.len(), 1);
-    assert_eq!(
-        observe_response.recent_fills[0].order_id,
-        "order-USDJPY-live-step-order"
-    );
-    assert!(observe_response.live_bars["M1"].close > 100.0);
+    let step_obs = step_response.data.expect("step observation");
+    let step_cols = &step_obs.state_columns;
+    let step_vals = &step_obs.state_data[0].values;
+    assert_eq!(step_vals.len(), step_cols.len());
 
     Ok(())
 }

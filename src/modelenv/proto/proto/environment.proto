@@ -3,10 +3,9 @@ syntax = "proto3";
 package environment;
 
 service Environment {
-  rpc Reset(ResetRequest) returns (Reference);
+  rpc Reset(ResetRequest) returns (Observation);
   rpc Step(Action) returns (StepResponse);
-  rpc Observe(ObserveRequest) returns (Reference);
-  rpc StreamReferences(ObserveRequest) returns (stream Reference);
+  rpc StreamObservations(ObserveRequest) returns (stream Observation);
   rpc RecentBars(RecentBarsRequest) returns (RecentBarsResponse);
   rpc RecentTicks(RecentTicksRequest) returns (RecentTicksResponse);
   rpc RecentNews(RecentNewsRequest) returns (RecentNewsResponse);
@@ -254,8 +253,22 @@ message Reference {
   repeated string state_columns = 16;
 }
 
+// One row of flat feature values in column order.
+message StateRow {
+  repeated double values = 1;
+}
+
+// Flattened observation ready for model consumption.
+message Observation {
+  // Ordered column names (same order as StateRow.values).
+  repeated string state_columns = 1;
+  // Feature rows.  Currently a single row; future extensions may stack
+  // multiple observations for sequence models.
+  repeated StateRow state_data = 2;
+}
+
 message StepResponse {
-  Reference data = 1;
+  Observation data = 1;
   double reward = 2;
   bool done = 3;
   string info = 4;

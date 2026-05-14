@@ -8,10 +8,9 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use modelenv_proto::{
-    environment_server::Environment, Action, ObserveRequest, RecentBarsRequest,
+    environment_server::Environment, Action, Observation, ObserveRequest, RecentBarsRequest,
     RecentBarsResponse, RecentNewsRequest, RecentNewsResponse, RecentTicksRequest,
-    RecentTicksResponse, Reference,
-    ResetRequest, StepResponse,
+    RecentTicksResponse, ResetRequest, StepResponse,
 };
 
 use modelenv_core::environment::Environment as CoreEnvironment;
@@ -41,17 +40,19 @@ impl EnvironmentService {
     }
 }
 
-/// Response type for streaming observations
-type StreamReferencesResponse = Pin<Box<dyn Stream<Item = Result<Reference, Status>> + Send>>;
+type StreamObservationsResponse =
+    Pin<Box<dyn Stream<Item = Result<Observation, Status>> + Send>>;
 
 #[tonic::async_trait]
 impl Environment for EnvironmentService {
-    type StreamReferencesStream = StreamReferencesResponse;
+    type StreamObservationsStream = StreamObservationsResponse;
 
-    async fn reset(&self, req: Request<ResetRequest>) -> Result<Response<Reference>, Status> {
+    async fn reset(
+        &self,
+        req: Request<ResetRequest>,
+    ) -> Result<Response<Observation>, Status> {
         let reset_req = req.into_inner();
 
-        // Call the environment reset method
         let mut env = self.environment.lock().await;
         let observation = env
             .reset(reset_req)
@@ -61,10 +62,12 @@ impl Environment for EnvironmentService {
         Ok(Response::new(observation))
     }
 
-    async fn step(&self, req: Request<Action>) -> Result<Response<StepResponse>, Status> {
+    async fn step(
+        &self,
+        req: Request<Action>,
+    ) -> Result<Response<StepResponse>, Status> {
         let action = req.into_inner();
 
-        // Call the environment step method
         let mut env = self.environment.lock().await;
         let step_response = env
             .step(action)
@@ -72,19 +75,6 @@ impl Environment for EnvironmentService {
             .map_err(|e| internal_error_status("Step", e))?;
 
         Ok(Response::new(step_response))
-    }
-
-    async fn observe(&self, req: Request<ObserveRequest>) -> Result<Response<Reference>, Status> {
-        let observe_req = req.into_inner();
-
-        // Call the environment observe method
-        let mut env = self.environment.lock().await;
-        let observation = env
-            .observe(observe_req)
-            .await
-            .map_err(|e| internal_error_status("Observe", e))?;
-
-        Ok(Response::new(observation))
     }
 
     async fn recent_bars(
@@ -126,25 +116,17 @@ impl Environment for EnvironmentService {
         Ok(Response::new(response))
     }
 
-    async fn stream_references(
+    async fn stream_observations(
         &self,
         req: Request<ObserveRequest>,
-    ) -> Result<Response<StreamReferencesResponse>, Status> {
+    ) -> Result<Response<StreamObservationsResponse>, Status> {
         let observe_req = req.into_inner();
 
-        // Create a channel for streaming observations
         let (tx, rx) = mpsc::channel(16);
-
-        // Clone the environment for the streaming task
         let env = self.environment.clone();
         let symbol = observe_req.symbol;
 
-        // Spawn a task to generate observations
         tokio::spawn(async move {
-            // TODO: Implement streaming for Production Mode
-            // For now, just send a single observation and close the stream
-
-            // Get initial observation
             let observation = {
                 let mut env = env.lock().await;
                 env.observe(ObserveRequest { symbol }).await
@@ -158,12 +140,9 @@ impl Environment for EnvironmentService {
                 }
             };
 
-            // Send the observation
             if tx.send(Ok(observation)).await.is_err() {
                 return;
             }
-
-            // Close the channel
         });
 
         let stream = stream::unfold(rx, |mut rx| async move {
