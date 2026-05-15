@@ -70,6 +70,8 @@ class PipelineConfig:
     alert_webhook_url: str = ""
     nll_degradation_threshold: float = 0.1
     da_degradation_threshold: float = 0.05
+    nll_absolute_threshold: float = 3.5
+    da_absolute_threshold: float = 0.50
 
     # Scheduling
     schedule_mode: Literal["daily", "weekly", "on-demand", "drift-triggered"] = (
@@ -138,6 +140,14 @@ class PipelineConfig:
         if self.train_pct + self.test_pct > 1.0:
             errors.append(
                 f"train_pct + test_pct must be <= 1.0, got {self.train_pct + self.test_pct}"
+            )
+        if not (0.0 <= self.nll_absolute_threshold <= 10.0):
+            errors.append(
+                f"nll_absolute_threshold out of range: {self.nll_absolute_threshold}"
+            )
+        if not (0.0 <= self.da_absolute_threshold <= 1.0):
+            errors.append(
+                f"da_absolute_threshold out of range: {self.da_absolute_threshold}"
             )
         return errors
 

@@ -225,6 +225,8 @@ def resolve_config(
         alert_webhook_url: str = ""
         nll_degradation_threshold: float = 0.1
         da_degradation_threshold: float = 0.05
+        nll_absolute_threshold: float = 3.5
+        da_absolute_threshold: float = 0.50
         schedule_mode: str = "drift-triggered"
         training_mode: str = "scratch"
         finetune_epochs: int = 2
@@ -620,12 +622,11 @@ def model_registration(
                 extra={"version_id": version_id, "model_name": model_name},
             )
 
-            # Step 6: Trigger KServe InferenceService update ------------------
-            _trigger_kserve_update(
-                symbol=symbol,
-                horizon=forecast_horizon,
-                model_uri=model_checkpoint_uri,
-            )
+            # Note: standalone Forecaster KServe InferenceService is deprecated
+            # (kubeflow-ml-pipeline spec, Requirement 5). The dqnpf-intraday
+            # combined predictor's hot-reload watcher (Task 30.3) resolves the
+            # new production checkpoint on its next poll; no KServe patching
+            # is performed from this pipeline step.
 
         _log(
             "Model registration component completed successfully",
@@ -647,74 +648,6 @@ def model_registration(
             "model checkpoint remains in S3",
             extra={"error": str(e)},
         )
-
-
-def _trigger_kserve_update(
-    symbol: str,
-    horizon: int,
-    model_uri: str,
-) -> None:
-    """Update the KServe InferenceService to point to the new model.
-
-    Patches the InferenceService predictor environment to set MODEL_PATH
-    to the new model checkpoint URI.
-
-    Args:
-        symbol: Currency pair symbol.
-        horizon: Forecast horizon.
-        model_uri: S3 URI of the new model checkpoint.
-
-    Requirements: 6.4
-    """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    try:
-        from kubernetes import client, config
-
-        config.load_incluster_config()
-        api = client.CustomObjectsApi()
-
-        service_name = f"forecaster-{symbol.lower()}-h{horizon}"
-
-        patch_body = {
-            "spec": {
-                "predictor": {
-                    "containers": [
-                        {
-                            "name": "forecaster-predictor",
-                            "env": [
-                                {
-                                    "name": "MODEL_PATH",
-                                    "value": f"s3://prod-fintech-forex-sg-731833471586/{model_uri}",
-                                }
-                            ],
-                        }
-                    ]
-                }
-            }
-        }
-
-        api.patch_namespaced_custom_object(
-            group="serving.kserve.io",
-            version="v1beta1",
-            namespace="kubeflow",
-            plural="inferenceservices",
-            name=service_name,
-            body=patch_body,
-        )
-
-        logger.info(
-            "KServe InferenceService '%s' updated with new model path",
-            service_name,
-        )
-    except ImportError:
-        logger.warning(
-            "kubernetes client not available; skipping KServe update"
-        )
-    except Exception as e:
-        logger.error("Failed to update KServe InferenceService: %s", e)
 
 
 # ---------------------------------------------------------------------------

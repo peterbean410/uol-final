@@ -38,6 +38,8 @@ logger = get_logger(__name__, component="model_evaluation")
 # Degradation thresholds (from pipeline config)
 DEFAULT_NLL_DEGRADATION_THRESHOLD = 0.1
 DEFAULT_DA_DEGRADATION_THRESHOLD = 0.05
+DEFAULT_NLL_ABSOLUTE_THRESHOLD = 3.5
+DEFAULT_DA_ABSOLUTE_THRESHOLD = 0.50
 
 # Fixed seed for forgetting check sampling
 FORGETTING_CHECK_SEED = 42
@@ -348,12 +350,19 @@ def degradation_gate(
     production_metrics: dict,
     nll_threshold: float = DEFAULT_NLL_DEGRADATION_THRESHOLD,
     da_threshold: float = DEFAULT_DA_DEGRADATION_THRESHOLD,
+    nll_absolute_threshold: float = DEFAULT_NLL_ABSOLUTE_THRESHOLD,
+    da_absolute_threshold: float = DEFAULT_DA_ABSOLUTE_THRESHOLD,
 ) -> tuple[bool, str]:
-    """Compare current model metrics against production model metrics.
+    """Compare current model metrics against production model and absolute floors.
 
-    The gate fails (returns False) if:
+    The gate fails (returns False) if any of:
     - Current NLL exceeds production NLL by more than nll_threshold
     - Current DA drops below production DA by more than da_threshold
+    - Current NLL exceeds the absolute nll_absolute_threshold
+    - Current DA falls below the absolute da_absolute_threshold
+
+    The relative checks compare against the production model baselines.
+    The absolute checks enforce minimum quality regardless of the production model.
 
     Args:
         current_metrics: Metrics from the newly trained model.
@@ -361,6 +370,10 @@ def degradation_gate(
             (keys: "nll", "directional_accuracy").
         nll_threshold: Maximum allowed NLL increase over production.
         da_threshold: Maximum allowed DA decrease from production.
+        nll_absolute_threshold: Maximum allowed NLL in absolute terms
+            (from Changan QIAN thesis: Transformer achieves 2.404 on USDJPY 5min).
+        da_absolute_threshold: Minimum allowed DA in absolute terms
+            (must beat a coin flip).
 
     Returns:
         Tuple of (gate_passed: bool, reason: str).
@@ -373,6 +386,7 @@ def degradation_gate(
 
     reasons = []
 
+    # Relative degradation checks
     if nll_delta > nll_threshold:
         reasons.append(
             f"NLL degraded: current={current_metrics.nll:.6f}, "
@@ -383,6 +397,19 @@ def degradation_gate(
         reasons.append(
             f"DA degraded: current={current_metrics.directional_accuracy:.4f}, "
             f"production={prod_da:.4f}, delta={da_delta:.4f} > threshold={da_threshold}"
+        )
+
+    # Absolute quality checks (thesis benchmarks: NLL 2.404, DA 0.505)
+    if current_metrics.nll > nll_absolute_threshold:
+        reasons.append(
+            f"NLL below absolute floor: current={current_metrics.nll:.6f} > "
+            f"absolute_threshold={nll_absolute_threshold}"
+        )
+
+    if current_metrics.directional_accuracy < da_absolute_threshold:
+        reasons.append(
+            f"DA below absolute floor: current={current_metrics.directional_accuracy:.4f} < "
+            f"absolute_threshold={da_absolute_threshold}"
         )
 
     if reasons:
@@ -641,6 +668,18 @@ def parse_args() -> argparse.Namespace:
         help="Maximum allowed DA decrease from production model",
     )
     parser.add_argument(
+        "--nll-absolute-threshold",
+        type=float,
+        default=DEFAULT_NLL_ABSOLUTE_THRESHOLD,
+        help="Absolute maximum NLL (model fails gate if NLL exceeds this)",
+    )
+    parser.add_argument(
+        "--da-absolute-threshold",
+        type=float,
+        default=DEFAULT_DA_ABSOLUTE_THRESHOLD,
+        help="Absolute minimum directional accuracy (model fails gate if DA below this)",
+    )
+    parser.add_argument(
         "--bucket",
         type=str,
         default=S3_BUCKET,
@@ -665,6 +704,8 @@ def main() -> None:
             "forecast_horizon": args.forecast_horizon,
             "nll_degradation_threshold": args.nll_degradation_threshold,
             "da_degradation_threshold": args.da_degradation_threshold,
+            "nll_absolute_threshold": args.nll_absolute_threshold,
+            "da_absolute_threshold": args.da_absolute_threshold,
         },
     )
 
@@ -765,6 +806,8 @@ def main() -> None:
                 production_metrics=production_metrics,
                 nll_threshold=args.nll_degradation_threshold,
                 da_threshold=args.da_degradation_threshold,
+                nll_absolute_threshold=args.nll_absolute_threshold,
+                da_absolute_threshold=args.da_absolute_threshold,
             )
             logger.info(
                 "Degradation gate evaluated",
@@ -811,6 +854,8 @@ def main() -> None:
             "reason": gate_reason,
             "nll_degradation_threshold": args.nll_degradation_threshold,
             "da_degradation_threshold": args.da_degradation_threshold,
+            "nll_absolute_threshold": args.nll_absolute_threshold,
+            "da_absolute_threshold": args.da_absolute_threshold,
         },
     }
 

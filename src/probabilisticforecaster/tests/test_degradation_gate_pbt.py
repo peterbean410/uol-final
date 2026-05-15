@@ -18,6 +18,8 @@ from probabilisticforecaster.kubeflow.components.model_evaluation.component impo
     degradation_gate,
     DEFAULT_NLL_DEGRADATION_THRESHOLD,
     DEFAULT_DA_DEGRADATION_THRESHOLD,
+    DEFAULT_NLL_ABSOLUTE_THRESHOLD,
+    DEFAULT_DA_ABSOLUTE_THRESHOLD,
 )
 
 
@@ -89,6 +91,7 @@ class TestDegradationGateLogic:
 
         We construct current_nll = prod_nll + nll_threshold + nll_excess
         so that the NLL delta strictly exceeds the threshold.
+        Absolute thresholds are set wide to test only relative degradation.
 
         **Validates: Requirements 9.4**
         """
@@ -112,6 +115,8 @@ class TestDegradationGateLogic:
             production_metrics=production_metrics,
             nll_threshold=nll_threshold,
             da_threshold=da_threshold,
+            nll_absolute_threshold=999.0,  # Wide (only testing relative degradation
+            da_absolute_threshold=-1.0,  # Wide) only testing relative degradation
         )
 
         assert gate_passed is False, (
@@ -145,6 +150,7 @@ class TestDegradationGateLogic:
 
         We construct current_da = prod_da - da_threshold - da_excess
         so that the DA delta strictly exceeds the threshold.
+        Absolute thresholds are set wide to test only relative degradation.
 
         **Validates: Requirements 9.4**
         """
@@ -168,6 +174,8 @@ class TestDegradationGateLogic:
             production_metrics=production_metrics,
             nll_threshold=nll_threshold,
             da_threshold=da_threshold,
+            nll_absolute_threshold=999.0,  # Wide (only testing relative degradation
+            da_absolute_threshold=-1.0,  # Wide) only testing relative degradation
         )
 
         assert gate_passed is False, (
@@ -197,15 +205,16 @@ class TestDegradationGateLogic:
     def test_metrics_within_thresholds_allows_promotion(
         self, prod_nll, prod_da, nll_threshold, da_threshold, nll_margin, da_margin, cr95, rmse
     ):
-        """When both NLL and DA are within their respective thresholds,
-        gate_passed is True (model CAN be promoted).
+        """When both NLL and DA are within their respective relative and absolute
+        thresholds, gate_passed is True (model CAN be promoted).
 
         We construct:
-        - current_nll = prod_nll + nll_threshold * nll_margin (within threshold)
-        - current_da = prod_da - da_threshold * da_margin (within threshold)
+        - current_nll = prod_nll + nll_threshold * nll_margin (within relative threshold)
+        - current_da = prod_da - da_threshold * da_margin (within relative threshold)
 
         Since nll_margin and da_margin are in [0, 0.99], the deltas are
-        strictly less than the thresholds.
+        strictly less than the relative thresholds.
+        Absolute thresholds are set wide to test only relative degradation.
 
         **Validates: Requirements 9.4**
         """
@@ -231,6 +240,8 @@ class TestDegradationGateLogic:
             production_metrics=production_metrics,
             nll_threshold=nll_threshold,
             da_threshold=da_threshold,
+            nll_absolute_threshold=999.0,  # Wide (only testing relative degradation
+            da_absolute_threshold=-1.0,  # Wide) only testing relative degradation
         )
 
         assert gate_passed is True, (
@@ -242,4 +253,110 @@ class TestDegradationGateLogic:
         )
         assert "within acceptable thresholds" in reason, (
             f"Reason should indicate metrics are acceptable, got: {reason}"
+        )
+
+    # -------------------------------------------------------------------
+    # Absolute threshold tests
+    # -------------------------------------------------------------------
+
+    @given(
+        nll_above_absolute=st.floats(min_value=3.51, max_value=10.0, allow_nan=False, allow_infinity=False),
+        prod_nll=nll_strategy,
+        prod_da=da_strategy,
+        cr95=cr95_strategy,
+        rmse=rmse_strategy,
+    )
+    @settings(
+        max_examples=100,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    def test_nll_exceeds_absolute_threshold_blocks_promotion(
+        self, nll_above_absolute, prod_nll, prod_da, cr95, rmse
+    ):
+        """When current NLL exceeds the absolute NLL threshold (3.5),
+        gate_passed is False even if relative degradation is within tolerance.
+
+        **Validates: Requirements 9.4 (absolute floor)**
+        """
+        assume(nll_above_absolute > 3.5)
+
+        # NLL is above absolute floor, DA is fine, relative delta is within bounds
+        current_nll = nll_above_absolute
+        current_da = prod_da  # No relative degradation
+
+        current_metrics = EvaluationMetrics(
+            nll=current_nll,
+            directional_accuracy=current_da,
+            coverage_ratio_95=cr95,
+            rmse=rmse,
+        )
+        production_metrics = {"nll": prod_nll, "directional_accuracy": prod_da}
+
+        gate_passed, reason = degradation_gate(
+            current_metrics=current_metrics,
+            production_metrics=production_metrics,
+            nll_threshold=999.0,  # Wide (relative gate won't trigger
+            da_threshold=999.0,  # Wide) relative gate won't trigger
+            nll_absolute_threshold=3.5,
+            da_absolute_threshold=0.0,
+        )
+
+        assert gate_passed is False, (
+            f"Gate should FAIL when NLL exceeds absolute threshold. "
+            f"current_nll={current_nll:.6f}, absolute_threshold=3.5"
+        )
+        assert "absolute" in reason.lower(), (
+            f"Reason should mention absolute floor, got: {reason}"
+        )
+
+    @given(
+        da_below_absolute=st.floats(min_value=0.0, max_value=0.49, allow_nan=False, allow_infinity=False),
+        prod_nll=nll_strategy,
+        prod_da=da_strategy,
+        cr95=cr95_strategy,
+        rmse=rmse_strategy,
+    )
+    @settings(
+        max_examples=100,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    def test_da_below_absolute_threshold_blocks_promotion(
+        self, da_below_absolute, prod_nll, prod_da, cr95, rmse
+    ):
+        """When current DA falls below the absolute DA threshold (0.50),
+        gate_passed is False even if relative degradation is within tolerance.
+
+        **Validates: Requirements 9.4 (absolute floor)**
+        """
+        assume(da_below_absolute < 0.50)
+
+        # DA is below absolute floor, NLL is fine, relative delta is within bounds
+        current_nll = prod_nll  # No relative degradation
+        current_da = da_below_absolute
+
+        current_metrics = EvaluationMetrics(
+            nll=current_nll,
+            directional_accuracy=current_da,
+            coverage_ratio_95=cr95,
+            rmse=rmse,
+        )
+        production_metrics = {"nll": prod_nll, "directional_accuracy": prod_da}
+
+        gate_passed, reason = degradation_gate(
+            current_metrics=current_metrics,
+            production_metrics=production_metrics,
+            nll_threshold=999.0,  # Wide (relative gate won't trigger
+            da_threshold=999.0,  # Wide) relative gate won't trigger
+            nll_absolute_threshold=999.0,
+            da_absolute_threshold=0.50,
+        )
+
+        assert gate_passed is False, (
+            f"Gate should FAIL when DA falls below absolute threshold. "
+            f"current_da={current_da:.4f}, absolute_threshold=0.50"
+        )
+        assert "absolute" in reason.lower(), (
+            f"Reason should mention absolute floor, got: {reason}"
         )

@@ -81,6 +81,12 @@ def valid_pipeline_configs(draw):
         da_degradation_threshold=draw(
             st.floats(min_value=0.01, max_value=1.0, allow_nan=False, allow_infinity=False)
         ),
+        nll_absolute_threshold=draw(
+            st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False)
+        ),
+        da_absolute_threshold=draw(
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
+        ),
         schedule_mode=draw(st.sampled_from(VALID_SCHEDULE_MODES)),
         training_mode=draw(st.sampled_from(VALID_TRAINING_MODES)),
         finetune_epochs=draw(st.integers(min_value=1, max_value=10)),
@@ -239,6 +245,8 @@ OVERRIDABLE_FIELDS = {
     "katib_enabled": st.booleans(),
     "training_mode": st.sampled_from(VALID_TRAINING_MODES),
     "schedule_mode": st.sampled_from(VALID_SCHEDULE_MODES),
+    "nll_absolute_threshold": st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False),
+    "da_absolute_threshold": st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
 }
 
 

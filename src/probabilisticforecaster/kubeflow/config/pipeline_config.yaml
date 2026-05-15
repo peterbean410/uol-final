@@ -49,6 +49,8 @@ canary_traffic_percent: 0
 alert_webhook_url: ""
 nll_degradation_threshold: 0.1
 da_degradation_threshold: 0.05
+nll_absolute_threshold: 3.5     # Must be below this NLL regardless of production
+da_absolute_threshold: 0.50     # Must be above this DA regardless of production
 
 # Scheduling
 schedule_mode: "drift-triggered"  # daily, weekly, on-demand, drift-triggered
