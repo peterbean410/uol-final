@@ -1,10 +1,7 @@
 """KFP Pipeline Definition for the Probabilistic Forex Forecaster.
 
-Registered via Gitea Action on push to pipeline-related files.
-"""
-
 Defines the forecaster_pipeline using KFP v2 SDK with @dsl.container_component
-decorators. Wires data_preparation → model_training → model_evaluation → backtesting
+decorators. Wires data_preparation -> model_training -> model_evaluation -> backtesting
 as a DAG with retry(3) on each component and caching enabled on data_preparation.
 
 Includes Model Registry registration after model_evaluation with degradation gate
@@ -13,6 +10,8 @@ exists), and Katib best-parameter injection.
 
 Pipeline accepts parameters: symbol, forecast_horizon, epochs, batch_size,
 learning_rate, snapshot_date, training_mode, katib_best_params_json.
+
+Registered via Gitea Action on push to pipeline-related files.
 
 Requirements: 1.1, 1.2, 1.7, 1.8, 1.9, 6.2, 6.4, 9.4
 """
