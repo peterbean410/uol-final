@@ -770,8 +770,8 @@ def forecaster_pipeline(
     # Registry. Uses the pipeline job name placeholder which KFP resolves
     # to the actual job name at runtime.
     reg_task = model_registration(
-        model_checkpoint_uri=mt_task.outputs["model_checkpoint"].uri,
-        evaluation_metrics_uri=me_task.outputs["evaluation_metrics"].uri,
+        model_checkpoint_uri=mt_task.outputs["model_checkpoint"],
+        evaluation_metrics_uri=me_task.outputs["evaluation_metrics"],
         pipeline_run_id=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
         registry_url=model_registry_url,
         symbol=symbol,
