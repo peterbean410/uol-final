@@ -1,0 +1,134 @@
+# dqnpf-intraday Prometheus alerting rules.
+#
+# Alerts for the combined DQN + Forecaster integration layer:
+#   - Pipeline run failure (dqnpf-intraday pipeline)
+#   - Backtest threshold validation failure
+#   - InferenceService p99 latency > 100ms (5-min window)
+#   - Error rate > 1% (5-min window)
+#   - Suppression rate > 60% for 10 consecutive minutes
+#
+# Webhook payload includes run_id (or pod id), failed check, metric snapshot.
+#
+# Requirements: 24.1, 24.2, 24.3
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dqnpf-intraday-alerts
+  namespace: dqnpf-intraday
+  labels:
+    app.kubernetes.io/name: dqnpf-intraday
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: fintech-forex
+    app.kubernetes.io/managed-by: fluxcd
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # --- Pipeline Run Failure Alerts (Requirement 24.1, 24.2) ---
+    - name: dqnpf.pipeline.failures
+      rules:
+        - alert: DqnpfIntradayPipelineRunFailed
+          expr: |
+            increase(dqnpf_intraday_pipeline_runs_total{status="failed"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday pipeline run failed"
+            description: >-
+              Pipeline run for dqnpf-intraday failed.
+              Run ID={{ $labels.run_id }}.
+              Failed check={{ $labels.failed_check }}.
+            webhook_payload: >-
+              {"run_id":"{{ $labels.run_id }}","failed_check":"pipeline_run_failure","metric_snapshot":{"status":"failed","value":"{{ $value }}"}}
+            runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-pipeline-failure"
+
+    # --- Backtest Threshold Validation Failure (Requirement 24.1, 24.2) ---
+    - name: dqnpf.backtest.threshold
+      rules:
+        - alert: DqnpfIntradayBacktestThresholdFailed
+          expr: |
+            increase(dqnpf_intraday_backtest_threshold_failures_total[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday backtest threshold validation failed"
+            description: >-
+              Backtest threshold validation failed for dqnpf-intraday.
+              Run ID={{ $labels.run_id }}.
+              Failed check={{ $labels.check_name }}.
+              Metric value={{ $value }}.
+            webhook_payload: >-
+              {"run_id":"{{ $labels.run_id }}","failed_check":"backtest_threshold_{{ $labels.check_name }}","metric_snapshot":{"check":"{{ $labels.check_name }}","value":"{{ $value }}"}}
+            runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-backtest-threshold"
+
+    # --- InferenceService Latency and Error Rate Alerts (Requirement 24.1, 24.3) ---
+    - name: dqnpf.serving.latency
+      rules:
+        - alert: DqnpfIntradayP99LatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(dqnpf_intraday_inference_request_duration_seconds_bucket[5m])) by (le, pod)
+            ) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday inference p99 latency exceeds 100ms"
+            description: >-
+              The 99th percentile inference latency for the dqnpf-intraday
+              predictor (pod={{ $labels.pod }}) is {{ $value }}s,
+              exceeding the 100ms SLO over a 5-minute window.
+            webhook_payload: >-
+              {"pod_id":"{{ $labels.pod }}","failed_check":"p99_latency_exceeded","metric_snapshot":{"p99_latency_seconds":"{{ $value }}","threshold":"0.1"}}
+            runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-latency"
+
+        - alert: DqnpfIntradayErrorRateHigh
+          expr: |
+            (
+              sum(rate(dqnpf_intraday_inference_requests_total{status="error"}[5m])) by (pod)
+              /
+              sum(rate(dqnpf_intraday_inference_requests_total[5m])) by (pod)
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday inference error rate exceeds 1%"
+            description: >-
+              Inference error rate for the dqnpf-intraday predictor
+              (pod={{ $labels.pod }}) is {{ $value | humanizePercentage }},
+              exceeding the 1% threshold over a 5-minute window.
+            webhook_payload: >-
+              {"pod_id":"{{ $labels.pod }}","failed_check":"error_rate_exceeded","metric_snapshot":{"error_rate":"{{ $value }}","threshold":"0.01"}}
+            runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-error-rate"
+
+    # --- Suppression Rate Anomaly Alert (Requirement 24.1) ---
+    - name: dqnpf.serving.suppression
+      rules:
+        - alert: DqnpfIntradaySuppressionRateAnomaly
+          expr: |
+            (
+              sum(rate(dqnpf_intraday_actions_suppressed_total[5m])) by (pod)
+              /
+              sum(rate(dqnpf_intraday_actions_total[5m])) by (pod)
+            ) > 0.6
+          for: 10m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday suppression rate exceeds 60% for 10 minutes"
+            description: >-
+              The suppression rate for the dqnpf-intraday predictor
+              (pod={{ $labels.pod }}) is {{ $value | humanizePercentage }},
+              exceeding 60% for 10 consecutive minutes. This may indicate
+              overly aggressive screening thresholds or degraded model quality.
+            webhook_payload: >-
+              {"pod_id":"{{ $labels.pod }}","failed_check":"suppression_rate_anomaly","metric_snapshot":{"suppression_rate":"{{ $value }}","threshold":"0.6","duration":"10m"}}
+            runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-suppression-rate"

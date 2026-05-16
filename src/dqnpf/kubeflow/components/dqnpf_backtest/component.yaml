@@ -1,0 +1,53 @@
+# KFP component spec for the dqnpf-intraday backtest step.
+# Requirements: 21.1, 21.2, 21.3, 21.4, 21.5, 21.6
+name: dqnpf-intraday-backtest
+description: |
+  Runs the dqnpf-intraday integration-layer backtest against frozen DQN and
+  Forecaster production checkpoints resolved from the Model Registry. Emits a
+  single JSON artifact containing the BacktestComparison, ThresholdReport,
+  and the resolved IntegrationConfig.
+
+inputs:
+  - name: integration_config_yaml
+    type: String
+    description: |
+      Path inside the component container to a YAML file with the
+      DqnpfPipelineConfig fields (screening thresholds, episode window,
+      registry lifecycle stages).
+  - name: dqn_model_registry_name
+    type: String
+    description: Model Registry entry name for the DQN parent checkpoint.
+    default: deepqnetwork-usdjpy
+  - name: forecaster_model_registry_name
+    type: String
+    description: Model Registry entry name for the Forecaster parent checkpoint.
+    default: probabilisticforecaster-usdjpy
+
+outputs:
+  - name: backtest_report
+    type: Artifact
+    description: |
+      JSON artifact with three top-level keys: `comparison` (BacktestComparison),
+      `threshold_report` (ThresholdReport with `passed` and `failures`), and
+      `integration_config` (the IntegrationConfig used for the run).
+
+implementation:
+  container:
+    image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-backtest:latest
+    command:
+      - python
+      - -m
+      - tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest
+    args:
+      - --integration-config-yaml
+      - { inputValue: integration_config_yaml }
+      - --dqn-model-registry-name
+      - { inputValue: dqn_model_registry_name }
+      - --forecaster-model-registry-name
+      - { inputValue: forecaster_model_registry_name }
+      - --output-artifact-path
+      - { outputPath: backtest_report }
+
+# Retry policy and resource requests are applied at pipeline-definition time
+# (see tradingmodel/intraday/dqnpf/kubeflow/pipeline/dqnpf_pipeline.py, Task 29).
+# Defaults: retry(3) on transient failure; CPU-only (no GPU); 2 vCPU / 4Gi mem.

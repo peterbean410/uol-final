@@ -2,7 +2,7 @@
 # Extends the shared base image with evaluation-specific dependencies
 # Requirements: 1.5, 9.4
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-base:latest
+FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
 
 LABEL component="model_evaluation"
 LABEL description="Evaluate model: compute NLL, DA, CR95, RMSE; forgetting check; degradation gate"

@@ -56,7 +56,7 @@ def dqn_training(
     (load production checkpoint, reduced LR, fewer episodes) modes.
     """
     return dsl.ContainerSpec(
-        image=f"{ECR_BASE}/dqn-training:latest",
+        image=f"{ECR_BASE}/dqn/training:latest",
         command=["python", "component.py"],
         args=[
             "--checkpoint-output-path", model_checkpoint.uri,
@@ -89,7 +89,7 @@ def dqn_backtest(
     episode reward, average episode length), and runs degradation gate.
     """
     return dsl.ContainerSpec(
-        image=f"{ECR_BASE}/dqn-backtest:latest",
+        image=f"{ECR_BASE}/dqn/backtest:latest",
         command=["python", "component.py"],
         args=[
             "--checkpoint-path", model_checkpoint.uri,

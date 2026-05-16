@@ -1,5 +1,5 @@
 # Shared base image for all Kubeflow pipeline components
-# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-base
+# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base
 # Requirements: 2.1, 2.2
 
 FROM python:3.11-slim

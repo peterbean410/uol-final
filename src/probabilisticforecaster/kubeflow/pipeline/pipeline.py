@@ -52,7 +52,7 @@ def data_preparation(
     Outputs train and test datasets as KFP artifacts to S3.
     """
     return dsl.ContainerSpec(
-        image=f"{ECR_BASE}/forecaster-data-preparation:latest",
+        image=f"{ECR_BASE}/forecaster/data-preparation:latest",
         command=["python", "component.py"],
         args=[
             "--symbol", symbol,
@@ -83,7 +83,7 @@ def model_training(
     (load production weights, reduced LR, fewer epochs) modes.
     """
     return dsl.ContainerSpec(
-        image=f"{ECR_BASE}/forecaster-model-training:latest",
+        image=f"{ECR_BASE}/forecaster/model-training:latest",
         command=["python", "component.py"],
         args=[
             "--train-dataset-path", train_dataset.uri,
@@ -106,7 +106,7 @@ def model_evaluation(
     Includes forgetting check and degradation gate logic.
     """
     return dsl.ContainerSpec(
-        image=f"{ECR_BASE}/forecaster-model-evaluation:latest",
+        image=f"{ECR_BASE}/forecaster/model-evaluation:latest",
         command=["python", "component.py"],
         args=[
             "--model-checkpoint-path", model_checkpoint.uri,
@@ -129,7 +129,7 @@ def backtesting(
     Outputs annualised return, Sharpe ratio, and max drawdown per strategy.
     """
     return dsl.ContainerSpec(
-        image=f"{ECR_BASE}/forecaster-backtesting:latest",
+        image=f"{ECR_BASE}/forecaster/backtesting:latest",
         command=["python", "component.py"],
         args=[
             "--model-checkpoint-path", model_checkpoint.uri,

@@ -1,0 +1,85 @@
+# PIPELINE DEFINITION
+# Name: dqnpf-intraday-pipeline
+# Description: Combined DQN + ProbabilisticForecaster intraday integration: runs the screening backtest against production-stage parent checkpoints from the Model Registry and emits a BacktestComparison + ThresholdReport artifact.
+# Inputs:
+#    dqn_model_registry_name: str [Default: 'deepqnetwork-usdjpy']
+#    forecaster_model_registry_name: str [Default: 'probabilisticforecaster-usdjpy']
+#    integration_config_yaml: str [Default: '/etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml']
+components:
+  comp-dqnpf-backtest:
+    executorLabel: exec-dqnpf-backtest
+    inputDefinitions:
+      parameters:
+        dqn_model_registry_name:
+          parameterType: STRING
+        forecaster_model_registry_name:
+          parameterType: STRING
+        integration_config_yaml:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        backtest_report:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-dqnpf-backtest:
+      container:
+        args:
+        - --integration-config-yaml
+        - '{{$.inputs.parameters[''integration_config_yaml'']}}'
+        - --dqn-model-registry-name
+        - '{{$.inputs.parameters[''dqn_model_registry_name'']}}'
+        - --forecaster-model-registry-name
+        - '{{$.inputs.parameters[''forecaster_model_registry_name'']}}'
+        - --output-artifact-path
+        - '{{$.outputs.artifacts[''backtest_report''].uri}}'
+        command:
+        - python
+        - -m
+        - tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest
+        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-backtest:latest
+pipelineInfo:
+  description: 'Combined DQN + ProbabilisticForecaster intraday integration: runs
+    the screening backtest against production-stage parent checkpoints from the Model
+    Registry and emits a BacktestComparison + ThresholdReport artifact.'
+  name: dqnpf-intraday-pipeline
+root:
+  dag:
+    tasks:
+      dqnpf-backtest:
+        cachingOptions: {}
+        componentRef:
+          name: comp-dqnpf-backtest
+        inputs:
+          parameters:
+            dqn_model_registry_name:
+              componentInputParameter: dqn_model_registry_name
+            forecaster_model_registry_name:
+              componentInputParameter: forecaster_model_registry_name
+            integration_config_yaml:
+              componentInputParameter: integration_config_yaml
+        retryPolicy:
+          backoffDuration: 0s
+          backoffFactor: 2.0
+          backoffMaxDuration: 3600s
+          maxRetryCount: 3
+        taskInfo:
+          name: dqnpf-backtest
+  inputDefinitions:
+    parameters:
+      dqn_model_registry_name:
+        defaultValue: deepqnetwork-usdjpy
+        isOptional: true
+        parameterType: STRING
+      forecaster_model_registry_name:
+        defaultValue: probabilisticforecaster-usdjpy
+        isOptional: true
+        parameterType: STRING
+      integration_config_yaml:
+        defaultValue: /etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1

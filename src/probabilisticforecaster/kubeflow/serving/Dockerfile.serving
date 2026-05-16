@@ -2,7 +2,7 @@
 # Extends the shared base image with kserve runtime
 # Requirements: 2.1, 2.2
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-base:latest
+FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
 
 LABEL component="serving"
 LABEL description="KServe custom predictor serving Gaussian mu/sigma predictions"

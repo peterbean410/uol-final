@@ -2,7 +2,7 @@
 # Extends the shared DQN base image with training-specific dependencies
 # Requirements: DQN-R5, DQN-R6, DQN-R7, DQN-R8
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn-base:latest
+FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base:latest
 
 LABEL component="dqn_training"
 LABEL description="Train DQN agent with modelenv gRPC sidecar, supports scratch and finetune modes"

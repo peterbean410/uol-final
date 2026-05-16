@@ -1,0 +1,8 @@
+# dqnpf-intraday predictor, serving-specific Python deps on top of dqnpf-intraday-base
+# Pinned for reproducibility (Requirements 20.1, 22.1).
+#
+# Note: torch, numpy, grpcio, boto3, environment_pb2, deepqnetwork,
+# probabilisticforecaster, and tradingmodel.intraday.dqnpf are already
+# installed in the dqnpf-intraday-base image.
+
+kserve==0.13.1

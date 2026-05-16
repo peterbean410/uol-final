@@ -1,0 +1,87 @@
+# dqnpf-intraday KServe InferenceService; the canonical combined predictor.
+#
+# Single InferenceService serving screened trading actions via the DQN +
+# Forecaster integration layer. Both parent models are loaded in-process;
+# modelenv runs as a sidecar providing state preprocessing and RecentBars.
+#
+# Requirements: 22.7, 22.10, 22.11, 24.3
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: dqnpf-intraday-predictor
+  namespace: dqnpf-intraday
+  labels:
+    app.kubernetes.io/name: dqnpf-intraday
+    app.kubernetes.io/component: serving
+    app.kubernetes.io/part-of: fintech-forex
+    app.kubernetes.io/managed-by: fluxcd
+  annotations:
+    # Autoscaling configuration
+    serving.kserve.io/autoscalerClass: kpa.autoscaling.knative.dev
+    serving.kserve.io/targetUtilizationPercentage: "70"
+    # Prometheus metrics scraping, request latency, error rate,
+    # suppression rate by reason, per-symbol budget utilisation
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  predictor:
+    minReplicas: 0
+    maxReplicas: 2
+    scaleTarget: 5
+    scaleMetric: concurrency
+    # Scale-to-zero after 5 minutes of no traffic (KServe default)
+    annotations:
+      autoscaling.knative.dev/class: kpa.autoscaling.knative.dev
+      autoscaling.knative.dev/metric: concurrency
+      autoscaling.knative.dev/target: "5"
+      autoscaling.knative.dev/scale-to-zero-pod-retention-period: "5m"
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: NotIn
+                  values:
+                    - rpivn
+                    - beanpi03
+    containers:
+      # Primary predictor container, combined DQN + Forecaster integration layer
+      - name: kserve-container
+        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:latest
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        resources:
+          requests:
+            cpu: "0.5"
+            memory: 1Gi
+          limits:
+            cpu: "1"
+            memory: 2Gi
+        env:
+          - name: GRPC_ADDRESS
+            value: "localhost:50051"
+          - name: DEVICE
+            value: "cpu"
+          - name: DQN_MODEL_REGISTRY_NAME
+            value: "deepqnetwork-usdjpy"
+          - name: FORECASTER_MODEL_REGISTRY_NAME
+            value: "probabilisticforecaster-usdjpy"
+          - name: MODEL_REGISTRY_URL
+            value: "http://model-registry.kubeflow.svc.cluster.local:8080"
+      # Modelenv sidecar, provides state preprocessing (53-feature vector)
+      # and RecentBars M5 series for ForecasterBridge
+      - name: modelenv
+        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:latest
+        ports:
+          - containerPort: 50051
+            protocol: TCP
+        resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi

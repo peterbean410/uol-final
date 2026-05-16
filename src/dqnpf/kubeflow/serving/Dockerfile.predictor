@@ -1,0 +1,42 @@
+# dqnpf-intraday combined predictor image.
+#
+# Extends the dqnpf-intraday-base image (which already provides PyTorch,
+# grpcio, environment_pb2, modelenv binary, deepqnetwork, probabilisticforecaster,
+# and tradingmodel.intraday.dqnpf installed as a package) with the kserve
+# runtime and the serving entry point.
+#
+# The base image already includes the serving module source (it copies the
+# entire tradingmodel/intraday/dqnpf/ tree). This Dockerfile overlays the
+# latest serving code to allow predictor rebuilds without rebuilding the base.
+#
+# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:<sha>
+# Requirements: 20.1, 22.1
+
+ARG BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-base:latest
+FROM ${BASE_IMAGE}
+
+LABEL maintainer="ml-platform"
+LABEL description="Combined DQN + Forecaster intraday KServe predictor"
+
+WORKDIR /app
+
+# Install kserve runtime (pinned version)
+COPY tradingmodel/intraday/dqnpf/kubeflow/serving/requirements.txt /app/serving-requirements.txt
+RUN pip install --no-cache-dir -r /app/serving-requirements.txt
+
+# Overlay the latest serving module code on top of the base image's installed
+# package. This allows predictor image rebuilds without rebuilding the base.
+COPY tradingmodel/intraday/dqnpf/kubeflow/serving/ /opt/dqnpf/kubeflow/serving/
+
+# Build-time import smoke test (Requirements 20.1, 22.1)
+RUN python -c "import kserve; \
+from tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor import DqnpfIntradayPredictor; \
+print('dqnpf-intraday-predictor import smoke OK')"
+
+# KServe default HTTP port
+EXPOSE 8080
+
+ENV PYTHONUNBUFFERED=1
+ENV MODEL_NAME=dqnpf-intraday
+
+ENTRYPOINT ["python", "-m", "tradingmodel.intraday.dqnpf.kubeflow.serving"]

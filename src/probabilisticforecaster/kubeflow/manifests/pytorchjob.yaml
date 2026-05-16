@@ -30,7 +30,7 @@ spec:
                           - beanpi03
           containers:
             - name: pytorch
-              image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-model-training:latest
+              image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/model-training:latest
               command:
                 - python
                 - distributed_train.py
@@ -67,7 +67,7 @@ spec:
                           - beanpi03
           containers:
             - name: pytorch
-              image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-model-training:latest
+              image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/model-training:latest
               command:
                 - python
                 - distributed_train.py

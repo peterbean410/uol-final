@@ -109,7 +109,7 @@ spec:
           spec:
             containers:
               - name: training
-                image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster-model-training:latest
+                image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/model-training:latest
                 command:
                   - python
                   - component.py

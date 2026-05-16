@@ -2,7 +2,7 @@
 # Extends the shared DQN base image with backtest-specific dependencies
 # Requirements: DQN-R9, DQN-R10
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn-base:latest
+FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base:latest
 
 LABEL component="dqn_backtest"
 LABEL description="Backtest DQN agent on unseen date ranges via modelenv sidecar, compute metrics and degradation gate"

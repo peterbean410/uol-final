@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Kustomize entrypoint for the dqnpf-intraday combined predictor.
+# Referenced by FluxCD via app/base/DqnpfIntraday.yaml.
+# This is the canonical (and only) KServe InferenceService in the system.
+
+namespace: dqnpf-intraday
+
+resources:
+  - inferenceservice.yaml
+  - prometheus-rules.yaml
+  - resource-quota.yaml
+
+commonLabels:
+  app.kubernetes.io/name: dqnpf-intraday
+  app.kubernetes.io/part-of: fintech-forex
+  app.kubernetes.io/managed-by: fluxcd
