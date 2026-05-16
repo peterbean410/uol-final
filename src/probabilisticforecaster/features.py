@@ -189,3 +189,4 @@ def compute_features(
     features = features.iloc[historical_window:]
 
     return features
+# trigger forecaster build 202605162228
