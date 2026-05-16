@@ -1,5 +1,8 @@
 """KFP Pipeline Definition for the Probabilistic Forex Forecaster.
 
+Registered via Gitea Action on push to pipeline-related files.
+"""
+
 Defines the forecaster_pipeline using KFP v2 SDK with @dsl.container_component
 decorators. Wires data_preparation → model_training → model_evaluation → backtesting
 as a DAG with retry(3) on each component and caching enabled on data_preparation.
