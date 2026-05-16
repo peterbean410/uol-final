@@ -393,8 +393,8 @@ def build_pipeline_config(
     packages_to_install=["boto3", "model-registry", "kubernetes"],
 )
 def model_registration(
-    model_checkpoint_uri: str,
-    evaluation_metrics_uri: str,
+    model_checkpoint: Input[Model],
+    evaluation_metrics: Input[Metrics],
     pipeline_run_id: str,
     registry_url: str,
     symbol: str,
@@ -412,8 +412,8 @@ def model_registration(
     and returns without failing the pipeline (model checkpoint is still in S3).
 
     Args:
-        model_checkpoint_uri: S3 URI of the trained model checkpoint.
-        evaluation_metrics_uri: S3 URI of the evaluation metrics JSON.
+        model_checkpoint: KFP Model artifact from model_training.
+        evaluation_metrics: KFP Metrics artifact from model_evaluation.
         pipeline_run_id: Unique run ID of this pipeline execution.
         registry_url: URL of the Kubeflow Model Registry server.
         symbol: Currency pair symbol (USDJPY or AUDJPY).
@@ -431,6 +431,9 @@ def model_registration(
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
+
+    model_checkpoint_uri = model_checkpoint.uri
+    evaluation_metrics_uri = evaluation_metrics.uri
 
     def _log(msg: str, extra: dict = None) -> None:
         entry = {
@@ -770,8 +773,8 @@ def forecaster_pipeline(
     # Registry. Uses the pipeline job name placeholder which KFP resolves
     # to the actual job name at runtime.
     reg_task = model_registration(
-        model_checkpoint_uri=mt_task.outputs["model_checkpoint"],
-        evaluation_metrics_uri=me_task.outputs["evaluation_metrics"],
+        model_checkpoint=mt_task.outputs["model_checkpoint"],
+        evaluation_metrics=me_task.outputs["evaluation_metrics"],
         pipeline_run_id=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
         registry_url=model_registry_url,
         symbol=symbol,
