@@ -1,0 +1,57 @@
+---
+# ResourceQuota: Enforces aggregate resource limits for DQN workloads in the
+# shared forecaster-workloads namespace.
+# Satisfies Requirement DQN-R25, CPU, memory, GPU, and pod count limits
+# for DQN training (GPU-intensive) and backtest (CPU-only) workloads.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dqn-resource-quota
+  namespace: forecaster-workloads
+  labels:
+    app.kubernetes.io/name: dqn-advisor
+    app.kubernetes.io/component: resource-management
+spec:
+  hard:
+    # CPU limits, training uses 2-4 CPU, backtest uses 2-4 CPU
+    requests.cpu: "12"
+    limits.cpu: "24"
+    # Memory limits, DQN replay buffers require 16Gi-32Gi per training pod
+    requests.memory: 48Gi
+    limits.memory: 96Gi
+    # GPU limits, 1 GPU per training pod, max 2 concurrent training jobs
+    requests.nvidia.com/gpu: "2"
+    # Pod count limit, bounds concurrent training + backtest + sidecar pods
+    pods: "16"
+
+---
+# LimitRange: Sets default resource requests/limits for DQN containers that
+# don't specify them. Ensures all DQN pipeline containers have resource bounds.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dqn-limit-range
+  namespace: forecaster-workloads
+  labels:
+    app.kubernetes.io/name: dqn-advisor
+    app.kubernetes.io/component: resource-management
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "2"
+        memory: 8Gi
+      defaultRequest:
+        cpu: "1"
+        memory: 4Gi
+      max:
+        cpu: "4"
+        memory: 32Gi
+        nvidia.com/gpu: "1"
+      min:
+        cpu: "100m"
+        memory: 256Mi
+    - type: Pod
+      max:
+        cpu: "8"
+        memory: 64Gi

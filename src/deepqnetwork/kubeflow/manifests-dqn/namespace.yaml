@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: forecaster-workloads
+  labels:
+    app.kubernetes.io/name: forecaster-workloads
+    app.kubernetes.io/part-of: fintech-forex
+    app.kubernetes.io/managed-by: fluxcd
+  annotations:
+    description: "Shared namespace for Forecaster and DQN ML pipeline workloads on the Kubeflow cluster"

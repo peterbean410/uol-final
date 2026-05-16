@@ -1,0 +1,140 @@
+# DQN Katib Hyperparameter Tuning Experiment
+# Requirements: DQN-R13, DQN-R14
+#
+# Bayesian optimisation over 7 hyperparameters with validation average episode
+# reward as objective to maximise.
+# Max 20 trials, 3 parallel, 4h (14400s) trial timeout.
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: dqn-hp-tuning
+  namespace: kubeflow
+spec:
+  objective:
+    type: maximize
+    objectiveMetricName: avg_episode_reward
+  algorithm:
+    algorithmName: bayesianoptimization
+    algorithmSettings:
+      - name: random_state
+        value: "42"
+  maxTrialCount: 20
+  parallelTrialCount: 3
+  maxFailedTrialCount: 3
+  parameters:
+    - name: learning_rate
+      parameterType: double
+      feasibleSpace:
+        min: "0.00001"
+        max: "0.01"
+    - name: hidden_dims
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "128,128"
+          - "256,256,128"
+          - "256,256,256"
+          - "512,256,128"
+    - name: epsilon_decay_steps
+      parameterType: int
+      feasibleSpace:
+        min: "10000"
+        max: "100000"
+    - name: gamma
+      parameterType: double
+      feasibleSpace:
+        min: "0.9"
+        max: "0.999"
+    - name: batch_size
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "32"
+          - "64"
+          - "128"
+    - name: target_update_freq
+      parameterType: int
+      feasibleSpace:
+        min: "500"
+        max: "5000"
+    - name: dropout
+      parameterType: double
+      feasibleSpace:
+        min: "0.0"
+        max: "0.3"
+  metricsCollectorSpec:
+    collector:
+      kind: StdOut
+    source:
+      filter:
+        metricsFormat:
+          - "\"avg_episode_reward\":\\s*([\\d.e+-]+)"
+  trialTemplate:
+    primaryContainerName: training
+    trialParameters:
+      - name: learningRate
+        description: "Learning rate for Adam optimizer (log-uniform, 1e-5 to 1e-2)"
+        reference: learning_rate
+      - name: hiddenDims
+        description: "Network hidden layer dimensions (comma-separated)"
+        reference: hidden_dims
+      - name: epsilonDecaySteps
+        description: "Steps over which epsilon decays from start to end"
+        reference: epsilon_decay_steps
+      - name: gamma
+        description: "Discount factor for future rewards"
+        reference: gamma
+      - name: batchSize
+        description: "Training batch size"
+        reference: batch_size
+      - name: targetUpdateFreq
+        description: "Steps between target network updates"
+        reference: target_update_freq
+      - name: dropout
+        description: "Dropout rate for network regularisation"
+        reference: dropout
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            containers:
+              - name: training
+                image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn-training:latest
+                command:
+                  - python
+                  - component.py
+                args:
+                  - "--checkpoint-output-path"
+                  - "kubeflow/katib/checkpoints/${trialName}/model.pt"
+                  - "--training-mode"
+                  - "scratch"
+                  - "--learning-rate"
+                  - "${trialParameters.learningRate}"
+                  - "--batch-size"
+                  - "${trialParameters.batchSize}"
+                  - "--hidden-dims"
+                  - "${trialParameters.hiddenDims}"
+                  - "--epsilon-decay-steps"
+                  - "${trialParameters.epsilonDecaySteps}"
+                  - "--gamma"
+                  - "${trialParameters.gamma}"
+                  - "--target-update-freq"
+                  - "${trialParameters.targetUpdateFreq}"
+                  - "--dropout"
+                  - "${trialParameters.dropout}"
+                resources:
+                  requests:
+                    cpu: "2"
+                    memory: "16Gi"
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "4"
+                    memory: "32Gi"
+                    nvidia.com/gpu: "1"
+            activeDeadlineSeconds: 14400
+            restartPolicy: Never

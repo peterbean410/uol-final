@@ -1,0 +1,26 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: fintech-forex-dqn
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: http://gitea-http.gitea.svc.cluster.local:3000/Fintech/forex.git
+  ref:
+    branch: master
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: dqn-advisor
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./deepqnetwork/kubeflow/manifests-dqn
+  sourceRef:
+    kind: GitRepository
+    name: fintech-forex-dqn
+  prune: true
+  wait: true
+  timeout: 10m

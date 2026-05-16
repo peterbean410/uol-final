@@ -1,0 +1,4 @@
+# Component-specific dependencies for dqn_backtest
+# Base image already provides: torch, numpy, grpcio, grpcio-tools, protobuf, boto3, PyYAML
+
+# No additional dependencies required, backtest uses PyTorch, gRPC, and numpy (from base)

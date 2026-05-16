@@ -1,0 +1,4 @@
+# Component-specific dependencies for dqn_training
+# Base image already provides: torch, numpy, grpcio, grpcio-tools, protobuf, boto3, PyYAML
+
+# No additional dependencies required, training uses only PyTorch and gRPC (from base)

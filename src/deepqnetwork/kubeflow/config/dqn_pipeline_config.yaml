@@ -1,0 +1,66 @@
+# DQN Pipeline Configuration for Deep Q-Network Forex Trading Agent
+# This file provides default values for all pipeline parameters.
+# Individual parameters can be overridden at pipeline submission time.
+
+# Environment (modelenv gRPC server connection)
+grpc_address: "localhost:50051"
+symbol: "USDJPY"
+episode_start_ts: 0
+episode_end_ts: 0
+step_size_seconds: 5
+
+# Agent hyperparameters
+gamma: 0.99
+epsilon_start: 1.0
+epsilon_end: 0.01
+epsilon_decay_steps: 50000
+batch_size: 64
+replay_buffer_size: 300000
+target_update_freq: 1000
+train_freq: 4
+tau: 1.0                     # 1.0 = hard copy; <1.0 = soft Polyak averaging
+
+# Network architecture
+hidden_dims: [256, 256, 128]
+activation: "relu"           # relu, leaky_relu, gelu
+layer_norm: true
+dropout: 0.0
+dueling: false
+learning_rate: 0.0001
+betas: [0.9, 0.999]
+eps: 0.00000001
+weight_decay: 0.0
+grad_clip_norm: 10.0
+loss_function: "huber"       # huber, mse
+
+# Training schedule
+num_episodes: 3000
+max_steps_per_episode: 30000
+checkpoint_interval: 50
+
+# Infrastructure
+gpu_enabled: true
+num_workers: 1
+max_wall_time_hours: 8
+
+# Katib hyperparameter tuning
+katib_enabled: false
+katib_max_trials: 20
+katib_parallel_trials: 3
+katib_trial_timeout_hours: 4
+
+# Serving (for dqnpf-intraday combined predictor)
+serving_min_replicas: 0
+serving_max_replicas: 2
+serving_target_concurrency: 5
+
+# Monitoring, absolute thresholds from thesis buy & hold baseline
+alert_webhook_url: ""
+sharpe_degradation_threshold: 0.1
+sharpe_absolute_threshold: 1.0   # Must beat buy & hold baseline (thesis: 1.46)
+pnl_absolute_threshold: 0.0     # Must be profitable in absolute terms
+
+# Training mode
+training_mode: "scratch"         # scratch or finetune
+finetune_learning_rate: 0.00001  # 10x lower than base LR for fine-tuning
+finetune_num_episodes: 500       # Fewer episodes when fine-tuning

@@ -1,0 +1,204 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dqn-pipeline-alerts
+  namespace: kubeflow
+  labels:
+    app: dqn-trading-agent
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # --- DQN Pipeline Run Failure Alerts (Requirement DQN-R18 AC 1, 2) ---
+    - name: dqn.pipeline.failures
+      rules:
+        - alert: DQNPipelineRunFailed
+          expr: |
+            increase(dqn_pipeline_runs_total{status="failed"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "DQN pipeline run failed"
+            description: >-
+              Pipeline run for symbol={{ $labels.symbol }} failed.
+              Component={{ $labels.component }}.
+              Run ID={{ $labels.run_id }}.
+            runbook_url: "https://wiki.internal/runbooks/dqn-pipeline-failure"
+
+        - alert: DQNPipelineHighFailureRate
+          expr: |
+            (
+              sum(rate(dqn_pipeline_runs_total{status="failed"}[1h]))
+              /
+              sum(rate(dqn_pipeline_runs_total[1h]))
+            ) > 0.5
+          for: 15m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "DQN pipeline failure rate exceeds 50%"
+            description: >-
+              More than 50% of DQN pipeline runs have failed in the last hour.
+              Current failure rate: {{ $value | humanizePercentage }}.
+
+    # --- DQN Training Duration Anomaly Alerts (Requirement DQN-R18 AC 1, 4) ---
+    - name: dqn.pipeline.duration
+      rules:
+        - alert: DQNTrainingDurationAnomaly
+          expr: |
+            dqn_training_duration_seconds
+            > 2 * avg_over_time(dqn_training_duration_seconds[7d])
+          for: 10m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "DQN training taking longer than expected"
+            description: >-
+              DQN training for symbol={{ $labels.symbol }} is taking
+              {{ $value | humanizeDuration }}, which is more than 2x the
+              7-day average duration.
+
+        - alert: DQNTrainingWallTimeExceeded
+          expr: |
+            dqn_pipeline_duration_seconds > 28800
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "DQN pipeline run exceeded 8-hour wall time limit"
+            description: >-
+              DQN pipeline run for symbol={{ $labels.symbol }} has been running
+              for {{ $value | humanizeDuration }}, exceeding the 8-hour maximum
+              standalone training wall time.
+
+        - alert: DQNKatibTrialWallTimeExceeded
+          expr: |
+            dqn_katib_trial_duration_seconds > 14400
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "DQN Katib trial exceeded 4-hour wall time limit"
+            description: >-
+              A DQN Katib trial for symbol={{ $labels.symbol }} has been running
+              for {{ $value | humanizeDuration }}, exceeding the 4-hour per-trial
+              maximum.
+
+    # --- DQN Model Degradation Alerts (Requirement DQN-R18 AC 1) ---
+    - name: dqn.model.degradation
+      rules:
+        - alert: DQNSharpeRatioDegraded
+          expr: |
+            dqn_backtest_sharpe_ratio
+            < dqn_production_sharpe_ratio - 0.1
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "DQN Sharpe ratio degraded beyond threshold"
+            description: >-
+              Candidate model Sharpe ratio ({{ $value }}) is more than 0.1 below
+              production Sharpe ratio for symbol={{ $labels.symbol }}.
+
+        - alert: DQNSharpeRatioBelowAbsoluteFloor
+          expr: |
+            dqn_backtest_sharpe_ratio < 1.0
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "DQN Sharpe ratio below absolute threshold (must beat buy & hold)"
+            description: >-
+              Candidate model Sharpe ratio ({{ $value }}) is below the absolute
+              floor of 1.0 for symbol={{ $labels.symbol }}. The model must beat
+              the buy & hold baseline from the thesis.
+
+        - alert: DQNCumulativePnLNegative
+          expr: |
+            dqn_backtest_cumulative_pnl <= 0.0
+          for: 0m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "DQN cumulative P&L is not profitable"
+            description: >-
+              Candidate model cumulative P&L ({{ $value }}) is not positive for
+              symbol={{ $labels.symbol }}. The model must be profitable in
+              absolute terms (pnl_absolute_threshold=0.0).
+
+        - alert: DQNRewardDistributionShift
+          expr: |
+            abs(
+              avg_over_time(dqn_episode_reward[1h])
+              - avg_over_time(dqn_episode_reward[7d])
+            ) > 3 * stddev_over_time(dqn_episode_reward[7d])
+          for: 30m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "DQN episode reward distribution shift detected"
+            description: >-
+              Average episode reward has shifted more than 3 standard deviations
+              from the 7-day baseline for symbol={{ $labels.symbol }}.
+
+    # --- KServe Latency and Error Rate Alerts for DQN Predictor (dqnpf-intraday) ---
+    - name: dqn.serving.latency
+      rules:
+        - alert: DQNInferenceP99LatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(dqnpf_intraday_inference_request_duration_seconds_bucket[5m])) by (le, symbol)
+            ) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday inference p99 latency exceeds 100ms"
+            description: >-
+              The 99th percentile inference latency for the dqnpf-intraday
+              predictor (symbol={{ $labels.symbol }}) is {{ $value }}s,
+              exceeding the 100ms SLO.
+
+        - alert: DQNInferenceErrorRateHigh
+          expr: |
+            (
+              sum(rate(dqnpf_intraday_inference_requests_total{status="error"}[5m])) by (symbol)
+              /
+              sum(rate(dqnpf_intraday_inference_requests_total[5m])) by (symbol)
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday inference error rate exceeds 1%"
+            description: >-
+              Inference error rate for the dqnpf-intraday predictor
+              (symbol={{ $labels.symbol }}) is {{ $value | humanizePercentage }},
+              exceeding the 1% threshold.
+
+        - alert: DQNInferenceDown
+          expr: |
+            sum(rate(dqnpf_intraday_inference_requests_total[5m])) by (symbol) == 0
+            and
+            sum(kserve_inferenceservice_replicas{name="dqnpf-intraday-predictor"}) > 0
+          for: 10m
+          labels:
+            severity: critical
+            team: ml-engineering
+          annotations:
+            summary: "dqnpf-intraday inference service receiving no traffic despite active replicas"
+            description: >-
+              The dqnpf-intraday inference service for symbol={{ $labels.symbol }}
+              has active replicas but is receiving no requests for 10 minutes.

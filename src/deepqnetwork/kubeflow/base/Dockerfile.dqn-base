@@ -1,0 +1,35 @@
+# Shared base image for all DQN Kubeflow pipeline components
+# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn-base
+# Requirements: DQN-R4, DQN-R5
+
+FROM python:3.11-slim
+
+LABEL maintainer="ml-platform"
+LABEL description="Shared base image for DQN pipeline components with modelenv sidecar"
+
+# Install system dependencies required for PyTorch and gRPC
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install pinned Python dependencies
+COPY requirements-dqn-base.txt /app/requirements-dqn-base.txt
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r /app/requirements-dqn-base.txt
+
+# Copy compiled modelenv gRPC Python stubs
+COPY stubs/environment_pb2.py /app/stubs/environment_pb2.py
+COPY stubs/environment_pb2_grpc.py /app/stubs/environment_pb2_grpc.py
+ENV PYTHONPATH="/app/stubs:${PYTHONPATH}"
+
+# Bundle the pre-built modelenv Rust binary for the sidecar
+# Built from modelenv/target/release/modelenv-server at image build time
+COPY modelenv-server /usr/local/bin/modelenv-server
+RUN chmod +x /usr/local/bin/modelenv-server
+
+# Set Python to run unbuffered for proper log streaming
+ENV PYTHONUNBUFFERED=1
