@@ -10,7 +10,7 @@ LABEL description="Evaluate model: compute NLL, DA, CR95, RMSE; forgetting check
 WORKDIR /app
 
 # Install component-specific dependencies
-COPY requirements.txt /app/requirements.txt
+COPY probabilisticforecaster/kubeflow/components/model_evaluation/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the probabilisticforecaster package (model, evaluation, config, dataset modules)

@@ -10,7 +10,7 @@ LABEL description="Load model checkpoint and test dataset, run all trading strat
 WORKDIR /app
 
 # Install component-specific dependencies
-COPY requirements.txt /app/requirements.txt
+COPY probabilisticforecaster/kubeflow/components/backtesting/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the probabilisticforecaster package (model, strategy, backtest, config modules)

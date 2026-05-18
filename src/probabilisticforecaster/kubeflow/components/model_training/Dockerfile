@@ -10,7 +10,7 @@ LABEL description="Train ProbabilisticTransformer with Gaussian NLL loss, suppor
 WORKDIR /app
 
 # Install component-specific dependencies
-COPY requirements.txt /app/requirements.txt
+COPY probabilisticforecaster/kubeflow/components/model_training/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the probabilisticforecaster package (model, training, config, dataset modules)

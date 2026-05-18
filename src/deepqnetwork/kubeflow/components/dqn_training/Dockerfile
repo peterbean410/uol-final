@@ -10,7 +10,7 @@ LABEL description="Train DQN agent with modelenv gRPC sidecar, supports scratch 
 WORKDIR /app
 
 # Install component-specific dependencies
-COPY requirements.txt /app/requirements.txt
+COPY deepqnetwork/kubeflow/components/dqn_training/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the deepqnetwork package (agent, train, config, network, replay_buffer, etc.)

@@ -10,7 +10,7 @@ LABEL description="Load S3 parquet data, compute 16 features, build train/test F
 WORKDIR /app
 
 # Install component-specific dependencies
-COPY requirements.txt /app/requirements.txt
+COPY probabilisticforecaster/kubeflow/components/data_preparation/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the probabilisticforecaster package (features, dataset, config modules)

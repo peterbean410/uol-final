@@ -10,7 +10,7 @@ LABEL description="Backtest DQN agent on unseen date ranges via modelenv sidecar
 WORKDIR /app
 
 # Install component-specific dependencies
-COPY requirements.txt /app/requirements.txt
+COPY deepqnetwork/kubeflow/components/dqn_backtest/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the deepqnetwork package (advisor, network, preprocessor, utils, config, etc.)
