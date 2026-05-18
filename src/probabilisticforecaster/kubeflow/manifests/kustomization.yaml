@@ -11,11 +11,7 @@ resources:
   - resource_quotas.yaml
   # Note: No InferenceService, Forecaster serving is consolidated under
   # dqnpf-intraday (see kubeflow-ml-pipeline spec, Requirement 5 deprecation).
-  # ../monitoring/prometheus_rules.yaml, Removed: PrometheusRule CRD
-  # (monitoring.coreos.com/v1) not installed on this cluster. The rules
-  # were blocking the probabilistic-forecaster Kustomization dry-run,
-  # which blocked app health check, which blocked all app reconciliation.
-  # Prometheus rules are now in dqnpf-intraday monitoring (Task 31.5).
+  - ../monitoring/prometheus_rules.yaml
   - pytorchjob.yaml
 
 commonLabels:
