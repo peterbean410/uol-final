@@ -250,6 +250,10 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         episode_start_ts=pipeline_config.episode_start_ts,
         episode_end_ts=pipeline_config.episode_end_ts,
         step_size_seconds=pipeline_config.step_size_seconds,
+        date_start=pipeline_config.date_start,
+        date_end=pipeline_config.date_end,
+        hour_of_day_start=pipeline_config.hour_of_day_start,
+        hour_of_day_end=pipeline_config.hour_of_day_end,
         # Agent
         gamma=pipeline_config.gamma,
         epsilon_start=pipeline_config.epsilon_start,
@@ -386,6 +390,32 @@ def parse_args() -> argparse.Namespace:
         help="Episode end timestamp override",
     )
     parser.add_argument(
+        "--date-start",
+        type=str,
+        default=None,
+        help="ISO date for first episode (e.g. 2012-01-01)",
+    )
+    parser.add_argument(
+        "--date-end",
+        type=str,
+        default=None,
+        help="ISO date for last episode (e.g. 2022-12-31)",
+    )
+    parser.add_argument(
+        "--hour-start",
+        type=int,
+        default=None,
+        dest="hour_of_day_start",
+        help="Hour of day to start each episode (0-23)",
+    )
+    parser.add_argument(
+        "--hour-end",
+        type=int,
+        default=None,
+        dest="hour_of_day_end",
+        help="Hour of day to end each episode (0-23)",
+    )
+    parser.add_argument(
         "--num-episodes",
         type=int,
         default=None,
@@ -473,6 +503,14 @@ def main() -> None:
         overrides["episode_start_ts"] = args.episode_start_ts
     if args.episode_end_ts is not None:
         overrides["episode_end_ts"] = args.episode_end_ts
+    if args.date_start is not None:
+        overrides["date_start"] = args.date_start
+    if args.date_end is not None:
+        overrides["date_end"] = args.date_end
+    if args.hour_of_day_start is not None:
+        overrides["hour_of_day_start"] = args.hour_of_day_start
+    if args.hour_of_day_end is not None:
+        overrides["hour_of_day_end"] = args.hour_of_day_end
     if args.num_episodes is not None:
         overrides["num_episodes"] = args.num_episodes
     if args.learning_rate is not None:

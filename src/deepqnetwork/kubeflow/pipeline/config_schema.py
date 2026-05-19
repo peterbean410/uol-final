@@ -33,6 +33,12 @@ class DQNPipelineConfig:
     episode_end_ts: int = 0
     step_size_seconds: int = 5
 
+    # Date-range episode scheduling; one episode per calendar date
+    date_start: str = ""
+    date_end: str = ""
+    hour_of_day_start: int = 0
+    hour_of_day_end: int = 23
+
     # Agent hyperparameters
     gamma: float = 0.99
     epsilon_start: float = 1.0
@@ -157,6 +163,31 @@ class DQNPipelineConfig:
                 f"step_size_seconds must be positive: {self.step_size_seconds}"
             )
 
+        # Date-range episode scheduling
+        if self.date_start and self.date_end:
+            from datetime import date as _date
+            try:
+                ds = _date.fromisoformat(self.date_start)
+                de = _date.fromisoformat(self.date_end)
+                if ds >= de:
+                    errors.append(
+                        f"date_start ({self.date_start}) must be < date_end ({self.date_end})"
+                    )
+            except ValueError as e:
+                errors.append(f"Invalid date format: {e}")
+        if not (0 <= self.hour_of_day_start <= 23):
+            errors.append(
+                f"hour_of_day_start must be 0-23: {self.hour_of_day_start}"
+            )
+        if not (0 <= self.hour_of_day_end <= 23):
+            errors.append(
+                f"hour_of_day_end must be 0-23: {self.hour_of_day_end}"
+            )
+        if self.hour_of_day_start == self.hour_of_day_end:
+            errors.append(
+                "hour_of_day_start and hour_of_day_end must differ"
+            )
+
         # Agent
         if not (0.0 <= self.gamma <= 1.0):
             errors.append(f"gamma must be in [0, 1]: {self.gamma}")
@@ -277,6 +308,14 @@ class DQNPipelineConfig:
         args.extend(["--episode-start-ts", str(self.episode_start_ts)])
         args.extend(["--episode-end-ts", str(self.episode_end_ts)])
         args.extend(["--step-size-seconds", str(self.step_size_seconds)])
+
+        # Date-range episode scheduling
+        if self.date_start:
+            args.extend(["--date-start", self.date_start])
+        if self.date_end:
+            args.extend(["--date-end", self.date_end])
+        args.extend(["--hour-start", str(self.hour_of_day_start)])
+        args.extend(["--hour-end", str(self.hour_of_day_end)])
 
         # Agent
         args.extend(["--gamma", str(self.gamma)])

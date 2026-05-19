@@ -4,6 +4,13 @@ Wires together configuration, device resolution, agent, environment client,
 checkpoint manager, and state preprocessor. Runs the training loop with
 configurable episodes, steps, gradient updates, target syncs, and checkpointing.
 
+Supports two modes:
+
+- **Fixed timestamps**: episode_start_ts / episode_end_ts (legacy, all episodes
+  train on the same time window).
+- **Date-range**: date_start / date_end / hour_of_day_start / hour_of_day_end
+  (one episode per calendar date, each with its own time window).
+
 Usage:
     python -m deepqnetwork.train --config deepqnetwork/config.yaml
     python -m deepqnetwork.train --config deepqnetwork/config.yaml --checkpoint path/to/checkpoint.pt
@@ -14,6 +21,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import asdict
+from datetime import date, datetime, timezone
+from typing import Iterator
 
 from deepqnetwork.agent import DQNAgent
 from deepqnetwork.checkpoint_manager import CheckpointManager
@@ -58,6 +67,50 @@ def _restore_checkpoint(
         agent.epsilon,
     )
     return start_episode
+
+
+def _iter_date_episodes(
+    date_start: str,
+    date_end: str,
+    hour_start: int,
+    hour_end: int,
+) -> list[tuple[int, int]]:
+    """Generate per-date (episode_start_ts, episode_end_ts) pairs.
+
+    Each calendar date from ``date_start`` through ``date_end`` (inclusive)
+    produces one pair.  The Unix timestamps are computed from the configured
+    hour-of-day window.
+
+    Args:
+        date_start: ISO date string for the first date (e.g. ``"2012-01-01"``).
+        date_end: ISO date string for the last date (e.g. ``"2022-12-31"``).
+        hour_start: Hour (0-23) at which each episode begins.
+        hour_end: Hour (0-23) at which each episode ends.
+
+    Returns:
+        List of ``(episode_start_ts, episode_end_ts)`` tuples, one per date.
+    """
+    ds = date.fromisoformat(date_start)
+    de = date.fromisoformat(date_end)
+    if ds > de:
+        raise ValueError(
+            f"date_start ({date_start}) must be <= date_end ({date_end})"
+        )
+
+    episodes: list[tuple[int, int]] = []
+    current = ds
+    while current <= de:
+        dt_start = datetime(
+            current.year, current.month, current.day,
+            hour_start, 0, 0, tzinfo=timezone.utc,
+        )
+        dt_end = datetime(
+            current.year, current.month, current.day,
+            hour_end, 0, 0, tzinfo=timezone.utc,
+        )
+        episodes.append((int(dt_start.timestamp()), int(dt_end.timestamp())))
+        current = date.fromordinal(current.toordinal() + 1)
+    return episodes
 
 
 def train(config: DQNConfig) -> None:
@@ -106,24 +159,43 @@ def train(config: DQNConfig) -> None:
     recent_rewards: list[float] = []
     best_reward = float("-inf")
 
+    # Resolve episode windows: date-range mode takes precedence over fixed
+    # episode_start_ts/end_ts.
+    if config.date_start and config.date_end:
+        episode_windows = _iter_date_episodes(
+            config.date_start,
+            config.date_end,
+            config.hour_of_day_start,
+            config.hour_of_day_end,
+        )
+        mode = "date-range"
+    else:
+        # Legacy fixed-timestamp mode, same window for every episode.
+        episode_windows = [
+            (config.episode_start_ts, config.episode_end_ts)
+        ] * config.num_episodes
+        mode = "fixed"
+
     logger.info(
-        "Starting training: episodes=%d (from %d), max_steps=%d, "
+        "Starting training: episodes=%d (mode=%s), max_steps=%d, "
         "train_freq=%d, target_update_freq=%d",
-        config.num_episodes,
-        start_episode,
+        len(episode_windows),
+        mode,
         config.max_steps_per_episode,
         config.train_freq,
         config.target_update_freq,
     )
 
-    for episode in range(start_episode, config.num_episodes):
+    for episode_idx, (ep_start, ep_end) in enumerate(episode_windows):
+        if episode_idx < start_episode:
+            continue
         episode_start_time = time.time()
 
         # Reset environment for new episode
         obs = env_client.reset(
             symbol=config.symbol,
-            episode_start_ts=config.episode_start_ts,
-            episode_end_ts=config.episode_end_ts,
+            episode_start_ts=ep_start,
+            episode_end_ts=ep_end,
             step_size_seconds=config.step_size_seconds,
         )
         state = preprocessor.process(obs)
@@ -184,12 +256,12 @@ def train(config: DQNConfig) -> None:
         best_reward = max(best_reward, episode_reward)
 
         # Log episode metrics
-        if episode % config.log_interval == 0:
+        if episode_idx % config.log_interval == 0:
             avg_recent = sum(recent_rewards) / len(recent_rewards)
             logger.info(
                 "Episode %d | reward=%.4f | length=%d | avg_loss=%.6f | "
                 "epsilon=%.4f | duration=%.1fs | avg_100=%.4f | best=%.4f",
-                episode,
+                episode_idx,
                 episode_reward,
                 episode_length,
                 avg_loss,
@@ -208,7 +280,7 @@ def train(config: DQNConfig) -> None:
                 avg_recent,
             )
             checkpoint_mgr.save(
-                episode=episode,
+                episode=episode_idx,
                 q_network=agent.q_network,
                 target_network=agent.target_network,
                 optimizer=agent.optimizer,

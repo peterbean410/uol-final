@@ -666,6 +666,32 @@ def parse_args() -> argparse.Namespace:
         help="Evaluation episode end timestamp (unseen date range)",
     )
     parser.add_argument(
+        "--date-start",
+        type=str,
+        default=None,
+        help="ISO date for first evaluation episode",
+    )
+    parser.add_argument(
+        "--date-end",
+        type=str,
+        default=None,
+        help="ISO date for last evaluation episode",
+    )
+    parser.add_argument(
+        "--hour-start",
+        type=int,
+        default=None,
+        dest="hour_of_day_start",
+        help="Hour of day to start each eval episode",
+    )
+    parser.add_argument(
+        "--hour-end",
+        type=int,
+        default=None,
+        dest="hour_of_day_end",
+        help="Hour of day to end each eval episode",
+    )
+    parser.add_argument(
         "--step-size-seconds",
         type=int,
         default=5,

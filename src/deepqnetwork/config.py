@@ -24,6 +24,12 @@ class DQNConfig:
     episode_end_ts: int = 0
     step_size_seconds: int = 5
 
+    # Date-range episode scheduling (replaces raw episode_start_ts/end_ts)
+    date_start: str = ""
+    date_end: str = ""
+    hour_of_day_start: int = 0
+    hour_of_day_end: int = 23
+
     # Agent
     gamma: float = 0.99
     epsilon_start: float = 1.0
@@ -115,6 +121,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol", type=str, default=None)
     parser.add_argument("--episode-start-ts", type=int, default=None)
     parser.add_argument("--episode-end-ts", type=int, default=None)
+    parser.add_argument("--date-start", type=str, default=None, help="ISO date for first episode (e.g. 2012-01-01)")
+    parser.add_argument("--date-end", type=str, default=None, help="ISO date for last episode (e.g. 2022-12-31)")
+    parser.add_argument("--hour-start", dest="hour_of_day_start", type=int, default=None, help="Hour of day to start each episode (0-23)")
+    parser.add_argument("--hour-end", dest="hour_of_day_end", type=int, default=None, help="Hour of day to end each episode (0-23)")
     parser.add_argument("--step-size-seconds", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--epsilon-start", type=float, default=None)
@@ -151,6 +161,10 @@ _CLI_TO_CONFIG = {
     "symbol": "symbol",
     "episode_start_ts": "episode_start_ts",
     "episode_end_ts": "episode_end_ts",
+    "date_start": "date_start",
+    "date_end": "date_end",
+    "hour_of_day_start": "hour_of_day_start",
+    "hour_of_day_end": "hour_of_day_end",
     "step_size_seconds": "step_size_seconds",
     "gamma": "gamma",
     "epsilon_start": "epsilon_start",

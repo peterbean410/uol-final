@@ -45,6 +45,10 @@ def dqn_training(
     training_mode: str,
     checkpoint: str,
     config_json: str,
+    date_start: str,
+    date_end: str,
+    hour_of_day_start: int,
+    hour_of_day_end: int,
     model_checkpoint: Output[Model],
 ):
     """Train DQN agent against modelenv gRPC sidecar.
@@ -68,6 +72,10 @@ def dqn_training(
             "--learning-rate", str(learning_rate),
             "--training-mode", training_mode,
             "--production-checkpoint-path", checkpoint,
+            "--date-start", date_start,
+            "--date-end", date_end,
+            "--hour-start", str(hour_of_day_start),
+            "--hour-end", str(hour_of_day_end),
         ],
     )
 
@@ -80,6 +88,10 @@ def dqn_backtest(
     episode_end_ts: int,
     step_size_seconds: int,
     config_json: str,
+    date_start: str,
+    date_end: str,
+    hour_of_day_start: int,
+    hour_of_day_end: int,
     backtest_metrics: Output[Metrics],
 ):
     """Evaluate DQN checkpoint via modelenv sidecar on unseen date ranges.
@@ -98,6 +110,10 @@ def dqn_backtest(
             "--eval-episode-start-ts", str(episode_start_ts),
             "--eval-episode-end-ts", str(episode_end_ts),
             "--step-size-seconds", str(step_size_seconds),
+            "--date-start", date_start,
+            "--date-end", date_end,
+            "--hour-start", str(hour_of_day_start),
+            "--hour-end", str(hour_of_day_end),
         ],
     )
 
@@ -118,12 +134,20 @@ def resolve_dqn_config(
     learning_rate: float,
     training_mode: str,
     checkpoint: str,
+    date_start: str,
+    date_end: str,
+    hour_of_day_start: int,
+    hour_of_day_end: int,
 ) -> NamedTuple(
     "DQNConfigOutputs",
     [
         ("config_json", str),
         ("effective_num_episodes", int),
         ("effective_learning_rate", float),
+        ("date_start", str),
+        ("date_end", str),
+        ("hour_of_day_start", int),
+        ("hour_of_day_end", int),
     ],
 ):
     """Resolve DQN pipeline config: apply overrides, validate, and output.
@@ -178,6 +202,10 @@ def resolve_dqn_config(
         training_mode: str = "scratch"
         finetune_learning_rate: float = 1e-5
         finetune_num_episodes: int = 500
+        date_start: str = ""
+        date_end: str = ""
+        hour_of_day_start: int = 0
+        hour_of_day_end: int = 23
 
     cfg = _DQNConfig(
         symbol=symbol,
@@ -188,6 +216,10 @@ def resolve_dqn_config(
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
+        date_start=date_start,
+        date_end=date_end,
+        hour_of_day_start=hour_of_day_start,
+        hour_of_day_end=hour_of_day_end,
     )
 
     # Apply training mode adjustments
@@ -233,12 +265,24 @@ def resolve_dqn_config(
 
     DQNConfigOutputs = namedtuple(
         "DQNConfigOutputs",
-        ["config_json", "effective_num_episodes", "effective_learning_rate"],
+        [
+            "config_json",
+            "effective_num_episodes",
+            "effective_learning_rate",
+            "date_start",
+            "date_end",
+            "hour_of_day_start",
+            "hour_of_day_end",
+        ],
     )
     return DQNConfigOutputs(
         config_json=config_json,
         effective_num_episodes=effective_episodes,
         effective_learning_rate=effective_lr,
+        date_start=date_start,
+        date_end=date_end,
+        hour_of_day_start=hour_of_day_start,
+        hour_of_day_end=hour_of_day_end,
     )
 
 
@@ -257,6 +301,10 @@ def build_dqn_pipeline_config(
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
     checkpoint: str = "",
+    date_start: str = "",
+    date_end: str = "",
+    hour_of_day_start: int = 0,
+    hour_of_day_end: int = 23,
 ) -> DQNPipelineConfig:
     """Build and validate a DQNPipelineConfig from pipeline parameters.
 
@@ -293,6 +341,10 @@ def build_dqn_pipeline_config(
         num_episodes=num_episodes,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        date_start=date_start,
+        date_end=date_end,
+        hour_of_day_start=hour_of_day_start,
+        hour_of_day_end=hour_of_day_end,
         training_mode=training_mode,
     )
 
@@ -341,6 +393,10 @@ def dqn_pipeline(
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
     checkpoint: str = "",
+    date_start: str = "",
+    date_end: str = "",
+    hour_of_day_start: int = 0,
+    hour_of_day_end: int = 23,
 ):
     """DQN Pipeline: config → train → backtest.
 
@@ -385,6 +441,10 @@ def dqn_pipeline(
         learning_rate=learning_rate,
         training_mode=training_mode,
         checkpoint=checkpoint,
+        date_start=date_start,
+        date_end=date_end,
+        hour_of_day_start=hour_of_day_start,
+        hour_of_day_end=hour_of_day_end,
     )
 
     # -----------------------------------------------------------------------
@@ -401,6 +461,10 @@ def dqn_pipeline(
         training_mode=training_mode,
         checkpoint=checkpoint,
         config_json=config_task.outputs["config_json"],
+        date_start=config_task.outputs["date_start"],
+        date_end=config_task.outputs["date_end"],
+        hour_of_day_start=config_task.outputs["hour_of_day_start"],
+        hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     training_task.set_retry(num_retries=2)
     training_task.set_memory_request("16Gi")
@@ -417,6 +481,10 @@ def dqn_pipeline(
         episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
+        date_start=config_task.outputs["date_start"],
+        date_end=config_task.outputs["date_end"],
+        hour_of_day_start=config_task.outputs["hour_of_day_start"],
+        hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     backtest_task.set_retry(num_retries=1)
     backtest_task.set_memory_request("4Gi")
