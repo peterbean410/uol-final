@@ -186,113 +186,124 @@ def train(config: DQNConfig) -> None:
         config.target_update_freq,
     )
 
-    for episode_idx, (ep_start, ep_end) in enumerate(episode_windows):
-        if episode_idx < start_episode:
-            continue
-        episode_start_time = time.time()
+    repeats_per_date = 3 if mode == "date-range" else 1
+    overall_episode = start_episode
+    total_episodes = len(episode_windows) * repeats_per_date
 
-        # Reset environment for new episode
-        obs = env_client.reset(
-            symbol=config.symbol,
-            episode_start_ts=ep_start,
-            episode_end_ts=ep_end,
-            step_size_seconds=config.step_size_seconds,
-        )
-        state = preprocessor.process(obs)
-        episode_reward = 0.0
-        episode_losses: list[float] = []
+    for date_idx, (ep_start, ep_end) in enumerate(episode_windows):
+        for repeat in range(repeats_per_date):
+            if overall_episode < start_episode:
+                overall_episode += 1
+                continue
+            episode_start_time = time.time()
 
-        for step in range(config.max_steps_per_episode):
-            # Select action (epsilon-greedy)
-            action = agent.select_action(state, training=True)
-
-            # Step environment
-            response = env_client.step(action, generate_order_id())
-            next_state = preprocessor.process(response.data)
-            reward = response.data.reward
-            done = response.data.done
-
-            # Store transition in replay buffer (numpy arrays)
-            state_np = state.cpu().numpy()
-            next_state_np = next_state.cpu().numpy()
-            agent.replay_buffer.push(state_np, action, reward, next_state_np, done)
-
-            # Gradient update at train_freq intervals
-            loss = None
-            if (
-                len(agent.replay_buffer) >= config.batch_size
-                and step_count % config.train_freq == 0
-            ):
-                loss = agent.update()
-                if loss is not None:
-                    episode_losses.append(loss)
-
-            # Epsilon decay
-            agent.step_epsilon()
-
-            # Target network sync at target_update_freq intervals
-            step_count += 1
-            if step_count % config.target_update_freq == 0:
-                agent.sync_target()
-
-            # Advance state
-            state = next_state
-            episode_reward += reward
-
-            if done:
-                break
-
-        # Episode complete, logging
-        episode_duration = time.time() - episode_start_time
-        avg_loss = (
-            sum(episode_losses) / len(episode_losses) if episode_losses else 0.0
-        )
-        episode_length = step + 1
-
-        # Track rewards for rolling average
-        recent_rewards.append(episode_reward)
-        if len(recent_rewards) > 100:
-            recent_rewards.pop(0)
-        best_reward = max(best_reward, episode_reward)
-
-        # Log episode metrics
-        if episode_idx % config.log_interval == 0:
-            avg_recent = sum(recent_rewards) / len(recent_rewards)
-            logger.info(
-                "Episode %d | reward=%.4f | length=%d | avg_loss=%.6f | "
-                "epsilon=%.4f | duration=%.1fs | avg_100=%.4f | best=%.4f",
-                episode_idx,
-                episode_reward,
-                episode_length,
-                avg_loss,
-                agent.epsilon,
-                episode_duration,
-                avg_recent,
-                best_reward,
+            # Reset environment for new episode
+            obs = env_client.reset(
+                symbol=config.symbol,
+                episode_start_ts=ep_start,
+                episode_end_ts=ep_end,
+                step_size_seconds=config.step_size_seconds,
             )
+            state = preprocessor.process(obs)
+            episode_reward = 0.0
+            episode_losses: list[float] = []
 
-        # Checkpoint saving at configurable intervals
-        if episode > 0 and episode % config.checkpoint_interval == 0:
-            avg_recent = sum(recent_rewards) / len(recent_rewards)
-            logger.info(
-                "Checkpoint interval: best_reward=%.4f, avg_100=%.4f",
-                best_reward,
-                avg_recent,
+            for step in range(config.max_steps_per_episode):
+                # Select action (epsilon-greedy)
+                action = agent.select_action(state, training=True)
+
+                # Step environment
+                response = env_client.step(action, generate_order_id())
+                next_state = preprocessor.process(response.data)
+                reward = response.data.reward
+                done = response.data.done
+
+                # Store transition in replay buffer (numpy arrays)
+                state_np = state.cpu().numpy()
+                next_state_np = next_state.cpu().numpy()
+                agent.replay_buffer.push(state_np, action, reward, next_state_np, done)
+
+                # Gradient update at train_freq intervals
+                loss = None
+                if (
+                    len(agent.replay_buffer) >= config.batch_size
+                    and step_count % config.train_freq == 0
+                ):
+                    loss = agent.update()
+                    if loss is not None:
+                        episode_losses.append(loss)
+
+                # Epsilon decay
+                agent.step_epsilon()
+
+                # Target network sync at target_update_freq intervals
+                step_count += 1
+                if step_count % config.target_update_freq == 0:
+                    agent.sync_target()
+
+                # Advance state
+                state = next_state
+                episode_reward += reward
+
+                if done:
+                    break
+
+            # Episode complete, logging
+            episode_duration = time.time() - episode_start_time
+            avg_loss = (
+                sum(episode_losses) / len(episode_losses) if episode_losses else 0.0
             )
-            checkpoint_mgr.save(
-                episode=episode_idx,
-                q_network=agent.q_network,
-                target_network=agent.target_network,
-                optimizer=agent.optimizer,
-                epsilon=agent.epsilon,
-                step_count=step_count,
-                config=asdict(config),
-            )
+            episode_length = step + 1
+
+            # Track rewards for rolling average
+            recent_rewards.append(episode_reward)
+            if len(recent_rewards) > 100:
+                recent_rewards.pop(0)
+            best_reward = max(best_reward, episode_reward)
+
+            # Log episode metrics
+            if overall_episode % config.log_interval == 0:
+                avg_recent = sum(recent_rewards) / len(recent_rewards)
+                logger.info(
+                    "Episode %d | date=%s | repeat=%d | reward=%.4f | length=%d | "
+                    "avg_loss=%.6f | epsilon=%.4f | duration=%.1fs | "
+                    "avg_100=%.4f | best=%.4f",
+                    overall_episode,
+                    ep_start,
+                    repeat,
+                    episode_reward,
+                    episode_length,
+                    avg_loss,
+                    agent.epsilon,
+                    episode_duration,
+                    avg_recent,
+                    best_reward,
+                )
+
+            # Checkpoint saving at configurable intervals
+            if overall_episode > 0 and overall_episode % config.checkpoint_interval == 0:
+                avg_recent = sum(recent_rewards) / len(recent_rewards)
+                logger.info(
+                    "Checkpoint interval: best_reward=%.4f, avg_100=%.4f",
+                    best_reward,
+                    avg_recent,
+                )
+                checkpoint_mgr.save(
+                    episode=overall_episode,
+                    q_network=agent.q_network,
+                    target_network=agent.target_network,
+                    optimizer=agent.optimizer,
+                    epsilon=agent.epsilon,
+                    step_count=step_count,
+                    config=asdict(config),
+                )
+
+            overall_episode += 1
 
     # Final checkpoint at end of training
     logger.info("Training complete. Saving final checkpoint.")
     checkpoint_mgr.save(
-        episode=config.num_episodes - 1,
+        episode=overall_episode,
         q_network=agent.q_network,
         target_network=agent.target_network,
         optimizer=agent.optimizer,
@@ -305,7 +316,7 @@ def train(config: DQNConfig) -> None:
     env_client.close()
     logger.info(
         "Training finished: %d episodes, %d total steps, best_reward=%.4f",
-        config.num_episodes - start_episode,
+        overall_episode - start_episode,
         step_count,
         best_reward,
     )
