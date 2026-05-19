@@ -410,12 +410,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs")
     parser.add_argument("--random-seed", type=int, default=42, help="Random seed")
     parser.add_argument("--bucket", type=str, default=S3_BUCKET, help="S3 bucket name")
+    parser.add_argument("--config-json", type=str, default="{}", help="JSON config blob from pipeline")
     return parser.parse_args()
 
 
 def main() -> None:
     """Main entry point for the model training component."""
     args = parse_args()
+    # Merge --config-json overrides into default argparse values
+    import json as _json
+    _cfg = _json.loads(args.config_json)
+    for _key, _val in _cfg.items():
+        if hasattr(args, _key.replace("-", "_")):
+            setattr(args, _key.replace("-", "_"), _val)
 
     logger.info(
         "Model training component started",
