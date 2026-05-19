@@ -300,5 +300,5 @@ class TestConstants:
     def test_model_registry_url(self):
         """Model Registry URL is the in-cluster service address."""
         assert MODEL_REGISTRY_URL == (
-            "http://model-registry.kubeflow.svc.cluster.local:8080"
+            "http://model-registry-service.kubeflow.svc.cluster.local:8080"
         )

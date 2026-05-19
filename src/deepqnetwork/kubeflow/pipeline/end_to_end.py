@@ -35,7 +35,7 @@ from deepqnetwork.kubeflow.pipeline.dqn_pipeline import (
 # Constants, degradation gate thresholds from thesis
 # ---------------------------------------------------------------------------
 
-MODEL_REGISTRY_URL = "http://model-registry.kubeflow.svc.cluster.local:8080"
+MODEL_REGISTRY_URL = "http://model-registry-service.kubeflow.svc.cluster.local:8080"
 SHARPE_ABSOLUTE_THRESHOLD = 1.0  # Must beat buy & hold baseline
 PNL_ABSOLUTE_THRESHOLD = 0.0  # Must be profitable in absolute terms
 SHARPE_DEGRADATION_THRESHOLD = 0.1  # Max relative degradation vs production

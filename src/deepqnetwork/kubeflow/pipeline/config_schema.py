@@ -179,9 +179,10 @@ class DQNPipelineConfig:
             errors.append(
                 f"hour_of_day_start must be 0-23: {self.hour_of_day_start}"
             )
-        if not (0 <= self.hour_of_day_end <= 23):
+        if not (0 <= self.hour_of_day_end <= self.hour_of_day_start + 24):
             errors.append(
-                f"hour_of_day_end must be 0-23: {self.hour_of_day_end}"
+                f"hour_of_day_end must be 0-{self.hour_of_day_start + 24}: "
+                f"{self.hour_of_day_end}"
             )
         if self.hour_of_day_start == self.hour_of_day_end:
             errors.append(
