@@ -268,7 +268,7 @@ def format_katib_metric(metric_name: str, value: float) -> str:
 
 def record_trial_in_registry(
     trial_result: TrialResult,
-    registry_url: str = "http://model-registry.kubeflow.svc.cluster.local:8080",
+    registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
 ) -> str | None:
     """Record trial hyperparameters and objective in the Model Registry.
 
@@ -462,7 +462,7 @@ def main() -> None:
     parser.add_argument(
         "--registry-url",
         type=str,
-        default="http://model-registry.kubeflow.svc.cluster.local:8080",
+        default="http://model-registry-service.kubeflow.svc.cluster.local:8080",
         help="URL of the Model Registry service.",
     )
     parser.add_argument(

@@ -462,10 +462,10 @@ def model_registration(
         eval_data = json.loads(obj["Body"].read().decode("utf-8"))
     except Exception as e:
         _log(
-            "Failed to read evaluation metrics; skipping registration",
+            "Failed to read evaluation metrics; failing pipeline step",
             extra={"error": str(e)},
         )
-        return
+        raise
 
     # Step 2: Check degradation gate -----------------------------------------
     gate = eval_data.get("degradation_gate", {})
@@ -649,10 +649,11 @@ def model_registration(
         )
     except Exception as e:
         _log(
-            "Model registration failed (gracefully degraded); "
-            "model checkpoint remains in S3",
+            "Model registration failed; failing the pipeline step. "
+            "Model checkpoint remains in S3.",
             extra={"error": str(e)},
         )
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +678,7 @@ def forecaster_pipeline(
     snapshot_date: str = "",
     training_mode: str = "scratch",
     katib_best_params_json: str = "",
-    model_registry_url: str = "http://model-registry.kubeflow.svc.cluster.local:8080",
+    model_registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
 ):
     """Forecaster Pipeline: data → train → evaluate → register → backtest.
 

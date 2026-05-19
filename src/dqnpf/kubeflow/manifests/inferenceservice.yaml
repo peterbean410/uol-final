@@ -70,7 +70,7 @@ spec:
           - name: FORECASTER_MODEL_REGISTRY_NAME
             value: "probabilisticforecaster-usdjpy"
           - name: MODEL_REGISTRY_URL
-            value: "http://model-registry.kubeflow.svc.cluster.local:8080"
+            value: "http://model-registry-service.kubeflow.svc.cluster.local:8080"
       # Modelenv sidecar, provides state preprocessing (53-feature vector)
       # and RecentBars M5 series for ForecasterBridge
       - name: modelenv
