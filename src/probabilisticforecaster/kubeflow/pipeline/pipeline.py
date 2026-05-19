@@ -508,23 +508,27 @@ def model_registration(
             f"probabilistic-transformer-{symbol.lower()}-h{forecast_horizon}"
         )
 
-        # Ensure the registered model exists
-        try:
-            registered_model = registry.get_registered_model(model_name)
-        except Exception:
-            registered_model = registry.register_model(
-                model_name,
-                uri="",
-                description=(
-                    f"ProbabilisticTransformer for {symbol} "
-                    f"with forecast horizon {forecast_horizon}"
-                ),
-            )
-
         # Build metadata
         version_id = str(uuid.uuid4())
         config = json.loads(config_json)
         test_metrics = eval_data.get("test_metrics", {})
+
+        # Look up any existing production version *before* registering this one,
+        # so we can demote it after the new version lands.
+        existing_production: list = []
+        try:
+            for v in registry.get_model_versions(model_name):
+                if (v.custom_properties or {}).get(
+                    "lifecycle_stage"
+                ) == "production":
+                    existing_production.append(v)
+        except Exception:
+            # Registered model does not exist yet, first deployment.
+            pass
+
+        has_production = bool(existing_production)
+        if not has_production:
+            _log("No production model exists; bootstrapping initial deployment")
 
         custom_properties = {
             "version_id": version_id,
@@ -549,20 +553,26 @@ def model_registration(
             ),
             "pipeline_run_id": pipeline_run_id,
             "data_snapshot_path": "",
-            "lifecycle_stage": "staging",
+            # New version starts in production on bootstrap; otherwise staging
+            # until we demote the incumbent below.
+            "lifecycle_stage": "production" if not has_production else "staging",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        registry.register_model_version(
-            name=version_id,
-            version=version_id,
-            model_name=registered_model.name,
+        # Single SDK call registers (or upserts) the RegisteredModel and creates
+        # the ModelVersion with the supplied custom properties.
+        registry.register_model(
+            name=model_name,
             uri=model_checkpoint_uri,
+            model_format_name="pytorch",
+            model_format_version="2",
+            version=version_id,
             description=(
                 f"Trained on {symbol} h{forecast_horizon} "
                 f"(run={pipeline_run_id})"
             ),
-            custom_properties=custom_properties,
+            version_description=f"version {version_id}",
+            metadata=custom_properties,
         )
 
         _log(
@@ -575,69 +585,42 @@ def model_registration(
             },
         )
 
-        # Step 4: Determine whether to promote ---------------------------------
-        # Check if a production model already exists for this symbol/horizon
-        should_promote = False
+        # Promote: demote the prior production version (if any) and ensure the
+        # new version is marked production.
+        if has_production:
+            new_version = registry.get_model_version(model_name, version_id)
+            if new_version is not None:
+                new_version.custom_properties["lifecycle_stage"] = "production"
+                registry.update(new_version)
 
-        try:
-            versions = registry.get_model_versions(model_name)
-            has_production = False
-            for v in versions:
-                props = (
-                    v.custom_properties
-                    if hasattr(v, "custom_properties")
-                    else {}
+            for prev in existing_production:
+                prev.custom_properties["lifecycle_stage"] = "staging"
+                registry.update(prev)
+                _log(
+                    "Demoted previous production model",
+                    extra={
+                        "version_id": (prev.custom_properties or {}).get(
+                            "version_id"
+                        )
+                    },
                 )
-                if props.get("lifecycle_stage") == "production":
-                    has_production = True
-                    # Demote current production
-                    props["lifecycle_stage"] = "staging"
-                    registry.update_model_version(v, custom_properties=props)
-                    _log(
-                        "Demoted previous production model",
-                        extra={"version_id": props.get("version_id")},
-                    )
-                    break
 
-            if not has_production:
-                # Bootstrap: first model, auto-promote
-                _log("No production model exists; bootstrapping initial deployment")
-        except Exception:
-            # No versions exist yet, bootstrap
-            _log("No existing model versions; bootstrapping initial deployment")
+        _log(
+            "Model promoted to production",
+            extra={"version_id": version_id, "model_name": model_name},
+        )
 
-        should_promote = True
-
-        # Step 5: Promote to production ---------------------------------------
-        if should_promote:
-            # Update lifecycle stage
-            for v in registry.get_model_versions(model_name):
-                props = (
-                    v.custom_properties
-                    if hasattr(v, "custom_properties")
-                    else {}
-                )
-                if props.get("version_id") == version_id:
-                    props["lifecycle_stage"] = "production"
-                    registry.update_model_version(v, custom_properties=props)
-                    break
-
-            _log(
-                "Model promoted to production",
-                extra={"version_id": version_id, "model_name": model_name},
-            )
-
-            # Note: standalone Forecaster KServe InferenceService is deprecated
-            # (kubeflow-ml-pipeline spec, Requirement 5). The dqnpf-intraday
-            # combined predictor's hot-reload watcher (Task 30.3) resolves the
-            # new production checkpoint on its next poll; no KServe patching
-            # is performed from this pipeline step.
+        # Note: standalone Forecaster KServe InferenceService is deprecated
+        # (kubeflow-ml-pipeline spec, Requirement 5). The dqnpf-intraday
+        # combined predictor's hot-reload watcher (Task 30.3) resolves the
+        # new production checkpoint on its next poll; no KServe patching
+        # is performed from this pipeline step.
 
         _log(
             "Model registration component completed successfully",
             extra={
                 "version_id": version_id,
-                "promoted": should_promote,
+                "promoted": True,
                 "bootstrap": not has_production,
             },
         )
