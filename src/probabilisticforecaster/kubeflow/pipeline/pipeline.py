@@ -93,6 +93,7 @@ def model_training(
     train_dataset: Input[Dataset],
     config_json: str,
     training_mode: str,
+    production_model_uri: str,
     model_checkpoint: Output[Model],
     training_metrics: Output[Metrics],
 ):
@@ -100,6 +101,11 @@ def model_training(
 
     Supports both scratch (random init, full epochs) and finetune
     (load production weights, reduced LR, fewer epochs) modes.
+
+    ``production_model_uri`` is the URI of the current production checkpoint
+    to fine-tune from. It is required when ``training_mode="finetune"`` and
+    ignored when ``training_mode="scratch"``. Pass an empty string for
+    initial scratch runs (no production model exists yet).
     """
     return dsl.ContainerSpec(
         image=f"{ECR_BASE}/forecaster/model-training:latest",
@@ -108,6 +114,7 @@ def model_training(
             "--train-dataset-path", train_dataset.uri,
             "--checkpoint-path", model_checkpoint.uri,
             "--training-mode", training_mode,
+            "--production-model-path", production_model_uri,
             "--config-json", config_json,
         ],
     )
@@ -402,6 +409,98 @@ def build_pipeline_config(
         )
 
     return config
+
+
+# ---------------------------------------------------------------------------
+# Lightweight Python component for resolving the current production checkpoint
+# ---------------------------------------------------------------------------
+
+
+@dsl.component(
+    base_image="python:3.11-slim",
+    packages_to_install=["model-registry"],
+)
+def resolve_production_checkpoint(
+    registry_url: str,
+    symbol: str,
+    forecast_horizon: int,
+) -> str:
+    """Return the URI of the current production checkpoint, or ""  if none.
+
+    Looks up the registered model ``probabilistic-transformer-<symbol>-h<H>``
+    in the Model Registry and returns the ``uri`` of the version whose
+    ``custom_properties.lifecycle_stage`` is ``"production"``. When no
+    production version exists (initial deployment) or the registry is
+    unreachable, returns an empty string; the caller is expected to pass
+    that through to ``model_training`` and use scratch mode.
+
+    This is the input that lets ``model_training --training-mode=finetune``
+    locate the prior weights it needs to warm-start from.
+    """
+    import json
+    import sys
+    from datetime import datetime, timezone
+
+    def _log(msg: str, extra: dict | None = None) -> None:
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": "INFO",
+            "logger": __name__,
+            "message": msg,
+            "component": "resolve_production_checkpoint",
+        }
+        if extra:
+            entry.update(extra)
+        print(json.dumps(entry), file=sys.stdout)
+
+    model_name = (
+        f"probabilistic-transformer-{symbol.lower()}-h{forecast_horizon}"
+    )
+
+    try:
+        from model_registry import ModelRegistry
+    except ImportError as e:
+        _log(
+            "Model Registry SDK not available; returning empty URI",
+            extra={"error": str(e)},
+        )
+        return ""
+
+    try:
+        registry = ModelRegistry(
+            server_address=registry_url, author="forecaster-pipeline"
+        )
+        versions = list(registry.get_model_versions(model_name))
+    except Exception as e:
+        _log(
+            "Registry lookup failed; returning empty URI (treat as no production)",
+            extra={"error": str(e), "model_name": model_name},
+        )
+        return ""
+
+    production_uri = ""
+    for v in versions:
+        props = v.custom_properties if hasattr(v, "custom_properties") else {}
+        # custom_properties values may be wrapped (MetadataStringValue) or
+        # plain, read both shapes.
+        stage_raw = props.get("lifecycle_stage")
+        if hasattr(stage_raw, "string_value"):
+            stage = stage_raw.string_value
+        else:
+            stage = stage_raw
+        if stage == "production":
+            production_uri = getattr(v, "uri", "") or ""
+            break
+
+    _log(
+        "Resolved production checkpoint",
+        extra={
+            "model_name": model_name,
+            "uri": production_uri,
+            "found": bool(production_uri),
+        },
+    )
+    return production_uri
 
 
 # ---------------------------------------------------------------------------
@@ -776,12 +875,27 @@ def forecaster_pipeline(
     _mount_minio_creds(dp_task)
 
     # -----------------------------------------------------------------------
+    # Step 1b: Resolve the current production checkpoint (for finetune mode)
+    # -----------------------------------------------------------------------
+    # Always runs, when no production version exists yet, returns "" and
+    # model_training (in scratch mode) ignores it. When training_mode is
+    # "finetune", the trainer requires a non-empty URI and will fail with a
+    # clear ValueError if this is empty (i.e. you tried to fine-tune before
+    # any production model existed).
+    prod_ckpt_task = resolve_production_checkpoint(
+        registry_url=model_registry_url,
+        symbol=symbol,
+        forecast_horizon=forecast_horizon,
+    )
+
+    # -----------------------------------------------------------------------
     # Step 2: Model Training
     # -----------------------------------------------------------------------
     mt_task = model_training(
         train_dataset=dp_task.outputs["train_dataset"],
         config_json=config_task.outputs["config_json"],
         training_mode=training_mode,
+        production_model_uri=prod_ckpt_task.output,
     )
     mt_task.set_retry(num_retries=3)
     _mount_minio_creds(mt_task)
