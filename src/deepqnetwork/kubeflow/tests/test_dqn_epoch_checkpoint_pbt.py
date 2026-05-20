@@ -58,15 +58,15 @@ REQUIRED_CHECKPOINT_FIELDS = {
 def checkpoint_intervals(draw):
     """Generate valid checkpoint interval configurations.
 
-    Returns a tuple of (num_episodes, checkpoint_interval) where
-    num_episodes is a multiple of checkpoint_interval to ensure
+    Returns a tuple of (num_episodes_per_range, checkpoint_interval) where
+    num_episodes_per_range is a multiple of checkpoint_interval to ensure
     clean division for checkpoint counting.
     """
     interval = draw(st.integers(min_value=1, max_value=10))
-    # num_episodes is interval * multiplier so we get exact checkpoint counts
+    # num_episodes_per_range is interval * multiplier so we get exact checkpoint counts
     multiplier = draw(st.integers(min_value=1, max_value=10))
-    num_episodes = interval * multiplier
-    return num_episodes, interval
+    num_episodes_per_range = interval * multiplier
+    return num_episodes_per_range, interval
 
 
 # ---------------------------------------------------------------------------
@@ -75,12 +75,12 @@ def checkpoint_intervals(draw):
 
 
 def _create_config(
-    num_episodes: int = 10,
+    num_episodes_per_range: int = 10,
     checkpoint_interval: int = 5,
 ) -> DQNConfig:
     """Create a minimal DQNConfig for checkpoint testing."""
     return DQNConfig(
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         checkpoint_interval=checkpoint_interval,
         hidden_dims=HIDDEN_DIMS,
         activation="relu",
@@ -123,7 +123,7 @@ def _simulate_training_checkpoints(
     """
     saved_checkpoints: list[dict] = []
 
-    for episode in range(config.num_episodes):
+    for episode in range(config.num_episodes_per_range):
         # Checkpoint saving at configurable intervals (mirrors train.py logic)
         if episode > 0 and episode % config.checkpoint_interval == 0:
             checkpoint_dict = {
@@ -144,7 +144,7 @@ def _simulate_training_checkpoints(
         "optimizer_state_dict": agent.optimizer.state_dict(),
         "epsilon": agent.epsilon,
         "step_count": agent.step_count,
-        "episode_count": config.num_episodes - 1,
+        "episode_count": config.num_episodes_per_range - 1,
         "config": asdict(config),
     }
     saved_checkpoints.append(final_checkpoint)
@@ -189,10 +189,10 @@ class TestDQNEpochCheckpointPersistence:
 
         **Validates: Requirements DQN-R26**
         """
-        num_episodes, checkpoint_interval = params
+        num_episodes_per_range, checkpoint_interval = params
 
         config = _create_config(
-            num_episodes=num_episodes,
+            num_episodes_per_range=num_episodes_per_range,
             checkpoint_interval=checkpoint_interval,
         )
         agent = _create_agent(config)
@@ -203,7 +203,7 @@ class TestDQNEpochCheckpointPersistence:
         # Expected interval checkpoints: episodes that satisfy
         # episode > 0 and episode % checkpoint_interval == 0
         expected_interval_count = len([
-            e for e in range(num_episodes)
+            e for e in range(num_episodes_per_range)
             if e > 0 and e % checkpoint_interval == 0
         ])
 
@@ -213,7 +213,7 @@ class TestDQNEpochCheckpointPersistence:
         assert len(checkpoints) == expected_total, (
             f"Expected {expected_total} checkpoints "
             f"({expected_interval_count} interval + 1 final) for "
-            f"num_episodes={num_episodes}, checkpoint_interval={checkpoint_interval}, "
+            f"num_episodes_per_range={num_episodes_per_range}, checkpoint_interval={checkpoint_interval}, "
             f"got {len(checkpoints)}"
         )
 
@@ -230,10 +230,10 @@ class TestDQNEpochCheckpointPersistence:
 
         **Validates: Requirements DQN-R26**
         """
-        num_episodes, checkpoint_interval = params
+        num_episodes_per_range, checkpoint_interval = params
 
         config = _create_config(
-            num_episodes=num_episodes,
+            num_episodes_per_range=num_episodes_per_range,
             checkpoint_interval=checkpoint_interval,
         )
         agent = _create_agent(config)
@@ -281,10 +281,10 @@ class TestDQNEpochCheckpointPersistence:
 
         **Validates: Requirements DQN-R26**
         """
-        num_episodes, checkpoint_interval = params
+        num_episodes_per_range, checkpoint_interval = params
 
         config = _create_config(
-            num_episodes=num_episodes,
+            num_episodes_per_range=num_episodes_per_range,
             checkpoint_interval=checkpoint_interval,
         )
         agent = _create_agent(config)
@@ -342,10 +342,10 @@ class TestDQNEpochCheckpointPersistence:
 
         **Validates: Requirements DQN-R26**
         """
-        num_episodes, checkpoint_interval = params
+        num_episodes_per_range, checkpoint_interval = params
 
         config = _create_config(
-            num_episodes=num_episodes,
+            num_episodes_per_range=num_episodes_per_range,
             checkpoint_interval=checkpoint_interval,
         )
         agent = _create_agent(config)
@@ -399,10 +399,10 @@ class TestDQNEpochCheckpointPersistence:
 
         **Validates: Requirements DQN-R26**
         """
-        num_episodes, checkpoint_interval = params
+        num_episodes_per_range, checkpoint_interval = params
 
         config = _create_config(
-            num_episodes=num_episodes,
+            num_episodes_per_range=num_episodes_per_range,
             checkpoint_interval=checkpoint_interval,
         )
         agent = _create_agent(config)
@@ -417,7 +417,7 @@ class TestDQNEpochCheckpointPersistence:
             saved_paths: list[str] = []
 
             # Simulate the training loop checkpoint logic
-            for episode in range(num_episodes):
+            for episode in range(num_episodes_per_range):
                 if episode > 0 and episode % checkpoint_interval == 0:
                     path = mgr.save(
                         episode=episode,
@@ -432,7 +432,7 @@ class TestDQNEpochCheckpointPersistence:
 
             # Final checkpoint
             final_path = mgr.save(
-                episode=num_episodes - 1,
+                episode=num_episodes_per_range - 1,
                 q_network=agent.q_network,
                 target_network=agent.target_network,
                 optimizer=agent.optimizer,

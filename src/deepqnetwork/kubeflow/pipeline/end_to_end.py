@@ -473,7 +473,7 @@ def dqn_pipeline_e2e(
     episode_start_ts: int = 0,
     episode_end_ts: int = 0,
     step_size_seconds: int = 5,
-    num_episodes: int = 3000,
+    num_episodes_per_range: int = 3000,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -516,7 +516,7 @@ def dqn_pipeline_e2e(
         episode_start_ts: Episode start timestamp for training.
         episode_end_ts: Episode end timestamp for training.
         step_size_seconds: Step size in seconds for the environment.
-        num_episodes: Number of training episodes (overridden in finetune mode).
+        num_episodes_per_range: Number of training episodes (overridden in finetune mode).
         batch_size: Training batch size.
         learning_rate: Learning rate (overridden in finetune mode).
         training_mode: "scratch" for full training or "finetune" for
@@ -533,7 +533,7 @@ def dqn_pipeline_e2e(
     # -----------------------------------------------------------------------
     effective_learning_rate = learning_rate
     effective_batch_size = batch_size
-    effective_num_episodes = num_episodes
+    effective_num_episodes_per_range = num_episodes_per_range
 
     # Note: Katib parameter injection is handled at submission time via
     # build_dqn_pipeline_e2e_config(). The katib_best_params_json is also
@@ -549,7 +549,7 @@ def dqn_pipeline_e2e(
         episode_start_ts=episode_start_ts,
         episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -564,7 +564,7 @@ def dqn_pipeline_e2e(
         episode_start_ts=episode_start_ts,
         episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -616,7 +616,7 @@ def build_dqn_pipeline_e2e_config(
     episode_start_ts: int = 0,
     episode_end_ts: int = 0,
     step_size_seconds: int = 5,
-    num_episodes: int = 3000,
+    num_episodes_per_range: int = 3000,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -638,7 +638,7 @@ def build_dqn_pipeline_e2e_config(
         episode_start_ts: Episode start timestamp.
         episode_end_ts: Episode end timestamp.
         step_size_seconds: Step size in seconds for the environment.
-        num_episodes: Number of training episodes.
+        num_episodes_per_range: Number of training episodes.
         batch_size: Training batch size.
         learning_rate: Learning rate.
         training_mode: "scratch" or "finetune".
@@ -670,7 +670,7 @@ def build_dqn_pipeline_e2e_config(
         episode_start_ts=episode_start_ts,
         episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=effective_batch_size,
         learning_rate=effective_lr,
         training_mode=training_mode,
@@ -680,7 +680,7 @@ def build_dqn_pipeline_e2e_config(
     # Apply training mode adjustments
     if training_mode == "finetune":
         config = config.override(
-            num_episodes=config.finetune_num_episodes,
+            num_episodes_per_range=config.finetune_num_episodes_per_range,
             learning_rate=config.finetune_learning_rate,
         )
         effective_lr = config.finetune_learning_rate
@@ -699,7 +699,7 @@ def build_dqn_pipeline_e2e_config(
         "episode_start_ts": episode_start_ts,
         "episode_end_ts": episode_end_ts,
         "step_size_seconds": step_size_seconds,
-        "num_episodes": num_episodes if training_mode != "finetune" else config.finetune_num_episodes,
+        "num_episodes_per_range": num_episodes_per_range if training_mode != "finetune" else config.finetune_num_episodes_per_range,
         "batch_size": effective_batch_size,
         "learning_rate": effective_lr,
         "training_mode": training_mode,

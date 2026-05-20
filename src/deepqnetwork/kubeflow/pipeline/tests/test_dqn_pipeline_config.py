@@ -66,11 +66,11 @@ class TestOverride:
     def test_multiple_overrides(self) -> None:
         config = DQNPipelineConfig()
         overridden = config.override(
-            symbol="AUDJPY", learning_rate=0.001, num_episodes=500
+            symbol="AUDJPY", learning_rate=0.001, num_episodes_per_range=500
         )
         assert overridden.symbol == "AUDJPY"
         assert overridden.learning_rate == 0.001
-        assert overridden.num_episodes == 500
+        assert overridden.num_episodes_per_range == 500
 
     def test_preserves_betas_as_tuple(self) -> None:
         config = DQNPipelineConfig()
@@ -189,8 +189,8 @@ class TestToCliArgs:
 
     def test_finetune_mode_uses_finetune_episodes(self) -> None:
         config = DQNPipelineConfig(
-            num_episodes=3000,
-            finetune_num_episodes=500,
+            num_episodes_per_range=3000,
+            finetune_num_episodes_per_range=500,
             training_mode="finetune",
         )
         args = config.to_cli_args()
@@ -216,7 +216,7 @@ class TestToCliArgs:
             gamma=0.95,
             learning_rate=0.001,
             batch_size=128,
-            num_episodes=1000,
+            num_episodes_per_range=1000,
         )
         cli_args = ["--config", "deepqnetwork/config.yaml"] + config.to_cli_args()
         parsed = load_config(cli_args)
@@ -225,5 +225,5 @@ class TestToCliArgs:
         assert parsed.gamma == 0.95
         assert parsed.learning_rate == 0.001
         assert parsed.batch_size == 128
-        assert parsed.num_episodes == 1000
+        assert parsed.num_episodes_per_range == 1000
         assert parsed.mode == "train"

@@ -393,7 +393,7 @@ def compute_backtest_metrics(episode_results: list[EpisodeResult]) -> BacktestMe
 
     if std_reward > 0:
         # Annualise: assume episodes represent trading periods
-        # Scale by sqrt(num_episodes) as a proxy for annualisation
+        # Scale by sqrt(num_episodes_per_range) as a proxy for annualisation
         sharpe_ratio = (mean_reward / std_reward) * math.sqrt(len(episode_results))
     else:
         sharpe_ratio = 0.0 if mean_reward == 0 else math.copysign(float("inf"), mean_reward)
@@ -786,7 +786,7 @@ def main() -> None:
         logger.info(
             "Starting evaluation episodes",
             extra={
-                "num_episodes": args.num_eval_episodes,
+                "num_episodes_per_range": args.num_eval_episodes,
                 "episode_start_ts": args.eval_episode_start_ts,
                 "episode_end_ts": args.eval_episode_end_ts,
                 "step_size_seconds": args.step_size_seconds,

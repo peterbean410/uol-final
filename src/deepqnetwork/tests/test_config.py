@@ -48,7 +48,7 @@ class TestDQNConfig:
 
     def test_default_training_fields(self):
         config = DQNConfig()
-        assert config.num_episodes == 3000
+        assert config.num_episodes_per_range == 3000
         assert config.max_steps_per_episode == 30_000
         assert config.checkpoint_interval == 50
         assert config.checkpoint_dir == "deepqnetwork/checkpoints/"
@@ -206,7 +206,7 @@ _OVERRIDABLE_PARAMS = [
     ("--grad-clip-norm", "grad_clip_norm", _positive_float, _positive_float),
     ("--weight-decay", "weight_decay", _positive_float, _positive_float),
     ("--dropout", "dropout", _unit_float, _unit_float),
-    ("--num-episodes", "num_episodes", _positive_int, _positive_int),
+    ("--num-episodes-per-range", "num_episodes_per_range", _positive_int, _positive_int),
     ("--max-steps-per-episode", "max_steps_per_episode", _positive_int, _positive_int),
     ("--checkpoint-interval", "checkpoint_interval", _positive_int, _positive_int),
     ("--log-interval", "log_interval", _positive_int, _positive_int),

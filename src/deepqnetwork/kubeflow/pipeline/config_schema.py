@@ -64,7 +64,7 @@ class DQNPipelineConfig:
     loss_function: str = "huber"  # huber, mse
 
     # Training schedule
-    num_episodes: int = 3000
+    num_episodes_per_range: int = 3000
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
 
@@ -92,10 +92,10 @@ class DQNPipelineConfig:
 
     # Training mode
     training_mode: Literal["scratch", "finetune"] = "scratch"
-    # "scratch": Random init, full training (num_episodes episodes)
+    # "scratch": Random init, full training (num_episodes_per_range episodes)
     # "finetune": Load production checkpoint, reduced LR, fewer episodes
     finetune_learning_rate: float = 1e-5  # 10x lower than base LR
-    finetune_num_episodes: int = 500  # Fewer episodes when fine-tuning
+    finetune_num_episodes_per_range: int = 500  # Fewer episodes when fine-tuning
 
     @classmethod
     def from_yaml(cls, path: str) -> "DQNPipelineConfig":
@@ -238,8 +238,8 @@ class DQNPipelineConfig:
             errors.append(f"Invalid loss_function: {self.loss_function}")
 
         # Training
-        if self.num_episodes <= 0:
-            errors.append(f"num_episodes must be positive: {self.num_episodes}")
+        if self.num_episodes_per_range <= 0:
+            errors.append(f"num_episodes_per_range must be positive: {self.num_episodes_per_range}")
         if self.max_steps_per_episode <= 0:
             errors.append(
                 f"max_steps_per_episode must be positive: {self.max_steps_per_episode}"
@@ -284,9 +284,9 @@ class DQNPipelineConfig:
                 errors.append(
                     f"finetune_learning_rate out of range [1e-6, 0.01]: {self.finetune_learning_rate}"
                 )
-            if self.finetune_num_episodes <= 0:
+            if self.finetune_num_episodes_per_range <= 0:
                 errors.append(
-                    f"finetune_num_episodes must be positive: {self.finetune_num_episodes}"
+                    f"finetune_num_episodes_per_range must be positive: {self.finetune_num_episodes_per_range}"
                 )
 
         return errors
@@ -345,11 +345,11 @@ class DQNPipelineConfig:
 
         # Training
         effective_episodes = (
-            self.finetune_num_episodes
+            self.finetune_num_episodes_per_range
             if self.training_mode == "finetune"
-            else self.num_episodes
+            else self.num_episodes_per_range
         )
-        args.extend(["--num-episodes", str(effective_episodes)])
+        args.extend(["--num-episodes-per-range", str(effective_episodes)])
         args.extend(["--max-steps-per-episode", str(self.max_steps_per_episode)])
         args.extend(["--checkpoint-interval", str(self.checkpoint_interval)])
 

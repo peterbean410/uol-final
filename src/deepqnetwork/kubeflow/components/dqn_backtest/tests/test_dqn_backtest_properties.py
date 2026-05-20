@@ -29,9 +29,9 @@ from deepqnetwork.kubeflow.components.dqn_backtest.component import (
 @st.composite
 def episode_results_strategy(draw):
     """Generate a list of EpisodeResult instances with realistic value ranges."""
-    num_episodes = draw(st.integers(min_value=1, max_value=50))
+    num_episodes_per_range = draw(st.integers(min_value=1, max_value=50))
     results = []
-    for _ in range(num_episodes):
+    for _ in range(num_episodes_per_range):
         num_trades = draw(st.integers(min_value=0, max_value=200))
         winning_trades = draw(st.integers(min_value=0, max_value=num_trades))
         results.append(

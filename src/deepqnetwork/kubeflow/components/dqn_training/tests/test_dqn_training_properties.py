@@ -94,7 +94,7 @@ def valid_dqn_pipeline_configs_for_training(draw):
         ),
         loss_function=draw(st.sampled_from(VALID_LOSS_FUNCTIONS)),
         # Reduced episodes for test speed
-        num_episodes=draw(st.integers(min_value=1, max_value=5)),
+        num_episodes_per_range=draw(st.integers(min_value=1, max_value=5)),
         max_steps_per_episode=draw(st.integers(min_value=1, max_value=100)),
         checkpoint_interval=draw(st.integers(min_value=1, max_value=10)),
         gpu_enabled=False,
@@ -105,7 +105,7 @@ def valid_dqn_pipeline_configs_for_training(draw):
         finetune_learning_rate=draw(
             st.floats(min_value=1e-6, max_value=0.01, allow_nan=False, allow_infinity=False)
         ),
-        finetune_num_episodes=draw(st.integers(min_value=1, max_value=5)),
+        finetune_num_episodes_per_range=draw(st.integers(min_value=1, max_value=5)),
     )
 
 
@@ -240,10 +240,10 @@ class TestFinetuneUsesLowerLearningRate:
             f"Got: {dqn_config.learning_rate}, base: {pipeline_config.learning_rate}"
         )
 
-        # Also verify num_episodes uses finetune_num_episodes
-        assert dqn_config.num_episodes == pipeline_config.finetune_num_episodes, (
-            f"Expected finetune_num_episodes={pipeline_config.finetune_num_episodes}, "
-            f"got num_episodes={dqn_config.num_episodes}"
+        # Also verify num_episodes_per_range uses finetune_num_episodes_per_range
+        assert dqn_config.num_episodes_per_range == pipeline_config.finetune_num_episodes_per_range, (
+            f"Expected finetune_num_episodes_per_range={pipeline_config.finetune_num_episodes_per_range}, "
+            f"got num_episodes_per_range={dqn_config.num_episodes_per_range}"
         )
 
     @given(pipeline_config=valid_dqn_pipeline_configs_for_training())
@@ -269,8 +269,8 @@ class TestFinetuneUsesLowerLearningRate:
             f"got learning_rate={dqn_config.learning_rate}"
         )
 
-        # Also verify num_episodes uses base num_episodes
-        assert dqn_config.num_episodes == pipeline_config.num_episodes, (
-            f"Expected num_episodes={pipeline_config.num_episodes}, "
-            f"got num_episodes={dqn_config.num_episodes}"
+        # Also verify num_episodes_per_range uses base num_episodes_per_range
+        assert dqn_config.num_episodes_per_range == pipeline_config.num_episodes_per_range, (
+            f"Expected num_episodes_per_range={pipeline_config.num_episodes_per_range}, "
+            f"got num_episodes_per_range={dqn_config.num_episodes_per_range}"
         )

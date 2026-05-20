@@ -186,7 +186,7 @@ def train(config: DQNConfig) -> None:
         # Legacy fixed-timestamp mode, same window for every episode.
         episode_windows = [
             (config.episode_start_ts, config.episode_end_ts)
-        ] * config.num_episodes
+        ] * config.num_episodes_per_range
         mode = "fixed"
 
     logger.info(

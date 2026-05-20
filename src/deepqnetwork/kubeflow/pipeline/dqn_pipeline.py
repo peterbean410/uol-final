@@ -7,8 +7,7 @@ retry(2) on training and retry(1) on backtest.
 Training component runs with modelenv sidecar (1 GPU, 16Gi memory).
 Backtest component runs CPU-only (4Gi memory).
 
-Pipeline accepts parameters: symbol, episode_start_ts, episode_end_ts,
-step_size_seconds, num_episodes, batch_size, learning_rate, training_mode,
+step_size_seconds, num_episodes_per_range, batch_size, learning_rate, training_mode,
 checkpoint (for finetune).
 
 Integrates DQNPipelineConfig loading and validation at pipeline start.
@@ -39,7 +38,7 @@ def dqn_training(
     episode_start_ts: int,
     episode_end_ts: int,
     step_size_seconds: int,
-    num_episodes: int,
+    num_episodes_per_range: int,
     batch_size: int,
     learning_rate: float,
     training_mode: str,
@@ -67,7 +66,7 @@ def dqn_training(
             "--symbol", symbol,
             "--episode-start-ts", str(episode_start_ts),
             "--episode-end-ts", str(episode_end_ts),
-            "--num-episodes", str(num_episodes),
+            "--num-episodes", str(num_episodes_per_range),
             "--batch-size", str(batch_size),
             "--learning-rate", str(learning_rate),
             "--training-mode", training_mode,
@@ -126,10 +125,8 @@ def dqn_backtest(
 @dsl.component(base_image="python:3.11-slim", packages_to_install=["pyyaml"])
 def resolve_dqn_config(
     symbol: str,
-    episode_start_ts: int,
-    episode_end_ts: int,
     step_size_seconds: int,
-    num_episodes: int,
+    num_episodes_per_range: int,
     batch_size: int,
     learning_rate: float,
     training_mode: str,
@@ -142,7 +139,7 @@ def resolve_dqn_config(
     "DQNConfigOutputs",
     [
         ("config_json", str),
-        ("effective_num_episodes", int),
+        ("effective_num_episodes_per_range", int),
         ("effective_learning_rate", float),
         ("date_start", str),
         ("date_end", str),
@@ -193,7 +190,7 @@ def resolve_dqn_config(
         grad_clip_norm: float = 10.0
         weight_decay: float = 0.0
         loss_function: str = "huber"
-        num_episodes: int = 3000
+        num_episodes_per_range: int = 3000
         max_steps_per_episode: int = 30_000
         checkpoint_interval: int = 50
         gpu_enabled: bool = True
@@ -201,7 +198,7 @@ def resolve_dqn_config(
         max_wall_time_hours: int = 8
         training_mode: str = "scratch"
         finetune_learning_rate: float = 1e-5
-        finetune_num_episodes: int = 500
+        finetune_num_episodes_per_range: int = 500
         date_start: str = ""
         date_end: str = ""
         hour_of_day_start: int = 0
@@ -209,10 +206,8 @@ def resolve_dqn_config(
 
     cfg = _DQNConfig(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -225,10 +220,10 @@ def resolve_dqn_config(
     # Apply training mode adjustments
     if training_mode == "finetune":
         effective_lr = cfg.finetune_learning_rate
-        effective_episodes = cfg.finetune_num_episodes
+        effective_episodes = cfg.finetune_num_episodes_per_range
     else:
         effective_lr = cfg.learning_rate
-        effective_episodes = cfg.num_episodes
+        effective_episodes = cfg.num_episodes_per_range
 
     # Validate
     errors: list = []
@@ -244,8 +239,8 @@ def resolve_dqn_config(
         )
     if cfg.batch_size <= 0:
         errors.append(f"batch_size must be positive: {cfg.batch_size}")
-    if cfg.num_episodes <= 0:
-        errors.append(f"num_episodes must be positive: {cfg.num_episodes}")
+    if cfg.num_episodes_per_range <= 0:
+        errors.append(f"num_episodes_per_range must be positive: {cfg.num_episodes_per_range}")
     if training_mode not in ("scratch", "finetune"):
         errors.append(f"Invalid training_mode: {training_mode}")
     if training_mode == "finetune" and not checkpoint:
@@ -260,14 +255,14 @@ def resolve_dqn_config(
 
     config_dict = asdict(cfg)
     config_dict["effective_learning_rate"] = effective_lr
-    config_dict["effective_num_episodes"] = effective_episodes
+    config_dict["effective_num_episodes_per_range"] = effective_episodes
     config_json = json.dumps(config_dict)
 
     DQNConfigOutputs = namedtuple(
         "DQNConfigOutputs",
         [
             "config_json",
-            "effective_num_episodes",
+            "effective_num_episodes_per_range",
             "effective_learning_rate",
             "date_start",
             "date_end",
@@ -277,7 +272,7 @@ def resolve_dqn_config(
     )
     return DQNConfigOutputs(
         config_json=config_json,
-        effective_num_episodes=effective_episodes,
+        effective_num_episodes_per_range=effective_episodes,
         effective_learning_rate=effective_lr,
         date_start=date_start,
         date_end=date_end,
@@ -293,10 +288,8 @@ def resolve_dqn_config(
 
 def build_dqn_pipeline_config(
     symbol: str = "USDJPY",
-    episode_start_ts: int = 0,
-    episode_end_ts: int = 0,
     step_size_seconds: int = 5,
-    num_episodes: int = 3000,
+    num_episodes_per_range: int = 3000,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -317,7 +310,7 @@ def build_dqn_pipeline_config(
         episode_start_ts: Episode start timestamp.
         episode_end_ts: Episode end timestamp.
         step_size_seconds: Step size in seconds for the environment.
-        num_episodes: Number of training episodes.
+        num_episodes_per_range: Number of training episodes.
         batch_size: Training batch size.
         learning_rate: Learning rate.
         training_mode: "scratch" for full training or "finetune" for
@@ -335,10 +328,8 @@ def build_dqn_pipeline_config(
     # Apply pipeline parameter overrides
     config = config.override(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         date_start=date_start,
@@ -351,7 +342,7 @@ def build_dqn_pipeline_config(
     # Apply training mode adjustments
     if training_mode == "finetune":
         config = config.override(
-            num_episodes=config.finetune_num_episodes,
+            num_episodes_per_range=config.finetune_num_episodes_per_range,
             learning_rate=config.finetune_learning_rate,
         )
 
@@ -385,10 +376,8 @@ def build_dqn_pipeline_config(
 )
 def dqn_pipeline(
     symbol: str = "USDJPY",
-    episode_start_ts: int = 0,
-    episode_end_ts: int = 0,
     step_size_seconds: int = 5,
-    num_episodes: int = 3000,
+    num_episodes_per_range: int = 3000,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -421,7 +410,7 @@ def dqn_pipeline(
         episode_start_ts: Episode start timestamp for training.
         episode_end_ts: Episode end timestamp for training.
         step_size_seconds: Step size in seconds for the environment.
-        num_episodes: Number of training episodes (overridden in finetune mode).
+        num_episodes_per_range: Number of training episodes (overridden in finetune mode).
         batch_size: Training batch size.
         learning_rate: Learning rate (overridden in finetune mode).
         training_mode: "scratch" for full training or "finetune" for
@@ -433,10 +422,8 @@ def dqn_pipeline(
     # -----------------------------------------------------------------------
     config_task = resolve_dqn_config(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -452,10 +439,8 @@ def dqn_pipeline(
     # -----------------------------------------------------------------------
     training_task = dqn_training(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
-        num_episodes=num_episodes,
+        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -477,8 +462,6 @@ def dqn_pipeline(
     backtest_task = dqn_backtest(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
         date_start=config_task.outputs["date_start"],

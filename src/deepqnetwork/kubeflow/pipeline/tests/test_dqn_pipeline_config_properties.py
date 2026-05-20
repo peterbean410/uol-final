@@ -90,7 +90,7 @@ def valid_dqn_pipeline_configs(draw):
             st.floats(min_value=0.1, max_value=100.0, allow_nan=False, allow_infinity=False)
         ),
         loss_function=draw(st.sampled_from(VALID_LOSS_FUNCTIONS)),
-        num_episodes=draw(st.integers(min_value=1, max_value=10_000)),
+        num_episodes_per_range=draw(st.integers(min_value=1, max_value=10_000)),
         max_steps_per_episode=draw(st.integers(min_value=1, max_value=100_000)),
         checkpoint_interval=draw(st.integers(min_value=1, max_value=500)),
         gpu_enabled=draw(st.booleans()),
@@ -119,7 +119,7 @@ def valid_dqn_pipeline_configs(draw):
         finetune_learning_rate=draw(
             st.floats(min_value=1e-6, max_value=0.01, allow_nan=False, allow_infinity=False)
         ),
-        finetune_num_episodes=draw(st.integers(min_value=1, max_value=5000)),
+        finetune_num_episodes_per_range=draw(st.integers(min_value=1, max_value=5000)),
     )
 
 
@@ -329,9 +329,9 @@ class TestCLIArgumentGeneration:
 
         # Num episodes depends on training mode
         if config.training_mode == "finetune":
-            assert parsed.num_episodes == config.finetune_num_episodes
+            assert parsed.num_episodes_per_range == config.finetune_num_episodes_per_range
         else:
-            assert parsed.num_episodes == config.num_episodes
+            assert parsed.num_episodes_per_range == config.num_episodes_per_range
 
         # Dueling flag
         if config.dueling:

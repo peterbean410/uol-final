@@ -220,13 +220,13 @@ class TestBuildPipelineConfig:
             episode_start_ts=1000000,
             episode_end_ts=2000000,
             learning_rate=1e-4,
-            num_episodes=3000,
+            num_episodes_per_range=3000,
             training_mode="finetune",
             checkpoint="s3://bucket/checkpoint.pt",
         )
-        # Finetune uses finetune_learning_rate (1e-5) and finetune_num_episodes (500)
+        # Finetune uses finetune_learning_rate (1e-5) and finetune_num_episodes_per_range (500)
         assert params["learning_rate"] == 1e-5
-        assert params["num_episodes"] == 500
+        assert params["num_episodes_per_range"] == 500
 
     def test_finetune_without_checkpoint_raises(self):
         """Finetune mode without checkpoint raises ValueError."""

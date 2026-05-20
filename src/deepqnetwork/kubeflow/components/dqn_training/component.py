@@ -223,8 +223,8 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
     """Build a DQNConfig from the pipeline config and CLI args.
 
     Applies training mode adjustments:
-      - scratch: uses base learning_rate and full num_episodes
-      - finetune: uses finetune_learning_rate and finetune_num_episodes
+      - scratch: uses base learning_rate and full num_episodes_per_range
+      - finetune: uses finetune_learning_rate and finetune_num_episodes_per_range
 
     Args:
         pipeline_config: The loaded DQNPipelineConfig.
@@ -238,10 +238,10 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
 
     if training_mode == "finetune":
         effective_lr = pipeline_config.finetune_learning_rate
-        effective_episodes = pipeline_config.finetune_num_episodes
+        effective_episodes = pipeline_config.finetune_num_episodes_per_range
     else:
         effective_lr = pipeline_config.learning_rate
-        effective_episodes = pipeline_config.num_episodes
+        effective_episodes = pipeline_config.num_episodes_per_range
 
     config = DQNConfig(
         # Environment
@@ -277,7 +277,7 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         grad_clip_norm=pipeline_config.grad_clip_norm,
         loss_function=pipeline_config.loss_function,
         # Training
-        num_episodes=effective_episodes,
+        num_episodes_per_range=effective_episodes,
         max_steps_per_episode=pipeline_config.max_steps_per_episode,
         checkpoint_interval=pipeline_config.checkpoint_interval,
         checkpoint_dir="/tmp/dqn_checkpoints",
@@ -511,8 +511,8 @@ def main() -> None:
         overrides["hour_of_day_start"] = args.hour_of_day_start
     if args.hour_of_day_end is not None:
         overrides["hour_of_day_end"] = args.hour_of_day_end
-    if args.num_episodes is not None:
-        overrides["num_episodes"] = args.num_episodes
+    if args.num_episodes_per_range is not None:
+        overrides["num_episodes_per_range"] = args.num_episodes_per_range
     if args.learning_rate is not None:
         overrides["learning_rate"] = args.learning_rate
     if args.batch_size is not None:
@@ -558,7 +558,7 @@ def main() -> None:
             "Finetune mode: production checkpoint ready",
             extra={
                 "learning_rate": pipeline_config.finetune_learning_rate,
-                "num_episodes": pipeline_config.finetune_num_episodes,
+                "num_episodes_per_range": pipeline_config.finetune_num_episodes_per_range,
             },
         )
     else:
@@ -566,7 +566,7 @@ def main() -> None:
             "Scratch mode: random initialisation with full training",
             extra={
                 "learning_rate": pipeline_config.learning_rate,
-                "num_episodes": pipeline_config.num_episodes,
+                "num_episodes_per_range": pipeline_config.num_episodes_per_range,
             },
         )
 
@@ -577,7 +577,7 @@ def main() -> None:
         "DQN config built",
         extra={
             "symbol": dqn_config.symbol,
-            "num_episodes": dqn_config.num_episodes,
+            "num_episodes_per_range": dqn_config.num_episodes_per_range,
             "learning_rate": dqn_config.learning_rate,
             "batch_size": dqn_config.batch_size,
             "grpc_address": dqn_config.grpc_address,
@@ -620,7 +620,7 @@ def main() -> None:
             "training_mode": training_mode,
             "checkpoint_output_path": args.checkpoint_output_path,
             "symbol": dqn_config.symbol,
-            "num_episodes": dqn_config.num_episodes,
+            "num_episodes_per_range": dqn_config.num_episodes_per_range,
             "learning_rate": dqn_config.learning_rate,
             "completed_at": timestamp,
         },

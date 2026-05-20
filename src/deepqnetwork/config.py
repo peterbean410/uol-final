@@ -55,7 +55,7 @@ class DQNConfig:
     loss_function: str = "huber"
 
     # Training
-    num_episodes: int = 3000
+    num_episodes_per_range: int = 3000
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
     checkpoint_dir: str = "deepqnetwork/checkpoints/"
@@ -140,7 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--dropout", type=float, default=None)
     parser.add_argument("--dueling", action="store_true", default=None)
-    parser.add_argument("--num-episodes", type=int, default=None)
+    parser.add_argument("--num-episodes-per-range", dest="num_episodes_per_range", type=int, default=None)
     parser.add_argument("--max-steps-per-episode", type=int, default=None)
     parser.add_argument("--checkpoint-interval", type=int, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default=None)
@@ -180,7 +180,7 @@ _CLI_TO_CONFIG = {
     "weight_decay": "weight_decay",
     "dropout": "dropout",
     "dueling": "dueling",
-    "num_episodes": "num_episodes",
+    "num_episodes_per_range": "num_episodes_per_range",
     "max_steps_per_episode": "max_steps_per_episode",
     "checkpoint_interval": "checkpoint_interval",
     "checkpoint_dir": "checkpoint_dir",

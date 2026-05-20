@@ -34,7 +34,7 @@ grad_clip_norm: 10.0
 loss_function: "huber"       # huber, mse
 
 # Training schedule
-num_episodes: 3000
+num_episodes_per_range: 3000
 max_steps_per_episode: 30000
 checkpoint_interval: 50
 
@@ -63,4 +63,4 @@ pnl_absolute_threshold: 0.0     # Must be profitable in absolute terms
 # Training mode
 training_mode: "scratch"         # scratch or finetune
 finetune_learning_rate: 0.00001  # 10x lower than base LR for fine-tuning
-finetune_num_episodes: 500       # Fewer episodes when fine-tuning
+finetune_num_episodes_per_range: 500       # Fewer episodes when fine-tuning

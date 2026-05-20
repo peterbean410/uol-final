@@ -32,7 +32,7 @@ grad_clip_norm: 10.0
 loss_function: "huber"
 
 # Training
-num_episodes: 3000
+num_episodes_per_range: 3000
 max_steps_per_episode: 30000
 checkpoint_interval: 50
 checkpoint_dir: "deepqnetwork/checkpoints/"
