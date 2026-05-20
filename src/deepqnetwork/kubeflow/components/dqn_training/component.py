@@ -416,10 +416,10 @@ def parse_args() -> argparse.Namespace:
         help="Hour of day to end each episode (0-23)",
     )
     parser.add_argument(
-        "--num-episodes",
+        "--num-episodes-per-range",
         type=int,
         default=None,
-        help="Number of training episodes override",
+        help="Number of training episodes per date range override",
     )
     parser.add_argument(
         "--learning-rate",

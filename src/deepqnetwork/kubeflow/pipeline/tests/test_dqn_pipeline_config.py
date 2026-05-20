@@ -168,7 +168,7 @@ class TestToCliArgs:
         args = config.to_cli_args()
         assert "--symbol" in args
         assert "--learning-rate" in args
-        assert "--num-episodes" in args
+        assert "--num-episodes-per-range" in args
         assert "--mode" in args
 
     def test_scratch_mode_uses_base_lr(self) -> None:
@@ -194,7 +194,7 @@ class TestToCliArgs:
             training_mode="finetune",
         )
         args = config.to_cli_args()
-        ep_idx = args.index("--num-episodes")
+        ep_idx = args.index("--num-episodes-per-range")
         assert args[ep_idx + 1] == "500"
 
     def test_dueling_flag_present_when_true(self) -> None:
