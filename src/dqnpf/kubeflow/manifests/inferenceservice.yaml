@@ -19,7 +19,7 @@ metadata:
     # Autoscaling configuration
     serving.kserve.io/autoscalerClass: kpa.autoscaling.knative.dev
     serving.kserve.io/targetUtilizationPercentage: "70"
-    # Prometheus metrics scraping, request latency, error rate,
+    # Prometheus metrics scraping (request latency, error rate,
     # suppression rate by reason, per-symbol budget utilisation
     prometheus.io/scrape: "true"
     prometheus.io/port: "8080"
@@ -47,7 +47,7 @@ spec:
                     - rpivn
                     - beanpi03
     containers:
-      # Primary predictor container, combined DQN + Forecaster integration layer
+      # Primary predictor container) combined DQN + Forecaster integration layer
       - name: kserve-container
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:latest
         ports:
@@ -71,6 +71,20 @@ spec:
             value: "probabilisticforecaster-usdjpy"
           - name: MODEL_REGISTRY_URL
             value: "http://model-registry-service.kubeflow.svc.cluster.local:8080"
+          # MinIO credentials for fetching checkpoint artifacts whose URI in
+          # the Model Registry is `minio://mlpipeline/...` (KFP's default
+          # artifact store). Used by `_download_uri_to_local` in the
+          # dqnpf_predictor via probabilisticforecaster.artifact_io.
+          - name: MINIO_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: mlpipeline-minio-artifact
+                key: accesskey
+          - name: MINIO_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: mlpipeline-minio-artifact
+                key: secretkey
       # Modelenv sidecar, provides state preprocessing (53-feature vector)
       # and RecentBars M5 series for ForecasterBridge
       - name: modelenv

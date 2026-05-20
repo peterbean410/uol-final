@@ -17,11 +17,13 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import grpc
 import kserve
@@ -58,6 +60,46 @@ def _structured_log(event: str, **fields: Any) -> None:
         **fields,
     }
     print(json.dumps(entry, ensure_ascii=False), flush=True)
+
+
+def _download_uri_to_local(uri: str) -> str:
+    """Ensure ``uri`` is available on the local filesystem and return the path.
+
+    DQNAdvisor and ForecasterInference call ``torch.load()`` (and
+    ``os.path.exists``), which require a local path. The Model Registry,
+    however, stores the artifact URI in whatever scheme KFP wrote it with
+    (``minio://...`` or ``s3://...``), so we have to materialise it locally
+    first.
+
+    For URIs with a scheme we route through
+    ``probabilisticforecaster.artifact_io.get_object_bytes`` (which handles
+    MinIO via env-mounted credentials and AWS S3 via IRSA), writing the
+    payload to a NamedTemporaryFile. For paths without a scheme we assume
+    the file is already local.
+    """
+    parsed = urlparse(uri)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("minio", "s3"):
+        # Already a local path, nothing to do.
+        return uri
+
+    # Lazy import so unit tests / dev environments that lack the helper still
+    # work for local paths.
+    from probabilisticforecaster.artifact_io import get_object_bytes
+
+    data = get_object_bytes(uri)
+    fd, local_path = tempfile.mkstemp(suffix=".pt", prefix="dqnpf-ckpt-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except Exception:
+        # Best-effort cleanup on write failure.
+        try:
+            os.unlink(local_path)
+        except OSError:
+            pass
+        raise
+    return local_path
 
 
 class _ServingEnvClient:
@@ -170,13 +212,19 @@ class DqnpfIntradayPredictor(kserve.Model):
             address=self._grpc_address, timeout=30.0
         )
         self._preprocessor = StatePreprocessor(device=self._device)
-        self._dqn = DQNAdvisor(checkpoint_path=dqn_path, device=self._device)
+
+        # Resolve URIs (minio://, s3://) to local files before handing to
+        # torch.load-based loaders, which only accept local paths.
+        local_dqn_path = _download_uri_to_local(dqn_path)
+        local_fc_path = _download_uri_to_local(fc_path)
+
+        self._dqn = DQNAdvisor(checkpoint_path=local_dqn_path, device=self._device)
 
         # Use forecast_horizon from the first config (all symbols share the same
         # forecaster checkpoint; horizon is a model-level parameter)
         first_config = next(iter(self._configs.values()))
         self._forecaster = ForecasterInference(
-            model_path=fc_path,
+            model_path=local_fc_path,
             config=ForecasterConfig(forecast_horizon=first_config.forecast_horizon),
         )
 
@@ -336,10 +384,13 @@ class DqnpfIntradayPredictor(kserve.Model):
 
         try:
             # Load new model instances outside the lock (IO-heavy)
-            new_dqn = DQNAdvisor(checkpoint_path=new_dqn_path, device=self._device)
+            local_dqn_path = _download_uri_to_local(new_dqn_path)
+            local_fc_path = _download_uri_to_local(new_fc_path)
+
+            new_dqn = DQNAdvisor(checkpoint_path=local_dqn_path, device=self._device)
             first_config = next(iter(self._configs.values()))
             new_forecaster = ForecasterInference(
-                model_path=new_fc_path,
+                model_path=local_fc_path,
                 config=ForecasterConfig(forecast_horizon=first_config.forecast_horizon),
             )
 
