@@ -16,6 +16,10 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy the deepqnetwork package (agent, train, config, network, replay_buffer, etc.)
 COPY deepqnetwork/ /app/deepqnetwork/
 
+# Copy the probabilisticforecaster monitoring module for structured logging
+# (component.py imports `probabilisticforecaster.kubeflow.monitoring.metrics`).
+COPY probabilisticforecaster/kubeflow/monitoring/ /app/probabilisticforecaster/kubeflow/monitoring/
+
 # Copy the component script
 COPY deepqnetwork/kubeflow/components/dqn_training/component.py /app/component.py
 
