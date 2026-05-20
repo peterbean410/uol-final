@@ -7,10 +7,20 @@ FROM python:3.11-slim
 LABEL maintainer="ml-platform"
 LABEL description="Shared base image for DQN pipeline components with modelenv sidecar"
 
-# Install system dependencies required for PyTorch and gRPC
+# Install system dependencies required for PyTorch and gRPC, plus the AWS
+# CLI v2. The modelenv Rust sidecar shells out to `aws s3 cp` /
+# `aws s3api head-object` via std::process::Command (see
+# modelenv/core/src/data_loader.rs), so the binary must be on PATH or
+# preload fails with `No such file or directory (os error 2)`.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        unzip \
+        && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+        && unzip -q /tmp/awscliv2.zip -d /tmp \
+        && /tmp/aws/install \
+        && rm -rf /tmp/awscliv2.zip /tmp/aws \
+        && apt-get purge -y --auto-remove unzip \
         && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
