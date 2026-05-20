@@ -24,9 +24,11 @@ WORKDIR /app
 COPY tradingmodel/intraday/dqnpf/kubeflow/serving/requirements.txt /app/serving-requirements.txt
 RUN pip install --no-cache-dir -r /app/serving-requirements.txt
 
-# Overlay the latest serving module code on top of the base image's installed
-# package. This allows predictor image rebuilds without rebuilding the base.
-COPY tradingmodel/intraday/dqnpf/kubeflow/serving/ /opt/dqnpf/kubeflow/serving/
+# Overlay the latest serving module code on top of the base image's copy of
+# tradingmodel/. This allows predictor image rebuilds without rebuilding the
+# base, while keeping the import path (`tradingmodel.intraday.dqnpf.kubeflow.
+# serving`) resolvable from PYTHONPATH=/app set in the base image.
+COPY tradingmodel/intraday/dqnpf/kubeflow/serving/ /app/tradingmodel/intraday/dqnpf/kubeflow/serving/
 
 # Build-time import smoke test (Requirements 20.1, 22.1)
 RUN python -c "import kserve; \

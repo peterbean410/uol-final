@@ -23,12 +23,14 @@ WORKDIR /app
 COPY tradingmodel/intraday/dqnpf/kubeflow/base/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy and install the probabilisticforecaster and integration-layer packages
-# as installable libraries. The build context is expected to be the forex repo
-# root so that both source trees are available.
-COPY probabilisticforecaster/ /opt/probabilisticforecaster/
-COPY tradingmodel/intraday/dqnpf/ /opt/dqnpf/
-RUN pip install --no-cache-dir /opt/probabilisticforecaster /opt/dqnpf
+# Copy the probabilisticforecaster and tradingmodel source trees as plain
+# Python packages onto PYTHONPATH. Neither source tree has a setup.py/
+# pyproject.toml (the rest of the repo runs them straight off disk), so we
+# follow the same pattern as the forecaster component images: COPY the
+# package directories into /app and let Python's import system find them.
+COPY probabilisticforecaster/ /app/probabilisticforecaster/
+COPY tradingmodel/ /app/tradingmodel/
+ENV PYTHONPATH=/app:${PYTHONPATH:-}
 
 # Build-time import smoke test (Requirements 20.1, 20.2, DQNPF-IMG-1)
 RUN python -c "from tradingmodel.intraday.dqnpf import IntegrationLayer; \
