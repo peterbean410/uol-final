@@ -16,8 +16,11 @@ LABEL description="Combined DQN + ProbabilisticForecaster integration-layer base
 
 WORKDIR /app
 
-# Pinned dependencies on top of the DQN base.
-COPY requirements.txt /app/requirements.txt
+# Pinned dependencies on top of the DQN base. Build context is the repo root
+# so that the COPYs of probabilisticforecaster/ and tradingmodel/intraday/dqnpf/
+# below resolve; therefore the requirements file must be referenced by its full
+# path within the repo.
+COPY tradingmodel/intraday/dqnpf/kubeflow/base/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy and install the probabilisticforecaster and integration-layer packages
