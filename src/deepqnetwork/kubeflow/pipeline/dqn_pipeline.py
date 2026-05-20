@@ -439,6 +439,8 @@ def dqn_pipeline(
     # -----------------------------------------------------------------------
     training_task = dqn_training(
         symbol=symbol,
+        episode_start_ts=0,
+        episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
@@ -462,6 +464,8 @@ def dqn_pipeline(
     backtest_task = dqn_backtest(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         symbol=symbol,
+        episode_start_ts=0,
+        episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
         date_start=config_task.outputs["date_start"],
