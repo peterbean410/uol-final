@@ -20,10 +20,29 @@ import json
 from dataclasses import asdict
 from typing import NamedTuple
 
-from kfp import dsl
+from kfp import dsl, kubernetes
 from kfp.dsl import Dataset, Input, Metrics, Model, Output
 
 from probabilisticforecaster.kubeflow.pipeline.config_schema import PipelineConfig
+
+
+def _mount_minio_creds(task) -> None:
+    """Inject MinIO accesskey/secretkey from the mlpipeline-minio-artifact secret.
+
+    The container components use `probabilisticforecaster.artifact_io` to route
+    reads/writes by URI scheme; when the URI is `minio://...` it needs
+    MINIO_ACCESS_KEY / MINIO_SECRET_KEY env vars to reach the in-cluster MinIO.
+    The Secret is created by the KFP install in the same namespace as each
+    pipeline run, so this works without any extra RBAC.
+    """
+    kubernetes.use_secret_as_env(
+        task,
+        secret_name="mlpipeline-minio-artifact",
+        secret_key_to_env={
+            "accesskey": "MINIO_ACCESS_KEY",
+            "secretkey": "MINIO_SECRET_KEY",
+        },
+    )
 
 # ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
@@ -449,17 +468,40 @@ def model_registration(
             entry.update(extra)
         print(json.dumps(entry), file=sys.stdout)
 
-    # Step 1: Read evaluation metrics from S3 --------------------------------
-    _log("Reading evaluation metrics", extra={"s3_uri": evaluation_metrics_uri})
+    # Step 1: Read evaluation metrics ----------------------------------------
+    _log("Reading evaluation metrics", extra={"uri": evaluation_metrics_uri})
 
     import boto3
+    from urllib.parse import urlparse
 
-    s3 = boto3.client("s3")
-    bucket = "prod-fintech-forex-sg-731833471586"
+    def _get_object_bytes(uri: str) -> bytes:
+        """URI-aware read. minio://b/k → MinIO; s3://b/k → AWS S3;
+        bare key → AWS S3 against the default forex bucket.
+        """
+        parsed = urlparse(uri)
+        scheme = (parsed.scheme or "").lower()
+        if scheme == "minio":
+            client = boto3.client(
+                "s3",
+                endpoint_url="http://minio-service.kubeflow:9000",
+                aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+                aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+                region_name="us-east-1",
+            )
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+        elif scheme == "s3":
+            client = boto3.client("s3")
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+        else:
+            client = boto3.client("s3")
+            bucket = "prod-fintech-forex-sg-731833471586"
+            key = uri.lstrip("/")
+        return client.get_object(Bucket=bucket, Key=key)["Body"].read()
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=evaluation_metrics_uri)
-        eval_data = json.loads(obj["Body"].read().decode("utf-8"))
+        eval_data = json.loads(_get_object_bytes(evaluation_metrics_uri).decode("utf-8"))
     except Exception as e:
         _log(
             "Failed to read evaluation metrics; failing pipeline step",
@@ -731,6 +773,7 @@ def forecaster_pipeline(
     )
     dp_task.set_retry(num_retries=3)
     dp_task.set_caching_options(enable_caching=True)
+    _mount_minio_creds(dp_task)
 
     # -----------------------------------------------------------------------
     # Step 2: Model Training
@@ -741,6 +784,7 @@ def forecaster_pipeline(
         training_mode=training_mode,
     )
     mt_task.set_retry(num_retries=3)
+    _mount_minio_creds(mt_task)
 
     # -----------------------------------------------------------------------
     # Step 3: Model Evaluation
@@ -751,6 +795,7 @@ def forecaster_pipeline(
         config_json=config_task.outputs["config_json"],
     )
     me_task.set_retry(num_retries=3)
+    _mount_minio_creds(me_task)
 
     # -----------------------------------------------------------------------
     # Step 4: Model Registration (after evaluation)
@@ -767,6 +812,7 @@ def forecaster_pipeline(
         forecast_horizon=forecast_horizon,
         config_json=config_task.outputs["config_json"],
     )
+    _mount_minio_creds(reg_task)
 
     # -----------------------------------------------------------------------
     # Step 5: Backtesting (runs in parallel with evaluation + registration)
@@ -777,3 +823,4 @@ def forecaster_pipeline(
         config_json=config_task.outputs["config_json"],
     )
     bt_task.set_retry(num_retries=3)
+    _mount_minio_creds(bt_task)

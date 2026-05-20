@@ -36,40 +36,29 @@ logger = get_logger(__name__, component="model_training")
 
 
 def load_dataset_from_s3(s3_key: str, bucket: str = S3_BUCKET) -> ForexDataset:
-    """Download and deserialize a ForexDataset pickle from S3.
+    """Download and deserialize a ForexDataset pickle.
 
-    Args:
-        s3_key: S3 object key for the dataset artifact.
-        bucket: S3 bucket name.
-
-    Returns:
-        Deserialized ForexDataset instance.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
 
     Raises:
-        FileNotFoundError: If the S3 key does not exist.
+        FileNotFoundError: If the object does not exist.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import get_object_bytes
 
-    logger.info(
-        "Loading dataset from S3",
-        extra={"s3_key": s3_key, "bucket": bucket},
-    )
+    logger.info("Loading dataset", extra={"uri": s3_key})
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=s3_key)
+        data = get_object_bytes(s3_key, default_bucket=bucket)
     except Exception as e:
         if "NoSuchKey" in str(type(e).__name__) or "NoSuchKey" in str(e) or "404" in str(e):
-            raise FileNotFoundError(
-                f"Dataset not found: s3://{bucket}/{s3_key}"
-            ) from e
+            raise FileNotFoundError(f"Dataset not found: {s3_key}") from e
         raise
 
-    data = obj["Body"].read()
     dataset = pickle.loads(data)
 
     logger.info(
         "Dataset loaded successfully",
-        extra={"s3_key": s3_key, "num_samples": len(dataset)},
+        extra={"uri": s3_key, "num_samples": len(dataset)},
     )
     return dataset
 
@@ -77,41 +66,28 @@ def load_dataset_from_s3(s3_key: str, bucket: str = S3_BUCKET) -> ForexDataset:
 def load_model_weights_from_s3(
     s3_key: str, bucket: str = S3_BUCKET
 ) -> dict:
-    """Download a model checkpoint from S3 and return the state dict.
+    """Download a model checkpoint and return its dict.
 
-    Args:
-        s3_key: S3 object key for the model checkpoint.
-        bucket: S3 bucket name.
-
-    Returns:
-        The checkpoint dictionary containing model_state_dict and config.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
 
     Raises:
-        FileNotFoundError: If the S3 key does not exist.
+        FileNotFoundError: If the object does not exist.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import get_object_bytes
 
-    logger.info(
-        "Loading model weights from S3 for fine-tuning",
-        extra={"s3_key": s3_key, "bucket": bucket},
-    )
+    logger.info("Loading model weights for fine-tuning", extra={"uri": s3_key})
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=s3_key)
+        data = get_object_bytes(s3_key, default_bucket=bucket)
     except Exception as e:
         if "NoSuchKey" in str(type(e).__name__) or "NoSuchKey" in str(e) or "404" in str(e):
-            raise FileNotFoundError(
-                f"Model checkpoint not found: s3://{bucket}/{s3_key}"
-            ) from e
+            raise FileNotFoundError(f"Model checkpoint not found: {s3_key}") from e
         raise
 
-    buffer = io.BytesIO(obj["Body"].read())
+    buffer = io.BytesIO(data)
     checkpoint = torch.load(buffer, map_location="cpu", weights_only=False)
 
-    logger.info(
-        "Model weights loaded successfully",
-        extra={"s3_key": s3_key},
-    )
+    logger.info("Model weights loaded successfully", extra={"uri": s3_key})
     return checkpoint
 
 
@@ -347,24 +323,21 @@ def upload_checkpoint_to_s3(
     s3_key: str,
     bucket: str = S3_BUCKET,
 ) -> None:
-    """Serialize and upload a model checkpoint to S3.
+    """Serialize and upload a model checkpoint to the store named by the URI.
 
-    Args:
-        checkpoint: Dictionary containing model state, config, history, metadata.
-        s3_key: S3 object key path for the checkpoint artifact.
-        bucket: S3 bucket name.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import put_object_bytes
 
     buffer = io.BytesIO()
     torch.save(checkpoint, buffer)
-    buffer.seek(0)
+    data = buffer.getvalue()
 
-    s3.put_object(Bucket=bucket, Key=s3_key, Body=buffer.getvalue())
+    put_object_bytes(s3_key, data, default_bucket=bucket)
 
     logger.info(
-        "Model checkpoint uploaded to S3",
-        extra={"s3_key": s3_key, "size_bytes": buffer.getbuffer().nbytes},
+        "Model checkpoint uploaded",
+        extra={"uri": s3_key, "size_bytes": len(data)},
     )
 
 

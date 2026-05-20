@@ -422,35 +422,25 @@ def load_checkpoint_from_s3(
     checkpoint_path: str,
     bucket: str = S3_BUCKET,
 ) -> dict:
-    """Download and load a model checkpoint from S3.
+    """Download and load a model checkpoint.
 
-    Args:
-        checkpoint_path: S3 key path for the model checkpoint.
-        bucket: S3 bucket name.
-
-    Returns:
-        Checkpoint dictionary containing model_state_dict and config.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
 
     Raises:
-        FileNotFoundError: If the checkpoint does not exist in S3.
+        FileNotFoundError: If the checkpoint does not exist.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import get_object_bytes
 
-    logger.info(
-        "Loading model checkpoint from S3",
-        extra={"s3_key": checkpoint_path, "bucket": bucket},
-    )
+    logger.info("Loading model checkpoint", extra={"uri": checkpoint_path})
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=checkpoint_path)
+        data = get_object_bytes(checkpoint_path, default_bucket=bucket)
     except Exception as e:
         if "NoSuchKey" in str(type(e).__name__) or "NoSuchKey" in str(e) or "404" in str(e):
-            raise FileNotFoundError(
-                f"Checkpoint not found: s3://{bucket}/{checkpoint_path}"
-            ) from e
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}") from e
         raise
 
-    buffer = io.BytesIO(obj["Body"].read())
+    buffer = io.BytesIO(data)
     checkpoint = torch.load(buffer, map_location="cpu", weights_only=False)
 
     logger.info("Model checkpoint loaded successfully")
@@ -461,36 +451,25 @@ def load_dataset_from_s3(
     dataset_path: str,
     bucket: str = S3_BUCKET,
 ) -> ForexDataset:
-    """Download and deserialize a ForexDataset from S3.
+    """Download and deserialize a ForexDataset.
 
-    Args:
-        dataset_path: S3 key path for the pickled dataset.
-        bucket: S3 bucket name.
-
-    Returns:
-        Deserialized ForexDataset instance.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
 
     Raises:
-        FileNotFoundError: If the dataset does not exist in S3.
+        FileNotFoundError: If the dataset does not exist.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import get_object_bytes
 
-    logger.info(
-        "Loading dataset from S3",
-        extra={"s3_key": dataset_path, "bucket": bucket},
-    )
+    logger.info("Loading dataset", extra={"uri": dataset_path})
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=dataset_path)
+        data = get_object_bytes(dataset_path, default_bucket=bucket)
     except Exception as e:
         if "NoSuchKey" in str(type(e).__name__) or "NoSuchKey" in str(e) or "404" in str(e):
-            raise FileNotFoundError(
-                f"Dataset not found: s3://{bucket}/{dataset_path}"
-            ) from e
+            raise FileNotFoundError(f"Dataset not found: {dataset_path}") from e
         raise
 
-    buffer = io.BytesIO(obj["Body"].read())
-    dataset = pickle.loads(buffer.getvalue())
+    dataset = pickle.loads(data)
 
     logger.info(
         "Dataset loaded successfully",
@@ -503,35 +482,25 @@ def load_production_metrics_from_s3(
     metrics_path: str,
     bucket: str = S3_BUCKET,
 ) -> dict:
-    """Load production model metrics JSON from S3.
+    """Load production model metrics JSON.
 
-    Args:
-        metrics_path: S3 key path for the production metrics JSON.
-        bucket: S3 bucket name.
-
-    Returns:
-        Dictionary with production model metrics.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
 
     Raises:
-        FileNotFoundError: If the metrics file does not exist in S3.
+        FileNotFoundError: If the metrics file does not exist.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import get_object_bytes
 
-    logger.info(
-        "Loading production metrics from S3",
-        extra={"s3_key": metrics_path, "bucket": bucket},
-    )
+    logger.info("Loading production metrics", extra={"uri": metrics_path})
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=metrics_path)
+        raw = get_object_bytes(metrics_path, default_bucket=bucket)
     except Exception as e:
         if "NoSuchKey" in str(type(e).__name__) or "NoSuchKey" in str(e) or "404" in str(e):
-            raise FileNotFoundError(
-                f"Production metrics not found: s3://{bucket}/{metrics_path}"
-            ) from e
+            raise FileNotFoundError(f"Production metrics not found: {metrics_path}") from e
         raise
 
-    data = json.loads(obj["Body"].read().decode("utf-8"))
+    data = json.loads(raw.decode("utf-8"))
 
     logger.info(
         "Production metrics loaded",
@@ -548,27 +517,20 @@ def upload_metrics_to_s3(
     output_path: str,
     bucket: str = S3_BUCKET,
 ) -> None:
-    """Upload evaluation metrics as a JSON artifact to S3.
+    """Upload evaluation metrics as a JSON artifact.
 
-    Args:
-        metrics: Dictionary of evaluation results to serialize.
-        output_path: S3 key path for the output JSON artifact.
-        bucket: S3 bucket name.
+    URI scheme routing: see ``probabilisticforecaster.artifact_io``.
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import put_object_bytes
 
-    payload = json.dumps(metrics, indent=2)
-
-    s3.put_object(
-        Bucket=bucket,
-        Key=output_path,
-        Body=payload.encode("utf-8"),
-        ContentType="application/json",
+    payload = json.dumps(metrics, indent=2).encode("utf-8")
+    put_object_bytes(
+        output_path, payload, content_type="application/json", default_bucket=bucket
     )
 
     logger.info(
-        "Evaluation metrics uploaded to S3",
-        extra={"s3_key": output_path, "size_bytes": len(payload)},
+        "Evaluation metrics uploaded",
+        extra={"uri": output_path, "size_bytes": len(payload)},
     )
 
 

@@ -215,25 +215,23 @@ def upload_dataset_to_s3(
     s3_uri: str,
     bucket: str = S3_BUCKET,
 ) -> None:
-    """Serialize and upload a ForexDataset to S3 as a pickle artifact.
+    """Serialize and upload a ForexDataset to the artifact store named by ``s3_uri``.
 
-    Args:
-        dataset: The ForexDataset to upload.
-        s3_uri: The S3 key path for the artifact.
-        bucket: S3 bucket name.
+    Routing follows the URI scheme (see ``probabilisticforecaster.artifact_io``):
+    ``minio://...`` lands in the cluster MinIO; ``s3://...`` lands in AWS S3;
+    a bare key lands in ``bucket`` (default ``S3_BUCKET``).
     """
-    s3 = boto3.client("s3")
+    from probabilisticforecaster.artifact_io import put_object_bytes
 
-    # Serialize dataset to bytes
     buffer = io.BytesIO()
     pickle.dump(dataset, buffer)
-    buffer.seek(0)
+    data = buffer.getvalue()
 
-    s3.put_object(Bucket=bucket, Key=s3_uri, Body=buffer.getvalue())
+    put_object_bytes(s3_uri, data, default_bucket=bucket)
 
     logger.info(
-        "Dataset uploaded to S3",
-        extra={"s3_key": s3_uri, "size_bytes": buffer.getbuffer().nbytes},
+        "Dataset uploaded",
+        extra={"uri": s3_uri, "size_bytes": len(data)},
     )
 
 
