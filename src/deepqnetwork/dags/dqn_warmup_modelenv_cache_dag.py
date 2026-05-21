@@ -84,6 +84,53 @@ exit 1
 """
 
 
+def _normalise_snapshot_ts(value: str) -> str:
+    """Coerce a user-supplied snapshot timestamp to modelenv's i64-ns form.
+
+    modelenv-server's ``--price-snapshot-ts`` flag expects an integer
+    nanosecond Unix timestamp. The DAG param is friendlier to humans,
+    accept either:
+      - ``""``                              → no flag emitted (latest)
+      - ``"1356912000000000000"`` (ns int)  → passed through
+      - ``"1356912000"`` (s int, 10 digits) → multiplied by 1e9
+      - ``"2012-12-31"``                    → 00:00:00 UTC, → ns
+      - ``"2012-12-31T17:00:00"`` or ``"...+00:00"`` → → ns
+
+    Anything else raises so the DAG fails fast with a clear message.
+    """
+    value = value.strip()
+    if not value:
+        return ""
+
+    # Plain digits, second-precision or nanosecond-precision epoch.
+    if value.lstrip("-").isdigit():
+        as_int = int(value)
+        # Treat 10-digit values as seconds, 13-digit as ms, ≥16-digit as ns.
+        if len(str(abs(as_int))) <= 10:
+            as_int *= 1_000_000_000
+        elif len(str(abs(as_int))) <= 13:
+            as_int *= 1_000_000
+        return str(as_int)
+
+    # ISO-ish date or datetime.
+    from datetime import datetime, timezone
+
+    iso = value
+    if "T" not in iso:
+        iso = f"{iso}T00:00:00+00:00"
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError as exc:
+        raise ValueError(
+            f"price_snapshot_ts {value!r} is neither an integer epoch nor an "
+            "ISO 8601 date/datetime (e.g. '2012-12-31' or "
+            "'2012-12-31T00:00:00+00:00')"
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return str(int(dt.timestamp() * 1_000_000_000))
+
+
 def _warmup_modelenv_cache(**context):
     """Submit and poll a peterbean-namespace Job that warms the PVC."""
     import hashlib
@@ -94,7 +141,9 @@ def _warmup_modelenv_cache(**context):
     params = context["params"]
     symbol = params["symbol"]
     s3_prefix = params["s3_prefix"]
-    snapshot_ts = params.get("price_snapshot_ts", "") or ""
+    snapshot_ts = _normalise_snapshot_ts(
+        params.get("price_snapshot_ts", "") or ""
+    )
     image = params.get("image") or _DEFAULT_IMAGE
     warmup_timeout = int(params.get("warmup_timeout_seconds", 3600))
     poll_timeout = int(params.get("poll_timeout_seconds", warmup_timeout + 600))
@@ -257,8 +306,10 @@ with DAG(
         "symbol": "USDJPY",
         # S3 bucket / prefix backing the market data.
         "s3_prefix": "s3://prod-fintech-forex-sg-731833471586",
-        # Optional: pin a specific price snapshot timestamp (ISO 8601).
-        # Empty string = latest available.
+        # Optional: pin a specific price snapshot timestamp. Accepts ISO
+        # 8601 ("2012-12-31" or "2012-12-31T00:00:00+00:00"), seconds
+        # epoch (10-digit), milliseconds epoch (13-digit), or nanoseconds
+        # epoch (≥16-digit). Empty string = latest available.
         "price_snapshot_ts": "",
         # Override the image if you need to warm against a non-:latest tag.
         "image": _DEFAULT_IMAGE,
