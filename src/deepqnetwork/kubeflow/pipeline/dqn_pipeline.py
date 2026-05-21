@@ -18,13 +18,21 @@ Requirements: DQN-R11, DQN-R12
 import json
 from typing import NamedTuple
 
-from kfp import dsl
+from kfp import dsl, kubernetes
 from kfp.dsl import Input, Metrics, Model, Output
 
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 
 # ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
+
+# Pre-provisioned RWX PVC in the user namespace that backs modelenv's
+# preloaded-market-data cache. Defined in
+# platform/peterbean/modelenv-cache-pvc.yaml (reconciled by Flux). Mounting
+# it on training/backtest tasks turns the multi-minute cold S3 pull into a
+# warm-cache hit on second-and-onwards runs.
+MODELENV_CACHE_PVC = "modelenv-cache"
+MODELENV_CACHE_MOUNT = "/tmp/modelenv-cache"
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +465,11 @@ def dqn_pipeline(
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
     training_task.set_gpu_limit(1)
+    kubernetes.mount_pvc(
+        training_task,
+        pvc_name=MODELENV_CACHE_PVC,
+        mount_path=MODELENV_CACHE_MOUNT,
+    )
 
     # -----------------------------------------------------------------------
     # Step 2: DQN Backtest (CPU-only, 4Gi memory)
@@ -476,3 +489,8 @@ def dqn_pipeline(
     backtest_task.set_retry(num_retries=1)
     backtest_task.set_memory_request("4Gi")
     backtest_task.set_memory_limit("4Gi")
+    kubernetes.mount_pvc(
+        backtest_task,
+        pvc_name=MODELENV_CACHE_PVC,
+        mount_path=MODELENV_CACHE_MOUNT,
+    )
