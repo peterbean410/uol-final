@@ -86,6 +86,7 @@ exit 1
 
 def _warmup_modelenv_cache(**context):
     """Submit and poll a peterbean-namespace Job that warms the PVC."""
+    import hashlib
     import time
 
     from kubernetes import client, config as k8s_config
@@ -102,10 +103,15 @@ def _warmup_modelenv_cache(**context):
     batch = client.BatchV1Api()
     core = client.CoreV1Api()
 
-    short_run = context["run_id"].split("__")[-1][:10].lower()
-    # Sanitise to DNS-1123 (job names are 63 chars max, [a-z0-9-]).
-    safe = "".join(c if c.isalnum() else "-" for c in short_run).strip("-")
-    job_name = f"modelenv-warmup-{symbol.lower()}-{safe or 'run'}"[:63].rstrip("-")
+    # Unique Job name per Airflow task attempt. Hashing the run_id (full
+    # ISO timestamp) plus the try_number guarantees we don't collide with
+    # a prior failed Job that hasn't been GC'd yet, Airflow run_ids alone
+    # are stable across retries of the same task instance.
+    ti = context.get("ti") or context.get("task_instance")
+    try_number = getattr(ti, "try_number", 1) if ti is not None else 1
+    key = f"{context['run_id']}|{try_number}"
+    slug = hashlib.sha1(key.encode()).hexdigest()[:10]
+    job_name = f"modelenv-warmup-{symbol.lower()}-{slug}"[:63].rstrip("-")
 
     container = client.V1Container(
         name="modelenv-warmup",
