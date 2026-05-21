@@ -93,7 +93,7 @@ with DAG(
         (any date) or created today, raises AirflowSkipException.
         """
         from airflow.exceptions import AirflowSkipException
-        from deepqnetwork.kubeflow.airflow.dqn_kfp_utils import DQNKFPTrigger
+        from deepqnetwork.dags.dqn_kfp_utils import DQNKFPTrigger
 
         trigger = DQNKFPTrigger(kfp_host=_KFP_HOST)
         today = context["logical_date"].strftime("%Y-%m-%d")
@@ -123,7 +123,7 @@ with DAG(
 
         def _submit_retrain(symbol=symbol, **context):
             """Submit KFP scratch retrain run for the given symbol."""
-            from deepqnetwork.kubeflow.airflow.dqn_kfp_utils import DQNKFPTrigger
+            from deepqnetwork.dags.dqn_kfp_utils import DQNKFPTrigger
 
             logical_date = context["logical_date"]
             episode_start_ts, episode_end_ts = _compute_episode_timestamps(
@@ -180,7 +180,7 @@ with DAG(
 
         def _submit_drift_retrain(symbol=symbol, **context):
             """Submit KFP full retrain from scratch for the given symbol."""
-            from deepqnetwork.kubeflow.airflow.dqn_kfp_utils import DQNKFPTrigger
+            from deepqnetwork.dags.dqn_kfp_utils import DQNKFPTrigger
 
             logical_date = context["logical_date"]
             episode_start_ts, episode_end_ts = _compute_episode_timestamps(

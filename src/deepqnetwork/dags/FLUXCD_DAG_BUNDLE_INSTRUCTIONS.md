@@ -39,7 +39,7 @@ environment variable in the Airflow HelmRelease `extraEnv` section.
   "kwargs": {
     "repo_url": "http://gitea-http.gitea.svc.cluster.local:3000/Fintech/forex.git",
     "tracking_ref": "master",
-    "subdir": "deepqnetwork/kubeflow/airflow",
+    "subdir": "deepqnetwork/dags",
     "git_conn_id": "gitea"
   }
 }
@@ -53,7 +53,7 @@ environment variable in the Airflow HelmRelease `extraEnv` section.
 | `classpath`    | `airflow.providers.git.bundles.git.GitDagBundle`                                   |
 | `repo_url`     | `http://gitea-http.gitea.svc.cluster.local:3000/Fintech/forex.git`                 |
 | `tracking_ref` | `master`                                                                           |
-| `subdir`       | `deepqnetwork/kubeflow/airflow`                                                    |
+| `subdir`       | `deepqnetwork/dags`                                                    |
 | `git_conn_id`  | `gitea`                                                                            |
 
 ## How to Apply
@@ -110,7 +110,7 @@ extraEnv:
           "kwargs": {
             "repo_url": "http://gitea-http.gitea.svc.cluster.local:3000/Fintech/forex.git",
             "tracking_ref": "master",
-            "subdir": "deepqnetwork/kubeflow/airflow",
+            "subdir": "deepqnetwork/dags",
             "git_conn_id": "gitea"
           }
         }
@@ -120,7 +120,7 @@ extraEnv:
 ## Prerequisites
 
 - The `gitea` Airflow connection must be configured (already exists for the other bundles).
-- The `deepqnetwork/kubeflow/airflow/` directory must contain valid Airflow DAG
+- The `deepqnetwork/dags/` directory must contain valid Airflow DAG
   files (e.g., `dqn_kfp_trigger_dag.py`).
 - The `airflow-provider-git` package must be installed in the Airflow image (already
   required by existing bundles).
@@ -129,7 +129,7 @@ extraEnv:
 
 After applying the change and FluxCD reconciles:
 1. Check the Airflow webserver UI → Admin → DAG Bundles, `forex-dqn` should appear.
-2. The DAGs defined in `deepqnetwork/kubeflow/airflow/` (e.g.,
+2. The DAGs defined in `deepqnetwork/dags/` (e.g.,
    `dqn_weekly_retrain`, `dqn_drift_retrain`, `dqn_katib_tuning`)
    should be visible in the Airflow DAG list.
 3. Confirm the DAG processor logs show successful sync from the Git repository.
