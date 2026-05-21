@@ -48,8 +48,10 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "prod-fintech-forex-sg-731833471586")
 MODELENV_BINARY = "/usr/local/bin/modelenv-server"
 MODELENV_HOST = "localhost"
 MODELENV_PORT = 50051
-MODELENV_HEALTH_CHECK_TIMEOUT = 60  # seconds
-MODELENV_HEALTH_CHECK_INTERVAL = 1  # seconds
+MODELENV_HEALTH_CHECK_TIMEOUT = 600  # seconds, modelenv preloads market data
+                                     # from S3 on startup; cold M1 USDJPY pulls
+                                     # can take several minutes.
+MODELENV_HEALTH_CHECK_INTERVAL = 1   # seconds
 MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
 
 
@@ -202,18 +204,26 @@ class ModelenvSidecar:
             )
 
     def _capture_stderr(self) -> str:
-        """Read and return any available stderr from the subprocess."""
+        """Return any available stderr from the subprocess without blocking.
+
+        Previously this called ``self._process.stderr.read()`` with no
+        argument, which is a blocking read-to-EOF; if the subprocess was
+        still alive (e.g., wait_for_ready timed out while modelenv was
+        finishing its S3 preload), the call hung indefinitely and pinned
+        the whole component pod. Set the fd non-blocking so ``.read()``
+        returns whatever is buffered/ready and never waits.
+        """
         if self._process is None or self._process.stderr is None:
-            return ""
+            return "\n".join(self._stderr_lines)
 
         try:
-            # Non-blocking read of available stderr
+            os.set_blocking(self._process.stderr.fileno(), False)
             stderr_data = self._process.stderr.read()
             if stderr_data:
                 output = stderr_data.decode("utf-8", errors="replace").strip()
-                self._stderr_lines.append(output)
-                return output
-        except (OSError, ValueError):
+                if output:
+                    self._stderr_lines.append(output)
+        except (OSError, ValueError, BlockingIOError):
             pass
 
         return "\n".join(self._stderr_lines)
