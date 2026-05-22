@@ -25,12 +25,21 @@ WORKDIR /app
 COPY tradingmodel/intraday/dqnpf/kubeflow/base/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy the probabilisticforecaster and tradingmodel source trees as plain
-# Python packages onto PYTHONPATH. Neither source tree has a setup.py/
-# pyproject.toml (the rest of the repo runs them straight off disk), so we
-# follow the same pattern as the forecaster component images: COPY the
-# package directories into /app and let Python's import system find them.
+# Copy the probabilisticforecaster, deepqnetwork, and tradingmodel source
+# trees as plain Python packages onto PYTHONPATH. None of them has a
+# setup.py / pyproject.toml (the rest of the repo runs them straight off
+# disk), so we follow the same pattern as the forecaster component images:
+# COPY the package directories into /app and let Python's import system
+# find them.
+#
+# deepqnetwork is intentionally re-copied here even though dqn/base exists,
+# dqn/base does not bundle the deepqnetwork package source (only the
+# environment_pb2 stubs and the modelenv binary). The DQN component images
+# COPY deepqnetwork in their own Dockerfiles too; dqnpf inherits dqn/base
+# for the heavy deps (torch, etc.) and stubs/binary, but still has to bring
+# its own deepqnetwork source.
 COPY probabilisticforecaster/ /app/probabilisticforecaster/
+COPY deepqnetwork/ /app/deepqnetwork/
 COPY tradingmodel/ /app/tradingmodel/
 ENV PYTHONPATH=/app:${PYTHONPATH:-}
 
