@@ -20,9 +20,16 @@ LABEL description="Combined DQN + Forecaster intraday KServe predictor"
 
 WORKDIR /app
 
-# Install kserve runtime (pinned version)
+# Install kserve runtime (pinned version). Some transitive deps (e.g.
+# pyasn) build C extensions during install, install gcc + python headers
+# just for this layer and purge them in the same RUN so the resulting
+# layer doesn't ship the toolchain.
 COPY tradingmodel/intraday/dqnpf/kubeflow/serving/requirements.txt /app/serving-requirements.txt
-RUN pip install --no-cache-dir -r /app/serving-requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc python3-dev \
+    && pip install --no-cache-dir -r /app/serving-requirements.txt \
+    && apt-get purge -y --auto-remove gcc python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Overlay the latest serving module code on top of the base image's copy of
 # tradingmodel/. This allows predictor image rebuilds without rebuilding the
