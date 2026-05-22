@@ -4,5 +4,11 @@
 # Note: torch, numpy, grpcio, boto3, environment_pb2, deepqnetwork,
 # probabilisticforecaster, and tradingmodel.intraday.dqnpf are already
 # installed in the dqnpf-intraday-base image.
-
-kserve==0.13.1
+#
+# kserve must be a version that supports protobuf 6.x (the gencode our
+# environment_pb2 stubs were built against). 0.13.1 pinned protobuf<4 and
+# silently downgraded the base image's protobuf, causing
+# `cannot import name 'runtime_version' from 'google.protobuf'` at startup.
+# kserve >= 0.17 requires protobuf>=6.33.5, which matches the updated
+# dqn-base pin (protobuf==6.33.6).
+kserve==0.18.0
