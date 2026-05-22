@@ -377,9 +377,20 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
 ) -> Result<Vec<Tick>> {
     let schedule = tick_source_schedule(source_uri);
     let sources = if let Some(snapshot_ts) = snapshot_selection_timestamp_ns {
-        // When a time range is given, enumerate all hourly sources covering it.
+        // When a time range is given, list real S3 keys under the prefix and
+        // filter to the range. Avoids the per-missing-hour ``aws s3 cp``
+        // round-trip that the previous speculative URI generator incurred,
+        // critical for ticks where ~48 hours every weekend are guaranteed
+        // missing and were each costing a slow point lookup.
         if let (Some(start_ns), Some(end_ns)) = (start_timestamp_ns, end_timestamp_ns) {
-            generate_s3_sources_for_range(source_uri, schedule, start_ns, end_ns.min(snapshot_ts))
+            list_existing_s3_parquet_sources_in_range(
+                source_uri,
+                schedule,
+                start_ns,
+                end_ns.min(snapshot_ts),
+                "ticks",
+            )
+            .await?
         } else if source_uri.ends_with(".parquet") {
             vec![source_uri.to_string()]
         } else if source_uri.starts_with("s3://") && !source_uri.ends_with(".parquet") {
@@ -1234,12 +1245,17 @@ async fn determine_s3_sources_cached(
             ));
         }
 
-        return Ok(generate_s3_sources_for_range(
+        // List existing parquet keys once and filter to the range, rather
+        // than fabricating an exhaustive hour-by-hour speculative URI list
+        // that would trigger an ``aws s3 cp`` per missing partition.
+        return list_existing_s3_parquet_sources_in_range(
             source_uri,
             schedule,
             start_timestamp_ns,
             effective_end_ns,
-        ));
+            "range",
+        )
+        .await;
     }
 
     if let Some(end_timestamp_ns) = end_timestamp_ns {
@@ -1449,25 +1465,6 @@ fn select_candidate_sources_with_range_details(
 
 fn format_timestamp_ns(timestamp_ns: i64) -> String {
     Utc.timestamp_nanos(timestamp_ns).to_rfc3339()
-}
-
-fn generate_s3_sources_for_range(
-    source_uri: &str,
-    schedule: IntervalSchedule,
-    start_timestamp_ns: i64,
-    end_timestamp_ns: i64,
-) -> Vec<String> {
-    let start_dt =
-        align_down_execution_dt(Utc.timestamp_nanos(start_timestamp_ns), schedule.cadence);
-    let end_dt = align_up_execution_dt(Utc.timestamp_nanos(end_timestamp_ns), schedule.cadence);
-
-    let mut sources = Vec::new();
-    let mut cursor = start_dt;
-    while cursor <= end_dt {
-        sources.push(build_s3_object_uri(source_uri, schedule, cursor));
-        cursor = advance_execution_dt(cursor, schedule.cadence);
-    }
-    sources
 }
 
 async fn find_latest_s3_source(source_uri: &str, schedule: IntervalSchedule) -> Result<String> {
@@ -1680,6 +1677,81 @@ async fn latest_object_under_prefix(bucket: &str, prefix: &str) -> Result<String
         .pop()
         .ok_or_else(|| anyhow!("No parquet files found under s3://{bucket}/{prefix}"))?;
     Ok(format!("s3://{bucket}/{key}"))
+}
+
+/// Recursively list every parquet object under an S3 prefix in a single
+/// ``aws s3api list-objects-v2 --prefix <root>`` invocation (the CLI
+/// auto-paginates for ``--output text``). Returns full ``s3://bucket/key``
+/// URIs.
+///
+/// Replaces the prior approach of manufacturing an exhaustive hour-by-hour
+/// speculative URI list (one URI per slot in the requested range, present
+/// or not) and paying a per-miss ``aws s3 cp`` downstream. Instead, ask S3
+/// once for the keys that actually exist and let the caller filter to the
+/// requested range via ``select_candidate_sources_with_range_details``.
+///
+/// Most of the value lands on tick data, where ~48 hours of every weekend
+/// are guaranteed-missing yet were each costing a slow point lookup.
+async fn list_existing_s3_parquet_sources(source_uri: &str) -> Result<Vec<String>> {
+    let (bucket, root_prefix) = parse_s3_uri(source_uri)?;
+    let root_prefix = with_trailing_slash(&root_prefix);
+
+    let output = Command::new("aws")
+        .arg("s3api")
+        .arg("list-objects-v2")
+        .arg("--bucket")
+        .arg(&bucket)
+        .arg("--prefix")
+        .arg(&root_prefix)
+        .arg("--query")
+        .arg("Contents[].Key")
+        .arg("--output")
+        .arg("text")
+        .output()
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "Failed to invoke aws CLI for s3://{bucket}/{root_prefix}: {}",
+                e
+            )
+        })?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Failed to list objects under s3://{bucket}/{root_prefix}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let keys: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter(|value| !value.is_empty() && *value != "None" && value.ends_with(".parquet"))
+        .map(|value| format!("s3://{bucket}/{value}"))
+        .collect();
+
+    Ok(keys)
+}
+
+/// Bulk-list existing S3 parquet objects under ``source_uri`` and filter
+/// down to those whose path-encoded timestamp falls inside the requested
+/// half-open range. Use whenever downstream callers would otherwise pay an
+/// ``aws s3 cp`` per missing hour.
+async fn list_existing_s3_parquet_sources_in_range(
+    source_uri: &str,
+    schedule: IntervalSchedule,
+    start_timestamp_ns: i64,
+    end_timestamp_ns: i64,
+    time_interval: &str,
+) -> Result<Vec<String>> {
+    let candidates = list_existing_s3_parquet_sources(source_uri).await?;
+    select_candidate_sources_with_range_details(
+        candidates,
+        source_uri,
+        schedule,
+        time_interval,
+        Some(start_timestamp_ns),
+        Some(end_timestamp_ns),
+    )
 }
 
 async fn s3_object_exists(source_uri: &str) -> Result<bool> {
