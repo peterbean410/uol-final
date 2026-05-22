@@ -827,6 +827,14 @@ async fn collect_news_from_sources(
     Ok(news)
 }
 
+/// Concurrent S3/disk loads per tick preload call. Each tick parquet file
+/// is ~50-150KB and the bottleneck is the per-file `aws s3 cp` round-trip
+/// (~1-2s wall clock end-to-end). Sequential downloads of ~100 trading-day
+/// hours/day × N days easily exceed the dqn-training health-check window.
+/// 16 parallel downloads keeps S3 (and the local aws CLI fork overhead)
+/// well under saturation while collapsing the preload time roughly 10x.
+const TICK_DOWNLOAD_CONCURRENCY: usize = 16;
+
 async fn collect_ticks_from_sources(
     local_cache_dir: &str,
     cache: &MarketDataCache,
@@ -835,21 +843,39 @@ async fn collect_ticks_from_sources(
     start_timestamp_ns: Option<i64>,
     end_timestamp_ns: Option<i64>,
 ) -> Result<Vec<Tick>> {
+    use futures::stream::StreamExt;
+
     let mut ticks = Vec::new();
+
+    // First drain the in-memory cache hits (cheap, sequential).
+    let mut pending: Vec<String> = Vec::with_capacity(sources.len());
     for source in sources {
         if let Some(cached_ticks) = cache.tick_items(&source).await {
             ticks.extend(cached_ticks);
-            continue;
+        } else {
+            pending.push(source);
         }
+    }
 
-        let Some(bytes) = try_read_bytes_from_source(local_cache_dir, &source).await? else {
-            continue;
+    // Download + parse the cache-miss sources in parallel.
+    let mut stream = futures::stream::iter(pending.into_iter().map(|source| async move {
+        let bytes = try_read_bytes_from_source(local_cache_dir, &source).await?;
+        let parsed = match bytes {
+            Some(b) => Some(parse_ticks_from_bytes(b, symbol, i64::MAX)?),
+            None => None,
         };
-        let parsed_ticks = parse_ticks_from_bytes(bytes, symbol, i64::MAX)?;
-        cache
-            .put_tick_items(source.clone(), parsed_ticks.clone())
-            .await;
-        ticks.extend(parsed_ticks);
+        Ok::<(String, Option<Vec<Tick>>), anyhow::Error>((source, parsed))
+    }))
+    .buffer_unordered(TICK_DOWNLOAD_CONCURRENCY);
+
+    while let Some(item) = stream.next().await {
+        let (source, parsed) = item?;
+        if let Some(parsed_ticks) = parsed {
+            cache
+                .put_tick_items(source, parsed_ticks.clone())
+                .await;
+            ticks.extend(parsed_ticks);
+        }
     }
 
     if let Some(start_timestamp_ns) = start_timestamp_ns {
