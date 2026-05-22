@@ -1231,6 +1231,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "futures",
  "libc",
  "log",
  "modelenv-proto",
