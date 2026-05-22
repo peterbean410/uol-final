@@ -1,4 +1,5 @@
-// Data loader module for loading price bars from S3 parquet files
+// Data loader module for loading price bars from S3 parquet files.
+// Build marker: 3e00af0-retrigger-modelenv-build
 use anyhow::{anyhow, Result};
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
