@@ -62,9 +62,25 @@ class ModelenvSidecar:
     port to become available, and handles graceful shutdown on exit.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        symbol: str | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
+        hour_start: int | None = None,
+        hour_end: int | None = None,
+    ) -> None:
         self._process: subprocess.Popen | None = None
         self._stderr_lines: list[str] = []
+        self._symbol = symbol
+        # When all four are set, modelenv scopes its startup tick preload to
+        # this window (date_start..=date_end × [hour_start..hour_end]) instead
+        # of the full M1 reference span. Out-of-window tick files are still
+        # downloaded lazily on Reset().
+        self._date_start = date_start
+        self._date_end = date_end
+        self._hour_start = hour_start
+        self._hour_end = hour_end
 
     def start(self) -> None:
         """Start the modelenv-server subprocess.
@@ -73,14 +89,41 @@ class ModelenvSidecar:
             FileNotFoundError: If the modelenv binary is not found.
             RuntimeError: If the process fails to start.
         """
+        cli_args: list[str] = [MODELENV_BINARY]
+        if self._symbol:
+            cli_args.extend(["--symbol", self._symbol])
+        if (
+            self._date_start
+            and self._date_end
+            and self._hour_start is not None
+            and self._hour_end is not None
+        ):
+            cli_args.extend(
+                [
+                    "--training-date-start", self._date_start,
+                    "--training-date-end",   self._date_end,
+                    "--training-hour-start", str(self._hour_start),
+                    "--training-hour-end",   str(self._hour_end),
+                ]
+            )
+
         logger.info(
             "Starting modelenv sidecar",
-            extra={"binary": MODELENV_BINARY, "port": MODELENV_PORT},
+            extra={
+                "binary": MODELENV_BINARY,
+                "port": MODELENV_PORT,
+                "training_window": (
+                    f"{self._date_start}..{self._date_end} "
+                    f"[{self._hour_start}..{self._hour_end}]"
+                    if self._date_start and self._date_end
+                    else None
+                ),
+            },
         )
 
         try:
             self._process = subprocess.Popen(
-                [MODELENV_BINARY],
+                cli_args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env={**os.environ, "MODELENV_PORT": str(MODELENV_PORT)},
@@ -594,8 +637,17 @@ def main() -> None:
         },
     )
 
-    # Step 5: Start modelenv sidecar
-    sidecar = ModelenvSidecar()
+    # Step 5: Start modelenv sidecar. Pass the trainer's per-date episode
+    # window into modelenv so its startup preload only fetches ticks in that
+    # range (instead of the full M1 reference span, which can be many months).
+    # modelenv still lazily downloads any out-of-window tick file on Reset().
+    sidecar = ModelenvSidecar(
+        symbol=dqn_config.symbol,
+        date_start=dqn_config.date_start or None,
+        date_end=dqn_config.date_end or None,
+        hour_start=dqn_config.hour_of_day_start,
+        hour_end=dqn_config.hour_of_day_end,
+    )
     try:
         sidecar.start()
         sidecar.wait_for_ready()

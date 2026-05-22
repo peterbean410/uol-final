@@ -161,6 +161,16 @@ pub struct Config {
     pub reward_holding_penalty: f64,
     /// When true, close opposite-side positions before opening new ones (no hedging)
     pub disable_hedging: bool,
+    /// Optional training-mode preload scoping. When the four fields below are
+    /// all set, the startup preload only fetches ticks covering the trainer's
+    /// per-date episode windows (date_start..=date_end × [hour_start..hour_end])
+    /// instead of the full M1 reference span. This keeps cold-start time
+    /// proportional to the actual training range. Reset() still lazily
+    /// downloads any tick file outside the preload window on demand.
+    pub training_date_start: Option<String>,
+    pub training_date_end: Option<String>,
+    pub training_hour_start: Option<u32>,
+    pub training_hour_end: Option<u32>,
 }
 
 impl Default for Config {
@@ -177,6 +187,10 @@ impl Default for Config {
             reward_action_penalty: 0.001,
             reward_holding_penalty: 1e-6,
             disable_hedging: true,
+            training_date_start: None,
+            training_date_end: None,
+            training_hour_start: None,
+            training_hour_end: None,
         }
     }
 }
@@ -351,6 +365,38 @@ impl Config {
                         return Err(anyhow::anyhow!("--reward-holding-penalty requires a value"));
                     }
                 }
+                "--training-date-start" => {
+                    if i + 1 < args.len() {
+                        self.training_date_start = Some(args[i + 1].clone());
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--training-date-start requires a value"));
+                    }
+                }
+                "--training-date-end" => {
+                    if i + 1 < args.len() {
+                        self.training_date_end = Some(args[i + 1].clone());
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--training-date-end requires a value"));
+                    }
+                }
+                "--training-hour-start" => {
+                    if i + 1 < args.len() {
+                        self.training_hour_start = Some(args[i + 1].parse()?);
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--training-hour-start requires a value"));
+                    }
+                }
+                "--training-hour-end" => {
+                    if i + 1 < args.len() {
+                        self.training_hour_end = Some(args[i + 1].parse()?);
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--training-hour-end requires a value"));
+                    }
+                }
                 "--help" => {
                     print_help();
                     std::process::exit(0);
@@ -480,6 +526,23 @@ impl Config {
                 "1" | "true" | "yes" | "on"
             );
         }
+
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRAINING_DATE_START") {
+            self.training_date_start = Some(value);
+        }
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRAINING_DATE_END") {
+            self.training_date_end = Some(value);
+        }
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRAINING_HOUR_START") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.training_hour_start = Some(parsed);
+            }
+        }
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRAINING_HOUR_END") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.training_hour_end = Some(parsed);
+            }
+        }
     }
 
     fn non_empty_env<F>(env_get: &F, key: &str) -> Option<String>
@@ -497,6 +560,74 @@ impl Config {
     {
         keys.iter()
             .find_map(|key| Self::non_empty_env(env_get, key))
+    }
+
+    /// Compute the (start_ns, end_ns) tick preload window from the four
+    /// training-date config fields. Returns ``None`` if any of the four are
+    /// unset, in which case the preload falls back to the M1 reference span.
+    ///
+    /// The semantics mirror ``deepqnetwork.train._iter_date_episodes``:
+    /// `hour_end >= 24` rolls into subsequent calendar days, so e.g.
+    /// `hour_end=47` with `date_end=2012-01-31` means the latest episode
+    /// ends at 23:00 UTC on 2012-02-01.
+    pub fn training_tick_window(&self) -> Result<Option<(i64, i64)>> {
+        use chrono::{NaiveDate, NaiveTime};
+
+        let (Some(date_start), Some(date_end), Some(hour_start), Some(hour_end)) = (
+            self.training_date_start.as_deref(),
+            self.training_date_end.as_deref(),
+            self.training_hour_start,
+            self.training_hour_end,
+        ) else {
+            return Ok(None);
+        };
+
+        if hour_start >= 24 {
+            return Err(anyhow::anyhow!(
+                "training_hour_start must be in 0..=23, got {}",
+                hour_start
+            ));
+        }
+
+        let ds = NaiveDate::parse_from_str(date_start, "%Y-%m-%d")
+            .map_err(|e| anyhow::anyhow!("training_date_start parse error: {}", e))?;
+        let de = NaiveDate::parse_from_str(date_end, "%Y-%m-%d")
+            .map_err(|e| anyhow::anyhow!("training_date_end parse error: {}", e))?;
+        if ds > de {
+            return Err(anyhow::anyhow!(
+                "training_date_start ({}) must be <= training_date_end ({})",
+                date_start,
+                date_end
+            ));
+        }
+
+        let extra_days = (hour_end / 24) as i64;
+        let end_hour = hour_end % 24;
+        let de_rolled = de
+            .checked_add_signed(chrono::Duration::days(extra_days))
+            .ok_or_else(|| anyhow::anyhow!("training_date_end + hour rollover overflowed"))?;
+
+        let start_dt = ds
+            .and_time(
+                NaiveTime::from_hms_opt(hour_start, 0, 0)
+                    .ok_or_else(|| anyhow::anyhow!("invalid training_hour_start"))?,
+            )
+            .and_utc();
+        let end_dt = de_rolled
+            .and_time(
+                NaiveTime::from_hms_opt(end_hour, 0, 0)
+                    .ok_or_else(|| anyhow::anyhow!("invalid training_hour_end"))?,
+            )
+            .and_utc();
+
+        Ok(Some((
+            start_dt.timestamp_nanos_opt().ok_or_else(|| {
+                anyhow::anyhow!("training start timestamp out of ns range")
+            })?,
+            end_dt.timestamp_nanos_opt().ok_or_else(|| {
+                anyhow::anyhow!("training end timestamp out of ns range")
+            })?,
+        )))
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -577,6 +708,25 @@ impl Config {
         info!("Reward Action Penalty: {}", self.reward_action_penalty);
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Disable Hedging: {}", self.disable_hedging);
+
+        match (
+            self.training_date_start.as_deref(),
+            self.training_date_end.as_deref(),
+            self.training_hour_start,
+            self.training_hour_end,
+        ) {
+            (Some(ds), Some(de), Some(hs), Some(he)) => info!(
+                "Training Tick Preload Window: {} {:02}:00 → {} +{}d {:02}:00",
+                ds,
+                hs,
+                de,
+                he / 24,
+                he % 24
+            ),
+            _ => info!(
+                "Training Tick Preload Window: full M1 reference span (no per-date scoping)"
+            ),
+        }
 
         if let Some(ref broker_gateway) = self.broker_gateway.broker_gateway {
             info!("Broker Gateway: {}", broker_gateway);

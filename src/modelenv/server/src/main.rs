@@ -44,6 +44,22 @@ fn build_environment(config: &Config) -> Environment {
         environment = environment.with_price_snapshot_ts(price_snapshot_ts);
     }
 
+    // training_tick_window() returns None when any of the four
+    // --training-{date,hour}-{start,end} args is unset; in that case the
+    // preload falls back to the full M1 reference span.
+    match config.training_tick_window() {
+        Ok(Some((start_ns, end_ns))) => {
+            environment = environment.with_training_tick_window(start_ns, end_ns);
+        }
+        Ok(None) => {}
+        Err(err) => {
+            log::warn!(
+                "Ignoring training tick window from config (will preload full M1 reference span): {}",
+                err
+            );
+        }
+    }
+
     environment
 }
 

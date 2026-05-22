@@ -34,6 +34,10 @@ pub struct Environment {
     s3_prefix: String,
     local_cache_dir: String,
     price_snapshot_ts: Option<i64>,
+    /// Optional (start_ns, end_ns) constraining the training-mode startup
+    /// preload to a narrow tick range. ``None`` falls back to the full M1
+    /// reference span. Reset() still loads outside-the-window data lazily.
+    training_tick_window: Option<(i64, i64)>,
     market_data_cache: MarketDataCache,
     step_size_ns: i64,
     episode: Option<Episode>,
@@ -88,6 +92,7 @@ impl Environment {
             s3_prefix,
             local_cache_dir: DEFAULT_LOCAL_CACHE_DIR.to_string(),
             price_snapshot_ts: None,
+            training_tick_window: None,
             market_data_cache: MarketDataCache::new(),
             step_size_ns: DEFAULT_STEP_SIZE_NS,
             episode: None,
@@ -127,6 +132,17 @@ impl Environment {
 
     pub fn with_price_snapshot_ts(mut self, price_snapshot_ts: i64) -> Self {
         self.price_snapshot_ts = Some(price_snapshot_ts);
+        self
+    }
+
+    /// Scope the training-mode preload to a specific (start_ns, end_ns) tick
+    /// window. See `Config::training_tick_window` for the computation.
+    pub fn with_training_tick_window(
+        mut self,
+        start_ns: i64,
+        end_ns: i64,
+    ) -> Self {
+        self.training_tick_window = Some((start_ns, end_ns));
         self
     }
 
@@ -177,6 +193,7 @@ impl Environment {
             &self.s3_prefix,
             &self.local_cache_dir,
             self.price_snapshot_ts,
+            self.training_tick_window,
             &self.market_data_cache,
         )
         .await

@@ -1212,11 +1212,30 @@ pub async fn initialize_episode(
     .with_news(news))
 }
 
+/// Preload training market data on server startup.
+///
+/// ``tick_window`` optionally narrows the tick preload to a specific
+/// ``(start_ns, end_ns)`` range, typically the union of the trainer's
+/// per-date episode windows, supplied via the modelenv-server CLI
+/// (`--training-date-start` etc.). When ``None``, falls back to the full
+/// M1 reference bar span, which can span months for accumulator-style
+/// EOH snapshots and incur a multi-minute cold start unnecessarily.
+///
+/// Bars (all `TIME_INTERVALS`) and news are always preloaded with no
+/// time range filter; they are single-snapshot files, so the I/O cost
+/// doesn't scale with window size.
+///
+/// Out-of-window tick data is still served correctly: `initialize_episode`
+/// calls `load_ticks_from_parquet_with_range_cached_from_local_cache_dir`
+/// with the episode's own bounds, which falls through to
+/// `ensure_local_cached_s3_source` and downloads any missing parquet
+/// hour lazily on Reset().
 pub async fn preload_training_market_data(
     symbol: &str,
     s3_prefix: &str,
     local_cache_dir: &str,
     price_snapshot_ts: Option<i64>,
+    tick_window: Option<(i64, i64)>,
     market_data_cache: &MarketDataCache,
 ) -> Result<()> {
     let mut has_reference_interval = false;
@@ -1273,8 +1292,13 @@ pub async fn preload_training_market_data(
             TIME_INTERVALS[0]
         )
     })?;
-    let (resolved_start_ts, resolved_end_ts) =
-        resolve_episode_bounds(&reference_bars, symbol, 0, 0)?;
+    // If the caller supplied an explicit tick window (--training-date-start
+    // / --training-date-end / --training-hour-start / --training-hour-end),
+    // use it. Otherwise default to the full M1 reference span.
+    let (resolved_start_ts, resolved_end_ts) = match tick_window {
+        Some((start_ns, end_ns)) => (start_ns, end_ns),
+        None => resolve_episode_bounds(&reference_bars, symbol, 0, 0)?,
+    };
     let (tick_snapshot_ts, tick_start_ts, tick_end_ts) =
         resolve_training_tick_query(price_snapshot_ts, 0, 0, resolved_start_ts, resolved_end_ts);
 
