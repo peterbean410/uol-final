@@ -49,7 +49,8 @@ from deepqnetwork.advisor import DQNAdvisor; \
 from probabilisticforecaster.inference import ForecasterInference; \
 print('dqnpf-intraday-base import smoke OK')"
 
-# Sanity: modelenv binary exists (Requirement 20.4, inherited from dqn-base)
-RUN test -x /usr/local/bin/modelenv
+# Sanity: modelenv binary exists (Requirement 20.4, inherited from dqn-base,
+# which copies it to /usr/local/bin/modelenv-server, NOT /usr/local/bin/modelenv).
+RUN test -x /usr/local/bin/modelenv-server
 
 ENV PYTHONUNBUFFERED=1
