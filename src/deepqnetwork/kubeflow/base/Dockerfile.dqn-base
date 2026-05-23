@@ -2,7 +2,7 @@
 # Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base
 # Requirements: DQN-R4, DQN-R5
 #
-# Rebuild marker: ca7026a-modelenv-parallel-and-scoped-preload
+# Rebuild marker: 6097b75-modelenv-m1-tick-fallback
 
 FROM python:3.11-slim
 
