@@ -292,6 +292,7 @@ impl Environment {
                     self.price_snapshot_ts,
                     req.episode_start_ts,
                     req.episode_end_ts,
+                    self.step_size_ns,
                     &market_data_cache,
                 )
                 .await?;

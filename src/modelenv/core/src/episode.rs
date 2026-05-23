@@ -1,7 +1,9 @@
 // Episode management module
 use anyhow::{Context, Result};
-use log::info;
+use log::{info, warn};
 use std::collections::HashMap;
+
+const ONE_MINUTE_NS: i64 = 60_000_000_000;
 
 use modelenv_proto::{Bar, News, Tick};
 
@@ -1075,6 +1077,119 @@ mod tests {
         assert_eq!(start, Some(10));
         assert_eq!(end, Some(20));
     }
+
+    #[test]
+    fn test_step_size_supports_m1_tick_fallback_accepts_whole_minute_multiples() {
+        assert!(step_size_supports_m1_tick_fallback(60_000_000_000));
+        assert!(step_size_supports_m1_tick_fallback(300_000_000_000));
+        assert!(step_size_supports_m1_tick_fallback(3_600_000_000_000));
+    }
+
+    #[test]
+    fn test_step_size_supports_m1_tick_fallback_rejects_sub_minute_and_zero() {
+        assert!(!step_size_supports_m1_tick_fallback(0));
+        assert!(!step_size_supports_m1_tick_fallback(-60_000_000_000));
+        assert!(!step_size_supports_m1_tick_fallback(30_000_000_000));
+        assert!(!step_size_supports_m1_tick_fallback(59_000_000_000));
+        assert!(!step_size_supports_m1_tick_fallback(61_000_000_000));
+    }
+
+    #[test]
+    fn test_synthesize_ticks_from_m1_bars_maps_low_to_bid_and_high_to_ask() {
+        let bars = vec![
+            Bar { timestamp_ns: 1_000, open: 1.10, high: 1.20, low: 1.05, close: 1.15, volume: 0.0 },
+            Bar { timestamp_ns: 2_000, open: 1.15, high: 1.30, low: 1.10, close: 1.25, volume: 0.0 },
+        ];
+
+        let ticks = synthesize_ticks_from_m1_bars(&bars, None, None);
+
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks[0].timestamp_ns, 1_000);
+        assert_eq!(ticks[0].bid, 1.05);
+        assert_eq!(ticks[0].ask, 1.20);
+        assert_eq!(ticks[1].timestamp_ns, 2_000);
+        assert_eq!(ticks[1].bid, 1.10);
+        assert_eq!(ticks[1].ask, 1.30);
+    }
+
+    #[test]
+    fn test_synthesize_ticks_from_m1_bars_filters_to_range() {
+        let bars = vec![
+            Bar { timestamp_ns: 1_000, open: 1.10, high: 1.20, low: 1.05, close: 1.15, volume: 0.0 },
+            Bar { timestamp_ns: 2_000, open: 1.15, high: 1.30, low: 1.10, close: 1.25, volume: 0.0 },
+            Bar { timestamp_ns: 3_000, open: 1.25, high: 1.35, low: 1.20, close: 1.30, volume: 0.0 },
+        ];
+
+        let ticks = synthesize_ticks_from_m1_bars(&bars, Some(1_500), Some(2_500));
+
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].timestamp_ns, 2_000);
+    }
+
+    #[test]
+    fn test_is_no_tick_sources_error_detects_missing_sources_messages() {
+        let err = anyhow::anyhow!(
+            "No parquet sources matched the requested time range for ticks under s3://x. Requested range: ..."
+        );
+        assert!(is_no_tick_sources_error(&err));
+
+        let err = anyhow::anyhow!("No parquet sources available for ticks");
+        assert!(is_no_tick_sources_error(&err));
+    }
+
+    #[test]
+    fn test_is_no_tick_sources_error_ignores_unrelated_errors() {
+        let err = anyhow::anyhow!("AccessDenied calling s3:ListObjectsV2");
+        assert!(!is_no_tick_sources_error(&err));
+
+        let err = anyhow::anyhow!("Failed to invoke aws CLI: connection reset");
+        assert!(!is_no_tick_sources_error(&err));
+    }
+
+    #[test]
+    fn test_is_no_tick_sources_error_walks_anyhow_context_chain() {
+        let root = anyhow::anyhow!(
+            "No parquet sources matched the requested time range for ticks under s3://x"
+        );
+        let wrapped: anyhow::Error = root.context("Failed to load training ticks for USDJPY");
+        assert!(is_no_tick_sources_error(&wrapped));
+    }
+}
+
+/// True when an `anyhow::Error` from the tick loader indicates the parquet
+/// archive has no partitions covering the requested range, i.e. tick data
+/// is genuinely unavailable, as opposed to a transient/auth failure.
+pub(crate) fn is_no_tick_sources_error(err: &anyhow::Error) -> bool {
+    let chain = format!("{:#}", err);
+    chain.contains("No parquet sources matched the requested time range")
+        || chain.contains("No parquet sources available")
+}
+
+/// Synthesize per-minute ticks from M1 bars when raw tick parquet is absent.
+/// Each bar becomes one tick at the bar's timestamp with `bid = bar.low` and
+/// `ask = bar.high`. Used only when `step_size_seconds` is a multiple of 60
+/// and tick data isn't available.
+pub(crate) fn synthesize_ticks_from_m1_bars(
+    m1_bars: &[Bar],
+    start_timestamp_ns: Option<i64>,
+    end_timestamp_ns: Option<i64>,
+) -> Vec<Tick> {
+    m1_bars
+        .iter()
+        .filter(|bar| start_timestamp_ns.is_none_or(|s| bar.timestamp_ns >= s))
+        .filter(|bar| end_timestamp_ns.is_none_or(|e| bar.timestamp_ns <= e))
+        .map(|bar| Tick {
+            timestamp_ns: bar.timestamp_ns,
+            bid: bar.low,
+            ask: bar.high,
+        })
+        .collect()
+}
+
+/// True when `step_size_ns` is a positive whole-minute multiple, the
+/// precondition for the M1-bar tick fallback.
+pub(crate) fn step_size_supports_m1_tick_fallback(step_size_ns: i64) -> bool {
+    step_size_ns > 0 && step_size_ns % ONE_MINUTE_NS == 0
 }
 
 /// Initialize an episode by loading bars from S3 parquet files
@@ -1085,6 +1200,7 @@ pub async fn initialize_episode(
     price_snapshot_ts: Option<i64>,
     episode_start_ts: i64,
     episode_end_ts: i64,
+    step_size_ns: i64,
     market_data_cache: &MarketDataCache,
 ) -> Result<Episode> {
     let mut bars_map = HashMap::new();
@@ -1180,7 +1296,7 @@ pub async fn initialize_episode(
     };
 
     let tick_source = build_tick_data_source(s3_prefix, symbol);
-    let ticks = match load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
+    let tick_load_result = load_ticks_from_parquet_with_range_cached_from_local_cache_dir(
         local_cache_dir,
         market_data_cache,
         &tick_source,
@@ -1189,9 +1305,30 @@ pub async fn initialize_episode(
         tick_start_ts,
         tick_end_ts,
     )
-    .await
-    {
-        Ok(ticks) => ticks,
+    .await;
+
+    let m1_fallback_allowed = step_size_supports_m1_tick_fallback(step_size_ns);
+    let ticks = match tick_load_result {
+        Ok(ticks) if !ticks.is_empty() => ticks,
+        Ok(_) if m1_fallback_allowed => {
+            let synth = synth_m1_ticks_for_range(&bars_map, tick_start_ts, tick_end_ts);
+            warn!(
+                "No ticks loaded for {} in range (synthesised {} M1-derived ticks (bid=low, ask=high)",
+                symbol,
+                synth.len()
+            );
+            synth
+        }
+        Ok(empty) => empty,
+        Err(err) if is_no_tick_sources_error(&err) && m1_fallback_allowed => {
+            let synth = synth_m1_ticks_for_range(&bars_map, tick_start_ts, tick_end_ts);
+            warn!(
+                "Tick parquet missing for {} in range) synthesised {} M1-derived ticks (bid=low, ask=high)",
+                symbol,
+                synth.len()
+            );
+            synth
+        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1210,6 +1347,17 @@ pub async fn initialize_episode(
     )
     .with_ticks(ticks)
     .with_news(news))
+}
+
+fn synth_m1_ticks_for_range(
+    bars_map: &HashMap<String, Vec<Bar>>,
+    tick_start_ts: Option<i64>,
+    tick_end_ts: Option<i64>,
+) -> Vec<Tick> {
+    bars_map
+        .get("M1")
+        .map(|bars| synthesize_ticks_from_m1_bars(bars, tick_start_ts, tick_end_ts))
+        .unwrap_or_default()
 }
 
 /// Preload training market data on server startup.
@@ -1347,6 +1495,16 @@ pub async fn preload_training_market_data(
     {
         Ok(_) => {
             info!("Finished preloading training ticks for {}", symbol);
+        }
+        // Tick archive doesn't cover this range, log and continue. Per-episode
+        // ``initialize_episode`` will either fall back to M1-derived ticks (when
+        // step_size_seconds is a whole-minute multiple) or surface the failure
+        // there with the actual step_size in context.
+        Err(err) if is_no_tick_sources_error(&err) => {
+            warn!(
+                "No tick parquet sources for {} in preload range, deferring to per-episode M1 fallback. Underlying: {:#}",
+                symbol, err
+            );
         }
         Err(err) => {
             return Err(err).with_context(|| {
