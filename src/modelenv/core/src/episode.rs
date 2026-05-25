@@ -1154,6 +1154,23 @@ mod tests {
         let wrapped: anyhow::Error = root.context("Failed to load training ticks for USDJPY");
         assert!(is_no_tick_sources_error(&wrapped));
     }
+
+    #[test]
+    fn test_is_missing_exact_snapshot_error_detects_speculative_miss() {
+        let err = anyhow::anyhow!(
+            "Exact parquet snapshot key s3://bucket/.../year=2012/month=01/20120101T000000Z.parquet for configured snapshot timestamp 1325376000000000000 (2012-01-01T00:00:00+00:00) was not found in local cache or S3"
+        );
+        assert!(is_missing_exact_snapshot_error(&err));
+    }
+
+    #[test]
+    fn test_is_missing_exact_snapshot_error_ignores_unrelated_errors() {
+        let err = anyhow::anyhow!("Parquet sources contain no bars for USDJPY M1");
+        assert!(!is_missing_exact_snapshot_error(&err));
+
+        let err = anyhow::anyhow!("AccessDenied");
+        assert!(!is_missing_exact_snapshot_error(&err));
+    }
 }
 
 /// True when an `anyhow::Error` from the tick loader indicates the parquet
@@ -1163,6 +1180,13 @@ pub(crate) fn is_no_tick_sources_error(err: &anyhow::Error) -> bool {
     let chain = format!("{:#}", err);
     chain.contains("No parquet sources matched the requested time range")
         || chain.contains("No parquet sources available")
+}
+
+/// True when an `anyhow::Error` from the bar loader indicates the exact
+/// historical snapshot parquet for a given timestamp isn't present, e.g.
+/// MN1 has no partition for the first day of the requested month.
+pub(crate) fn is_missing_exact_snapshot_error(err: &anyhow::Error) -> bool {
+    format!("{:#}", err).contains("Exact parquet snapshot key")
 }
 
 /// Synthesize per-minute ticks from M1 bars when raw tick parquet is absent.
@@ -1207,22 +1231,63 @@ pub async fn initialize_episode(
     let start_timestamp_ns = (episode_start_ts > 0).then_some(episode_start_ts);
     let end_timestamp_ns = (episode_end_ts > 0).then_some(episode_end_ts);
 
+    // EOH-snapshot parquet files contain cumulative history *up to* their
+    // partition timestamp. When the caller pinned a snapshot via
+    // `price_snapshot_ts`, honour it. Otherwise fall back to `episode_end_ts`
+    // so a 2012-01-31 episode picks the 2012-01-31 snapshot, not "latest",
+    // which would load a file whose bars are all after the episode window
+    // and get filtered to empty downstream.
+    let bar_snapshot_ts = price_snapshot_ts.or(end_timestamp_ns);
+
     for interval in TIME_INTERVALS {
         let interval_source = build_interval_data_source(s3_prefix, symbol, interval);
 
-        let mut bars = match load_bars_from_parquet_with_range_cached_from_local_cache_dir(
+        let primary_load = load_bars_from_parquet_with_range_cached_from_local_cache_dir(
             local_cache_dir,
             market_data_cache,
             &interval_source,
             symbol,
             interval,
-            price_snapshot_ts,
+            bar_snapshot_ts,
             None, // load full history, episode_start_ts only constrains ticks
             end_timestamp_ns,
         )
-        .await
-        {
+        .await;
+
+        let mut bars = match primary_load {
             Ok(bars) => bars,
+            // Some intervals (notably MN1) may not have a partition at the
+            // historical snapshot date. Fall back to the latest available
+            // snapshot; the time filter on `end_timestamp_ns` still scopes
+            // the bars correctly when the snapshot file is cumulative.
+            Err(err)
+                if bar_snapshot_ts.is_some() && is_missing_exact_snapshot_error(&err) =>
+            {
+                warn!(
+                    "No exact {} snapshot at {} for {}, falling back to latest snapshot. Underlying: {:#}",
+                    interval,
+                    bar_snapshot_ts.unwrap(),
+                    symbol,
+                    err
+                );
+                load_bars_from_parquet_with_range_cached_from_local_cache_dir(
+                    local_cache_dir,
+                    market_data_cache,
+                    &interval_source,
+                    symbol,
+                    interval,
+                    None,
+                    None,
+                    end_timestamp_ns,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to load training interval {} for {} from {} (after historical snapshot fallback)",
+                        interval, symbol, interval_source
+                    )
+                })?
+            }
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
