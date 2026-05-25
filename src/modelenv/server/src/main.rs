@@ -40,24 +40,36 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_holding_penalty(config.reward_holding_penalty)
     .with_disable_hedging(config.disable_hedging);
 
-    if let Some(price_snapshot_ts) = config.price_snapshot_ts {
-        environment = environment.with_price_snapshot_ts(price_snapshot_ts);
-    }
-
-    // training_tick_window() returns None when any of the four
-    // --training-{date,hour}-{start,end} args is unset; in that case the
-    // preload falls back to the full M1 reference span.
-    match config.training_tick_window() {
-        Ok(Some((start_ns, end_ns))) => {
-            environment = environment.with_training_tick_window(start_ns, end_ns);
-        }
-        Ok(None) => {}
+    // Compute the training tick window once so it can both scope the tick
+    // preload AND default the bar-snapshot timestamp.
+    let training_tick_window = match config.training_tick_window() {
+        Ok(window) => window,
         Err(err) => {
             log::warn!(
                 "Ignoring training tick window from config (will preload full M1 reference span): {}",
                 err
             );
+            None
         }
+    };
+
+    // Pick a single bar snapshot timestamp for the whole training session.
+    // Precedence:
+    //   1. Explicit --price-snapshot-ts (CLI/env override wins).
+    //   2. End of the training tick window (so every episode in this run
+    //      shares one cumulative eod/eoh/eom snapshot file per interval,
+    //      avoids re-downloading a fresh parquet for each episode_end_ts).
+    //   3. None, loader falls back to the latest available snapshot.
+    let effective_price_snapshot_ts = config
+        .price_snapshot_ts
+        .or_else(|| training_tick_window.map(|(_, end_ns)| end_ns));
+
+    if let Some(price_snapshot_ts) = effective_price_snapshot_ts {
+        environment = environment.with_price_snapshot_ts(price_snapshot_ts);
+    }
+
+    if let Some((start_ns, end_ns)) = training_tick_window {
+        environment = environment.with_training_tick_window(start_ns, end_ns);
     }
 
     environment
