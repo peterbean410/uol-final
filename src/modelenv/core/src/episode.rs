@@ -370,15 +370,23 @@ fn resolve_training_tick_query(
     resolved_start_ts: i64,
     resolved_end_ts: i64,
 ) -> (Option<i64>, Option<i64>, Option<i64>) {
-    if let Some(price_snapshot_ts) = price_snapshot_ts {
-        (
-            Some(price_snapshot_ts),
-            (episode_start_ts > 0).then_some(episode_start_ts),
-            (episode_end_ts > 0).then_some(episode_end_ts),
-        )
+    // Tick parquet files are per-hour, not cumulative-from-inception like the
+    // bar snapshots. We must always pass a range so the loader takes the
+    // range-list path rather than the exact-key speculative path; the latter
+    // would error on any range with no tick file at the snapshot hour (e.g.
+    // pre-2021 USDJPY where ticks don't exist) instead of triggering the M1
+    // fallback. Explicit episode_*_ts override the resolved range when set.
+    let start = if episode_start_ts > 0 {
+        episode_start_ts
     } else {
-        (None, Some(resolved_start_ts), Some(resolved_end_ts))
-    }
+        resolved_start_ts
+    };
+    let end = if episode_end_ts > 0 {
+        episode_end_ts
+    } else {
+        resolved_end_ts
+    };
+    (price_snapshot_ts, Some(start), Some(end))
 }
 
 #[cfg(test)]
@@ -1052,12 +1060,14 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_training_tick_query_prefers_snapshot_ts_without_explicit_episode_bounds() {
+    fn test_resolve_training_tick_query_uses_resolved_range_when_episode_bounds_unset() {
+        // Ticks always need a range so the loader takes the range-list path.
+        // With episode_*_ts=0 we fall back to the resolved range.
         let (snapshot_ts, start, end) = resolve_training_tick_query(Some(123), 0, 0, 10, 20);
 
         assert_eq!(snapshot_ts, Some(123));
-        assert_eq!(start, None);
-        assert_eq!(end, None);
+        assert_eq!(start, Some(10));
+        assert_eq!(end, Some(20));
     }
 
     #[test]
@@ -1072,6 +1082,15 @@ mod tests {
     #[test]
     fn test_resolve_training_tick_query_falls_back_to_resolved_range_without_snapshot_ts() {
         let (snapshot_ts, start, end) = resolve_training_tick_query(None, 1, 2, 10, 20);
+
+        assert_eq!(snapshot_ts, None);
+        assert_eq!(start, Some(1));
+        assert_eq!(end, Some(2));
+    }
+
+    #[test]
+    fn test_resolve_training_tick_query_falls_back_to_resolved_range_when_all_unset() {
+        let (snapshot_ts, start, end) = resolve_training_tick_query(None, 0, 0, 10, 20);
 
         assert_eq!(snapshot_ts, None);
         assert_eq!(start, Some(10));
