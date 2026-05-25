@@ -317,9 +317,9 @@ class TestLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # Patch _trigger_kserve_update to avoid K8s calls
-        with patch.object(client, "_trigger_kserve_update"):
-            result = client.promote_to_production(version_id)
+        # Standalone Forecaster KServe is deprecated, promote_to_production
+        # only updates registry metadata; no K8s patching to mock out.
+        result = client.promote_to_production(version_id)
 
         assert result is True, "Promotion from staging to production should succeed"
 
@@ -338,13 +338,11 @@ class TestLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # First promote to production
-        with patch.object(client, "_trigger_kserve_update"):
-            client.promote_to_production(version_id)
+        # First promote to production (KServe push deprecated; metadata-only)
+        client.promote_to_production(version_id)
 
         # Second promote should fail (already in production)
-        with patch.object(client, "_trigger_kserve_update"):
-            result = client.promote_to_production(version_id)
+        result = client.promote_to_production(version_id)
 
         assert result is False, "Promotion from production to production should fail"
 

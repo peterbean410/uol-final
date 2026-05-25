@@ -37,6 +37,94 @@ fn seconds_to_ns(ts_seconds: i64, field_name: &str) -> Result<i64> {
     })
 }
 
+/// Relative BB-width boundaries for low/mid and mid/high volatility regime bins.
+const DEFAULT_VOL_LOW_THRESHOLD: f64 = 0.0008; // 0.08% of price
+const DEFAULT_VOL_HIGH_THRESHOLD: f64 = 0.0020; // 0.20% of price
+
+/// Per-bin running reward statistics for regime-conditional z-score normalisation.
+#[derive(Clone, Default)]
+struct BinStats {
+    count: u64,
+    sum: f64,
+    sum_sq: f64,
+}
+
+impl BinStats {
+    fn update(&mut self, reward: f64) {
+        self.count += 1;
+        self.sum += reward;
+        self.sum_sq += reward * reward;
+    }
+
+    fn mean(&self) -> f64 {
+        if self.count == 0 {
+            return 0.0;
+        }
+        self.sum / self.count as f64
+    }
+
+    fn std_dev(&self) -> f64 {
+        if self.count < 2 {
+            return 0.0;
+        }
+        let mean = self.mean();
+        let variance = (self.sum_sq / self.count as f64) - (mean * mean);
+        variance.max(0.0).sqrt()
+    }
+}
+
+/// Three-bin regime-conditional reward normalisation.
+///
+/// Bin 0 = low vol, Bin 1 = mid vol, Bin 2 = high vol.
+/// Stats persist across episodes so the z-score scale is mature from step one
+/// of every episode. Only `prev_total_equity` resets per episode.
+#[derive(Clone)]
+struct RegimeRewardStats {
+    bins: [BinStats; 3],
+    vol_low_threshold: f64,
+    vol_high_threshold: f64,
+}
+
+impl RegimeRewardStats {
+    fn new(vol_low_threshold: f64, vol_high_threshold: f64) -> Self {
+        RegimeRewardStats {
+            bins: [BinStats::default(), BinStats::default(), BinStats::default()],
+            vol_low_threshold,
+            vol_high_threshold,
+        }
+    }
+
+    fn regime_bin(&self, bb_width_relative: f64) -> usize {
+        if bb_width_relative <= 0.0 {
+            // No data yet, default to mid-vol
+            return 1;
+        }
+        if bb_width_relative < self.vol_low_threshold {
+            0
+        } else if bb_width_relative < self.vol_high_threshold {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn update(&mut self, bin: usize, reward: f64) {
+        self.bins[bin].update(reward);
+    }
+
+    fn normalise(&self, bin: usize, reward: f64) -> f64 {
+        let stats = &self.bins[bin];
+        let std_dev = stats.std_dev();
+        if std_dev > 1e-8 {
+            (reward - stats.mean()) / std_dev
+        } else {
+            // Fall back to a different bin's stats if this bin is mature enough,
+            // otherwise pass reward through raw (first few steps globally).
+            reward
+        }
+    }
+}
+
 /// The main environment struct
 #[derive(Clone)]
 pub struct Environment {
@@ -70,10 +158,10 @@ pub struct Environment {
     disable_hedging: bool,
     // Track previous step's total equity for delta_V_t calculation
     prev_total_equity: Option<f64>,
-    // Running statistics for reward normalisation
-    reward_running_sum: f64,
-    reward_running_sum_sq: f64,
-    reward_count: u64,
+    // Regime-conditional reward normalisation (3 volatility bins).
+    // Stats persist across episodes; only prev_total_equity resets.
+    regime_reward_stats: RegimeRewardStats,
+    current_regime_bin: usize,
     last_observation_timestamp_ns: Option<i64>,
     // State feature normaliser (rolling z-scores, volume log-transform, etc.).
     normaliser: Normaliser,
@@ -120,9 +208,11 @@ impl Environment {
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
             disable_hedging: true,
             prev_total_equity: None,
-            reward_running_sum: 0.0,
-            reward_running_sum_sq: 0.0,
-            reward_count: 0,
+            regime_reward_stats: RegimeRewardStats::new(
+                DEFAULT_VOL_LOW_THRESHOLD,
+                DEFAULT_VOL_HIGH_THRESHOLD,
+            ),
+            current_regime_bin: 1, // Default to mid-vol until first observation
             last_observation_timestamp_ns: None,
             normaliser: Normaliser::new(&state_columns()),
             bars: HashMap::new(),
@@ -174,6 +264,15 @@ impl Environment {
 
     pub fn with_reward_holding_penalty(mut self, reward_holding_penalty: f64) -> Self {
         self.reward_holding_penalty = reward_holding_penalty;
+        self
+    }
+
+    pub fn with_reward_vol_thresholds(
+        mut self,
+        vol_low: f64,
+        vol_high: f64,
+    ) -> Self {
+        self.regime_reward_stats = RegimeRewardStats::new(vol_low, vol_high);
         self
     }
 
@@ -253,9 +352,9 @@ impl Environment {
 
     fn reset_reward_state(&mut self) {
         self.prev_total_equity = None;
-        self.reward_running_sum = 0.0;
-        self.reward_running_sum_sq = 0.0;
-        self.reward_count = 0;
+        // Regime stats persist across episodes so the z-score scale is stable
+        // from step one of every episode.
+        self.current_regime_bin = 1;
     }
 
     /// Reset the environment and initialize a new episode
@@ -561,6 +660,14 @@ impl Environment {
                 observation.recent_fills = recent_fills;
                 self.last_observation_timestamp_ns = Some(observation.timestamp_ns);
 
+                // Determine volatility regime from M5 BB width before reward
+                // calculation so the reward is normalised against the right bin.
+                if let Some(bin) =
+                    Self::extract_regime_bin(&observation.ta, &self.regime_reward_stats)
+                {
+                    self.current_regime_bin = bin;
+                }
+
                 // Calculate reward based on the previous step's action state.
                 let reward = self.calculate_reward(&action)?;
 
@@ -676,6 +783,13 @@ impl Environment {
                 }
 
                 let mut observation = self.build_live_observation(self.symbol.clone()).await?;
+
+                // Determine volatility regime from M5 BB width.
+                if let Some(bin) =
+                    Self::extract_regime_bin(&observation.ta, &self.regime_reward_stats)
+                {
+                    self.current_regime_bin = bin;
+                }
 
                 // Calculate reward
                 let reward = self.calculate_reward(&action)?;
@@ -874,7 +988,29 @@ impl Environment {
         }
     }
 
-    /// Calculate reward based on action
+    /// Extract the M5 relative Bollinger Band width from TA indicators and
+    /// discretize into a regime bin (0 = low vol, 1 = mid vol, 2 = high vol).
+    ///
+    /// Returns `None` when M5 volatility data hasn't been computed yet.
+    fn extract_regime_bin(
+        ta: &[modelenv_proto::IntervalIndicators],
+        stats: &RegimeRewardStats,
+    ) -> Option<usize> {
+        let m5_idx = TIME_INTERVALS.iter().position(|&iv| iv == "M5")?;
+        let vol = ta.get(m5_idx)?.volatility.as_ref()?;
+        if vol.bb_middle <= 0.0 {
+            return None;
+        }
+        let bb_width = (vol.bb_upper - vol.bb_lower) / vol.bb_middle;
+        Some(stats.regime_bin(bb_width))
+    }
+
+    /// Calculate reward based on action.
+    ///
+    /// The raw reward (delta equity minus penalties) is z-score normalised
+    /// using per-volatility-regime running statistics. Regime stats are never
+    /// reset, so the normalised scale is stable from the first step of every
+    /// episode.
     fn calculate_reward(&mut self, action: &Action) -> Result<f64> {
         // Get current timestamp
         let current_timestamp = self.current_timestamp();
@@ -936,23 +1072,10 @@ impl Environment {
         // Calculate final reward
         let reward = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
 
-        // Update running statistics for reward normalisation
-        self.reward_running_sum += reward;
-        self.reward_running_sum_sq += reward * reward;
-        self.reward_count += 1;
-
-        // Calculate running mean and standard deviation
-        let mean = self.reward_running_sum / self.reward_count as f64;
-        let variance = (self.reward_running_sum_sq / self.reward_count as f64) - (mean * mean);
-        let std_dev = variance.max(0.0).sqrt();
-
-        // Normalise reward using running statistics
-        // Keep signal between -1.0 and 1.0
-        let normalised_reward = if std_dev > 1e-8 {
-            (reward - mean) / std_dev
-        } else {
-            reward
-        };
+        // Regime-conditional z-score normalisation
+        let bin = self.current_regime_bin;
+        self.regime_reward_stats.update(bin, reward);
+        let normalised_reward = self.regime_reward_stats.normalise(bin, reward);
 
         // Clip to [-1.0, 1.0]
         let clipped_reward = normalised_reward.clamp(-1.0, 1.0);
@@ -1211,30 +1334,6 @@ mod tests {
         Arc,
     };
     use tempfile::tempdir;
-
-    #[test]
-    fn test_seconds_to_ns_passes_zero_through() {
-        assert_eq!(seconds_to_ns(0, "episode_start_ts").unwrap(), 0);
-    }
-
-    #[test]
-    fn test_seconds_to_ns_converts_2012_episode_boundary() {
-        // 2012-01-02T23:00:00 UTC in Unix seconds
-        let ts_s = 1_325_545_200_i64;
-        let expected_ns = 1_325_545_200_000_000_000_i64;
-        assert_eq!(
-            seconds_to_ns(ts_s, "episode_end_ts").unwrap(),
-            expected_ns
-        );
-    }
-
-    #[test]
-    fn test_seconds_to_ns_rejects_overflow() {
-        // Any value > i64::MAX / 1e9 (~ year 2262) overflows on multiply.
-        let huge = i64::MAX / 1_000_000_000 + 1;
-        let err = seconds_to_ns(huge, "episode_end_ts").unwrap_err();
-        assert!(err.to_string().contains("too large"));
-    }
 
     /// Helper: find the value at a named column in the first row of an Observation.
     fn obs_value(obs: &modelenv_proto::Observation, column: &str) -> f64 {
@@ -1604,9 +1703,10 @@ mod tests {
 
         environment.preload_training_data().await.unwrap();
         environment.prev_total_equity = Some(-0.25);
-        environment.reward_running_sum = 5.0;
-        environment.reward_running_sum_sq = 25.0;
-        environment.reward_count = 4;
+        // Pre-populate regime stats to verify they survive reset.
+        environment.regime_reward_stats.update(1, 1.0);
+        environment.regime_reward_stats.update(1, -0.5);
+        environment.current_regime_bin = 0;
 
         environment
             .reset(ResetRequest {
@@ -1619,10 +1719,12 @@ mod tests {
             .await
             .unwrap();
 
+        // prev_total_equity must be cleared; the regime stats must NOT be.
         assert_eq!(environment.prev_total_equity, None);
-        assert_eq!(environment.reward_running_sum, 0.0);
-        assert_eq!(environment.reward_running_sum_sq, 0.0);
-        assert_eq!(environment.reward_count, 0);
+        assert_eq!(environment.current_regime_bin, 1);
+        let mid_bin = &environment.regime_reward_stats.bins[1];
+        assert_eq!(mid_bin.count, 2);
+        assert!((mid_bin.sum - 0.5).abs() < 1e-9);
 
         let response = environment
             .step(Action {

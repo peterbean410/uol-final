@@ -124,52 +124,8 @@ spec:
               Mean prediction (mu) has shifted more than 3 standard deviations
               from the 7-day baseline for symbol={{ $labels.symbol }}.
 
-    # --- KServe Latency and Error Rate Alerts (Requirement 5.5, 5.7, 9.2) ---
-    - name: forecaster.serving.latency
-      rules:
-        - alert: ForecasterInferenceP99LatencyHigh
-          expr: |
-            histogram_quantile(0.99,
-              sum(rate(forecaster_inference_request_duration_seconds_bucket[5m])) by (le, symbol)
-            ) > 0.1
-          for: 5m
-          labels:
-            severity: warning
-            team: ml-engineering
-          annotations:
-            summary: "KServe inference p99 latency exceeds 100ms"
-            description: >-
-              The 99th percentile inference latency for symbol={{ $labels.symbol }}
-              is {{ $value }}s, exceeding the 100ms SLO.
-
-        - alert: ForecasterInferenceErrorRateHigh
-          expr: |
-            (
-              sum(rate(forecaster_inference_requests_total{status="error"}[5m])) by (symbol)
-              /
-              sum(rate(forecaster_inference_requests_total[5m])) by (symbol)
-            ) > 0.05
-          for: 5m
-          labels:
-            severity: critical
-            team: ml-engineering
-          annotations:
-            summary: "KServe inference error rate exceeds 5%"
-            description: >-
-              Inference error rate for symbol={{ $labels.symbol }} is
-              {{ $value | humanizePercentage }}, exceeding the 5% threshold.
-
-        - alert: ForecasterInferenceDown
-          expr: |
-            sum(rate(forecaster_inference_requests_total[5m])) by (symbol) == 0
-            and
-            sum(kserve_inferenceservice_replicas{name="forecaster-predictor"}) > 0
-          for: 10m
-          labels:
-            severity: critical
-            team: ml-engineering
-          annotations:
-            summary: "KServe inference service receiving no traffic despite active replicas"
-            description: >-
-              The forecaster inference service for symbol={{ $labels.symbol }}
-              has active replicas but is receiving no requests for 10 minutes.
+    # --- KServe Latency and Error Rate Alerts ---
+    # Removed: the standalone `forecaster-predictor` InferenceService is
+    # deprecated (kubeflow-ml-pipeline spec, Requirement 5). Latency, error
+    # rate, and zero-traffic alerts for live inference now live under the
+    # dqnpf-intraday monitoring stack (Task 31.5, `dqnpf-intraday-predictor`).

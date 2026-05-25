@@ -160,8 +160,13 @@ class ForecasterRegistryClient:
         """Promote a model version to production lifecycle stage.
 
         Validates the state transition (must be in staging), updates the
-        lifecycle stage, and triggers a KServe InferenceService update
-        to deploy the new model version.
+        lifecycle stage in the Model Registry. The dqnpf-intraday
+        InferenceService picks up the new production-stage entry via its
+        registry-polling hot-reload watcher (see
+        ``tradingmodel/intraday/dqnpf/kubeflow/serving/dqnpf_predictor.py``).
+        No KServe patching is performed here; the standalone Forecaster
+        InferenceService was deprecated when serving moved to dqnpf-intraday
+        (see kubeflow-ml-pipeline spec, Requirement 5).
 
         Args:
             version_id: The unique version identifier to promote.
@@ -193,13 +198,16 @@ class ForecasterRegistryClient:
             version_data["symbol"], int(version_data["forecast_horizon"])
         )
 
-        # Update lifecycle stage to production
+        # Update lifecycle stage to production. The dqnpf-intraday predictor's
+        # hot-reload watcher (Task 30.3) will resolve the new production-stage
+        # checkpoint on its next poll and atomically swap in the model.
         self._update_lifecycle_stage(version_id, "production")
 
-        # Trigger KServe InferenceService update
-        self._trigger_kserve_update(version_data)
-
-        logger.info("Promoted version %s to production", version_id)
+        logger.info(
+            "Promoted version %s to production; dqnpf-intraday hot-reload "
+            "will pick up the new checkpoint on its next poll",
+            version_id,
+        )
         return True
 
     def query_models(
@@ -402,63 +410,3 @@ class ForecasterRegistryClient:
         except Exception:
             pass  # No existing production model
 
-    def _trigger_kserve_update(self, version_data: dict) -> None:
-        """Trigger KServe InferenceService update for the promoted model.
-
-        Updates the InferenceService to point to the new model artifact URI.
-
-        Args:
-            version_data: Custom properties dict of the promoted version.
-
-        Requirements: 6.4
-        """
-        try:
-            from kubernetes import client, config as k8s_config
-
-            k8s_config.load_incluster_config()
-            api = client.CustomObjectsApi()
-
-            symbol = version_data["symbol"]
-            horizon = int(version_data["forecast_horizon"])
-            service_name = f"forecaster-{symbol.lower()}-h{horizon}"
-
-            # Patch the InferenceService to update the model URI
-            patch_body = {
-                "spec": {
-                    "predictor": {
-                        "containers": [
-                            {
-                                "name": "forecaster-predictor",
-                                "env": [
-                                    {
-                                        "name": "MODEL_PATH",
-                                        "value": version_data.get(
-                                            "model_uri", ""
-                                        ),
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                }
-            }
-
-            api.patch_namespaced_custom_object(
-                group="serving.kserve.io",
-                version="v1beta1",
-                namespace="kubeflow",
-                plural="inferenceservices",
-                name=service_name,
-                body=patch_body,
-            )
-
-            logger.info(
-                "Triggered KServe update for %s with new model version",
-                service_name,
-            )
-        except ImportError:
-            logger.warning(
-                "kubernetes client not available; skipping KServe update"
-            )
-        except Exception as e:
-            logger.error("Failed to trigger KServe update: %s", e)

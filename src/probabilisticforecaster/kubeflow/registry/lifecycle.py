@@ -1,9 +1,15 @@
 """Lifecycle management for the ProbabilisticTransformer model registry.
 
 Provides a higher-level lifecycle management layer on top of the
-ForecasterRegistryClient, handling state transition validation,
-KServe InferenceService updates on promotion, and initial deployment
-bootstrap (auto-promoting the first model when no production model exists).
+ForecasterRegistryClient, handling state transition validation and initial
+deployment bootstrap (auto-promoting the first model when no production
+model exists).
+
+The standalone Forecaster KServe InferenceService is deprecated (see
+kubeflow-ml-pipeline spec, Requirement 5). Promotion to ``production`` now
+only updates the registry metadata; the dqnpf-intraday combined predictor's
+hot-reload watcher (Task 30.3) picks up the new production checkpoint on its
+next poll. No KServe patching occurs here.
 
 Requirements: 6.3, 6.4
 """
@@ -21,22 +27,19 @@ logger = logging.getLogger(__name__)
 
 
 class LifecycleManager:
-    """Manages model lifecycle transitions and deployment triggers.
+    """Manages model lifecycle transitions for the Forecaster registry.
 
     Wraps the ForecasterRegistryClient to provide:
     - State transition validation (staging→production, staging→archived,
       production→archived; archived is terminal)
-    - Auto-promotion trigger: on promote_to_production, updates the KServe
-      InferenceService model path
     - Initial deployment bootstrap: if no production model exists for a
       symbol/horizon pair, auto-promotes the first registered model
 
-    The InferenceService naming convention is:
-        forecaster-{symbol.lower()}-h{horizon}
-    deployed in the 'kubeflow' namespace.
+    Promotion to ``production`` is registry-metadata-only. The dqnpf-intraday
+    InferenceService's hot-reload watcher (see
+    ``tradingmodel/intraday/dqnpf/kubeflow/serving/dqnpf_predictor.py``) is the
+    consumer that swaps in the new checkpoint at serving time.
     """
-
-    KSERVE_NAMESPACE = "kubeflow"
 
     def __init__(self, registry_client: ForecasterRegistryClient):
         """Initialize the lifecycle manager.
@@ -111,20 +114,23 @@ class LifecycleManager:
             return False
 
     def promote_to_production(self, version_id: str) -> bool:
-        """Promote a model version to production and update KServe.
+        """Promote a model version to production lifecycle stage.
 
         Delegates to the registry client's promote_to_production method,
         which handles:
         1. Validating the state transition (must be in staging)
         2. Demoting the current production model
         3. Updating the lifecycle stage
-        4. Triggering the KServe InferenceService update
+
+        The dqnpf-intraday combined predictor's hot-reload watcher picks up
+        the new production-stage checkpoint on its next poll (Task 30.3 in
+        the kubeflow-ml-pipeline spec); no KServe patching is performed here.
 
         Args:
             version_id: The unique version identifier to promote.
 
         Returns:
-            True if promotion and KServe update succeeded, False otherwise.
+            True if promotion succeeded, False otherwise.
 
         Requirements: 6.3, 6.4
         """
@@ -140,19 +146,13 @@ class LifecycleManager:
         if not self.validate_transition(current_stage, "production"):
             return False
 
-        # Delegate to registry client which handles demotion + KServe update
         result = self.registry_client.promote_to_production(version_id)
 
         if result:
-            symbol = version_data["symbol"]
-            horizon = int(version_data["forecast_horizon"])
-            service_name = self._inference_service_name(symbol, horizon)
             logger.info(
-                "Model %s promoted to production; KServe InferenceService "
-                "'%s' updated in namespace '%s'",
+                "Model %s promoted to production; dqnpf-intraday hot-reload "
+                "watcher will swap the checkpoint on its next poll",
                 version_id,
-                service_name,
-                self.KSERVE_NAMESPACE,
             )
 
         return result
@@ -164,8 +164,9 @@ class LifecycleManager:
 
         If no production model exists for the given symbol/horizon pair,
         automatically promotes the first registered model (in staging) to
-        production. This handles the cold-start case where the InferenceService
-        has no model deployed yet.
+        production. This handles the cold-start case where the dqnpf-intraday
+        predictor's registry resolver would otherwise raise on a missing
+        production-stage entry.
 
         Args:
             symbol: Trading pair symbol (e.g., "USDJPY").
@@ -185,7 +186,7 @@ class LifecycleManager:
         if production_models:
             logger.info(
                 "Production model already exists for %s h%d; "
-                "skipping bootstrap",
+                "skipping bootstrap (dqnpf-intraday hot-reload owns rollout)",
                 symbol,
                 horizon,
             )
@@ -288,17 +289,3 @@ class LifecycleManager:
             pass
         return None
 
-    @staticmethod
-    def _inference_service_name(symbol: str, horizon: int) -> str:
-        """Construct the KServe InferenceService name.
-
-        Follows the naming convention: forecaster-{symbol.lower()}-h{horizon}
-
-        Args:
-            symbol: Trading pair symbol (e.g., "USDJPY").
-            horizon: Forecast horizon in bars.
-
-        Returns:
-            The InferenceService resource name.
-        """
-        return f"forecaster-{symbol.lower()}-h{horizon}"
