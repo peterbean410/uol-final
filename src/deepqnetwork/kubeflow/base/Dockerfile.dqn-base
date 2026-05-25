@@ -2,7 +2,7 @@
 # Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base
 # Requirements: DQN-R4, DQN-R5
 #
-# Rebuild marker: 0607f84-modelenv-historical-bar-snapshot
+# Rebuild marker: 4649cf8-modelenv-seconds-to-ns-and-fail-loudly
 
 FROM python:3.11-slim
 
