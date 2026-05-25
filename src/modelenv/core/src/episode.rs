@@ -13,7 +13,7 @@ use crate::data_loader::{
     build_interval_data_source, build_news_data_source, build_tick_data_source,
     load_bars_from_parquet_with_range_cached_from_local_cache_dir,
     load_news_from_parquet_with_range_cached_from_local_cache_dir,
-    load_ticks_from_parquet_with_range_cached_from_local_cache_dir, TIME_INTERVALS,
+    load_ticks_from_parquet_with_range_cached_from_local_cache_dir, DataLoaderError, TIME_INTERVALS,
 };
 use crate::indicators::{
     compute_interval_indicators, compute_m15_double_bottom_high, compute_m15_double_bottom_low,
@@ -1146,31 +1146,56 @@ mod tests {
     }
 
     #[test]
-    fn test_is_no_tick_sources_error_detects_missing_sources_messages() {
-        let err = anyhow::anyhow!(
-            "No parquet sources matched the requested time range for ticks under s3://x. Requested range: ..."
-        );
-        assert!(is_no_tick_sources_error(&err));
-
-        let err = anyhow::anyhow!("No parquet sources available for ticks");
-        assert!(is_no_tick_sources_error(&err));
+    fn test_is_no_tick_sources_error_detects_all_typed_variants() {
+        for typed in [
+            DataLoaderError::NoTickSourcesInRange,
+            DataLoaderError::NoSourcesMatchedInRange {
+                interval: "ticks".to_string(),
+                source_uri: "s3://x".to_string(),
+                requested_range: String::new(),
+                expected_partitions: String::new(),
+                candidates: String::new(),
+            },
+            DataLoaderError::NoSourcesMatchedInRangeUnknownSource {
+                interval: "ticks".to_string(),
+                requested_range: String::new(),
+                candidates: String::new(),
+            },
+            DataLoaderError::NoSourcesAvailable {
+                interval: "ticks".to_string(),
+            },
+            DataLoaderError::ExactSnapshotKeyMissing {
+                key: "s3://x/.../foo.parquet".to_string(),
+                snapshot_ts_ns: 0,
+                formatted_ts: "1970-01-01T00:00:00+00:00".to_string(),
+            },
+        ] {
+            let err: anyhow::Error = typed.into();
+            assert!(
+                is_no_tick_sources_error(&err),
+                "expected fallback to trigger for {:#}",
+                err
+            );
+        }
     }
 
     #[test]
-    fn test_is_no_tick_sources_error_ignores_unrelated_errors() {
-        let err = anyhow::anyhow!("AccessDenied calling s3:ListObjectsV2");
+    fn test_is_no_tick_sources_error_ignores_untyped_errors() {
+        // A bare anyhow!() that happens to contain similar wording must NOT
+        // satisfy the predicate, that's the whole point of the typed-error
+        // refactor.
+        let err = anyhow::anyhow!("No parquet sources matched the requested time range manually");
         assert!(!is_no_tick_sources_error(&err));
 
-        let err = anyhow::anyhow!("Failed to invoke aws CLI: connection reset");
+        let err = anyhow::anyhow!("AccessDenied calling s3:ListObjectsV2");
         assert!(!is_no_tick_sources_error(&err));
     }
 
     #[test]
     fn test_is_no_tick_sources_error_walks_anyhow_context_chain() {
-        let root = anyhow::anyhow!(
-            "No parquet sources matched the requested time range for ticks under s3://x"
-        );
-        let wrapped: anyhow::Error = root.context("Failed to load training ticks for USDJPY");
+        let typed = DataLoaderError::NoTickSourcesInRange;
+        let root: anyhow::Error = typed.into();
+        let wrapped = root.context("Failed to load training ticks for USDJPY");
         assert!(is_no_tick_sources_error(&wrapped));
     }
 
@@ -1179,10 +1204,16 @@ mod tests {
 /// True when an `anyhow::Error` from the tick loader indicates the parquet
 /// archive has no partitions covering the requested range, i.e. tick data
 /// is genuinely unavailable, as opposed to a transient/auth failure.
+///
+/// Walks the anyhow error chain so wrapped errors (`.with_context(...)`) are
+/// still recognised by their root `DataLoaderError` variant, avoids string
+/// matching on the formatted message.
 pub(crate) fn is_no_tick_sources_error(err: &anyhow::Error) -> bool {
-    let chain = format!("{:#}", err);
-    chain.contains("No parquet sources matched the requested time range")
-        || chain.contains("No parquet sources available")
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<DataLoaderError>()
+            .is_some_and(DataLoaderError::is_no_tick_sources)
+    })
 }
 
 /// Synthesize per-minute ticks from M1 bars when raw tick parquet is absent.

@@ -19,6 +19,60 @@ use modelenv_proto::{Bar, News, Tick};
 
 use crate::market_data_cache::{CachedLatestSource, MarketDataCache};
 
+/// Typed errors raised by the data loader. Callers in `episode.rs` use these
+/// variants to decide whether a tick load failure is the kind that should
+/// trigger the M1 tick fallback (data genuinely absent for the requested
+/// range) versus a hard failure (auth, network, schema). Avoids string
+/// matching on `format!("{:#}", err)` which silently breaks any time an
+/// error message is reworded.
+#[derive(thiserror::Error, Debug)]
+pub enum DataLoaderError {
+    #[error("No parquet sources matched the requested time range for ticks")]
+    NoTickSourcesInRange,
+
+    #[error("No parquet sources matched the requested time range for {interval} under {source_uri}. Requested range: {requested_range}. Expected parquet partitions: {expected_partitions}. Candidate sources: {candidates}")]
+    NoSourcesMatchedInRange {
+        interval: String,
+        source_uri: String,
+        requested_range: String,
+        expected_partitions: String,
+        candidates: String,
+    },
+
+    #[error("No parquet sources matched the requested time range for {interval}. Requested range: {requested_range}. Candidate sources: {candidates}")]
+    NoSourcesMatchedInRangeUnknownSource {
+        interval: String,
+        requested_range: String,
+        candidates: String,
+    },
+
+    #[error("No parquet sources available for {interval}")]
+    NoSourcesAvailable { interval: String },
+
+    #[error("Exact parquet snapshot key {key} for configured snapshot timestamp {snapshot_ts_ns} ({formatted_ts}) was not found in local cache or S3")]
+    ExactSnapshotKeyMissing {
+        key: String,
+        snapshot_ts_ns: i64,
+        formatted_ts: String,
+    },
+}
+
+impl DataLoaderError {
+    /// True for variants that indicate "no tick parquet matches the requested
+    /// range", i.e. the archive genuinely lacks data, so an M1-bar fallback
+    /// (when step_size is whole-minute) is meaningful.
+    pub fn is_no_tick_sources(&self) -> bool {
+        matches!(
+            self,
+            DataLoaderError::NoTickSourcesInRange
+                | DataLoaderError::NoSourcesMatchedInRange { .. }
+                | DataLoaderError::NoSourcesMatchedInRangeUnknownSource { .. }
+                | DataLoaderError::NoSourcesAvailable { .. }
+                | DataLoaderError::ExactSnapshotKeyMissing { .. }
+        )
+    }
+}
+
 /// Supported time intervals for price bars
 pub const TIME_INTERVALS: &[&str] = &["M1", "M5", "M15", "H1", "H4", "D1", "W1", "MN"];
 pub const DEFAULT_LOCAL_CACHE_DIR: &str = "/tmp/modelenv-cache";
@@ -458,7 +512,7 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
                     Some(end_timestamp_ns),
                 )?;
                 vec![selected.last().cloned().ok_or_else(|| {
-                    anyhow!("No parquet sources matched the requested time range for ticks")
+                    anyhow::Error::new(DataLoaderError::NoTickSourcesInRange)
                 })?]
             } else {
                 select_candidate_sources(
@@ -1130,18 +1184,18 @@ async fn determine_price_snapshot_s3_sources_cached(
                 return Ok(vec![speculative_source]);
             }
             false => {
-                let err = anyhow!(
-                    "Exact parquet snapshot key {} for configured snapshot timestamp {} ({}) was not found in local cache or S3",
-                    speculative_source,
-                    snapshot_selection_timestamp_ns,
-                    format_timestamp_ns(snapshot_selection_timestamp_ns)
-                );
+                let typed = DataLoaderError::ExactSnapshotKeyMissing {
+                    key: speculative_source.clone(),
+                    snapshot_ts_ns: snapshot_selection_timestamp_ns,
+                    formatted_ts: format_timestamp_ns(snapshot_selection_timestamp_ns),
+                };
+                let err_message = typed.to_string();
                 if let Some(cache) = cache {
                     cache
-                        .put_latest_source(cache_key, CachedLatestSource::Missing(err.to_string()))
+                        .put_latest_source(cache_key, CachedLatestSource::Missing(err_message))
                         .await;
                 }
-                return Err(err);
+                return Err(anyhow::Error::new(typed));
             }
         }
     } else if let Some(local_sources) =
@@ -1445,10 +1499,9 @@ fn select_candidate_sources_with_range_details(
     end_timestamp_ns: Option<i64>,
 ) -> Result<Vec<String>> {
     if sources.is_empty() {
-        return Err(anyhow!(
-            "No parquet sources available for {}",
-            time_interval
-        ));
+        return Err(anyhow::Error::new(DataLoaderError::NoSourcesAvailable {
+            interval: time_interval.to_string(),
+        }));
     }
 
     let mut stamped_sources: Vec<(Option<i64>, String)> = sources
@@ -1462,7 +1515,9 @@ fn select_candidate_sources_with_range_details(
             .last()
             .map(|(_, source)| source.clone())
             .ok_or_else(|| {
-                anyhow!("No parquet sources available for {}", time_interval)
+                anyhow::Error::new(DataLoaderError::NoSourcesAvailable {
+                    interval: time_interval.to_string(),
+                })
             })?]);
     }
 
@@ -1484,14 +1539,15 @@ fn select_candidate_sources_with_range_details(
         .collect();
 
     if selected.is_empty() {
-        return Err(anyhow!(
-            "No parquet sources matched the requested time range for {} under {}. Requested range: {}. Expected parquet partitions: {}. Candidate sources: {}",
-            time_interval,
-            source_uri,
-            describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
-            describe_expected_source_range(source_uri, schedule, start_timestamp_ns, end_timestamp_ns),
-            describe_stamped_sources(&stamped_sources)
-        ));
+        return Err(anyhow::Error::new(DataLoaderError::NoSourcesMatchedInRange {
+            interval: time_interval.to_string(),
+            source_uri: source_uri.to_string(),
+            requested_range: describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
+            expected_partitions: describe_expected_source_range(
+                source_uri, schedule, start_timestamp_ns, end_timestamp_ns,
+            ),
+            candidates: describe_stamped_sources(&stamped_sources),
+        }));
     }
 
     Ok(selected)
@@ -1826,10 +1882,9 @@ fn select_candidate_sources(
     schedule: Option<IntervalSchedule>,
 ) -> Result<Vec<String>> {
     if sources.is_empty() {
-        return Err(anyhow!(
-            "No parquet sources available for {}",
-            time_interval
-        ));
+        return Err(anyhow::Error::new(DataLoaderError::NoSourcesAvailable {
+            interval: time_interval.to_string(),
+        }));
     }
 
     let mut stamped_sources: Vec<(Option<i64>, String)> = sources
@@ -1843,7 +1898,9 @@ fn select_candidate_sources(
             .last()
             .map(|(_, source)| source.clone())
             .ok_or_else(|| {
-                anyhow!("No parquet sources available for {}", time_interval)
+                anyhow::Error::new(DataLoaderError::NoSourcesAvailable {
+                    interval: time_interval.to_string(),
+                })
             })?]);
     }
 
@@ -1865,23 +1922,24 @@ fn select_candidate_sources(
         .collect();
 
     if selected.is_empty() {
-        return Err(if let (Some(uri), Some(sched)) = (source_uri, schedule) {
-            anyhow!(
-                "No parquet sources matched the requested time range for {} under {}. Requested range: {}. Expected parquet partitions: {}. Candidate sources: {}",
-                time_interval,
-                uri,
-                describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
-                describe_expected_source_range(uri, sched, start_timestamp_ns, end_timestamp_ns),
-                describe_stamped_sources(&stamped_sources)
-            )
+        let typed = if let (Some(uri), Some(sched)) = (source_uri, schedule) {
+            DataLoaderError::NoSourcesMatchedInRange {
+                interval: time_interval.to_string(),
+                source_uri: uri.to_string(),
+                requested_range: describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
+                expected_partitions: describe_expected_source_range(
+                    uri, sched, start_timestamp_ns, end_timestamp_ns,
+                ),
+                candidates: describe_stamped_sources(&stamped_sources),
+            }
         } else {
-            anyhow!(
-                "No parquet sources matched the requested time range for {}. Requested range: {}. Candidate sources: {}",
-                time_interval,
-                describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
-                describe_stamped_sources(&stamped_sources)
-            )
-        });
+            DataLoaderError::NoSourcesMatchedInRangeUnknownSource {
+                interval: time_interval.to_string(),
+                requested_range: describe_requested_time_range(start_timestamp_ns, end_timestamp_ns),
+                candidates: describe_stamped_sources(&stamped_sources),
+            }
+        };
+        return Err(anyhow::Error::new(typed));
     }
 
     Ok(selected)
