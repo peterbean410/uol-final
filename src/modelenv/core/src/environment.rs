@@ -26,6 +26,17 @@ use crate::reconciliation::reconcile_positions;
 
 const DEFAULT_STEP_SIZE_NS: i64 = 5_000_000_000;
 
+/// Convert a Unix-seconds timestamp from a Reset/proto request to nanoseconds
+/// for internal use. Passes through 0 unchanged ("no constraint" sentinel).
+fn seconds_to_ns(ts_seconds: i64, field_name: &str) -> Result<i64> {
+    if ts_seconds == 0 {
+        return Ok(0);
+    }
+    ts_seconds.checked_mul(1_000_000_000).ok_or_else(|| {
+        anyhow::anyhow!("{} ({}) is too large to convert to nanoseconds", field_name, ts_seconds)
+    })
+}
+
 /// The main environment struct
 #[derive(Clone)]
 pub struct Environment {
@@ -283,6 +294,19 @@ impl Environment {
                     DEFAULT_STEP_SIZE_NS
                 };
 
+                // Convert episode_*_ts from Unix seconds (the proto contract,
+                // per every Python client docstring) to nanoseconds for the
+                // internal loader/cursor code, mirroring how step_size_seconds
+                // is converted above.
+                let episode_start_ts_ns = seconds_to_ns(
+                    req.episode_start_ts,
+                    "episode_start_ts",
+                )?;
+                let episode_end_ts_ns = seconds_to_ns(
+                    req.episode_end_ts,
+                    "episode_end_ts",
+                )?;
+
                 // Initialize episode with S3 parquet loading
                 let market_data_cache = self.market_data_cache.clone();
                 let mut episode = initialize_episode(
@@ -290,8 +314,8 @@ impl Environment {
                     &self.s3_prefix,
                     &self.local_cache_dir,
                     self.price_snapshot_ts,
-                    req.episode_start_ts,
-                    req.episode_end_ts,
+                    episode_start_ts_ns,
+                    episode_end_ts_ns,
                     self.step_size_ns,
                     &market_data_cache,
                 )
@@ -1187,6 +1211,30 @@ mod tests {
         Arc,
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn test_seconds_to_ns_passes_zero_through() {
+        assert_eq!(seconds_to_ns(0, "episode_start_ts").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_seconds_to_ns_converts_2012_episode_boundary() {
+        // 2012-01-02T23:00:00 UTC in Unix seconds
+        let ts_s = 1_325_545_200_i64;
+        let expected_ns = 1_325_545_200_000_000_000_i64;
+        assert_eq!(
+            seconds_to_ns(ts_s, "episode_end_ts").unwrap(),
+            expected_ns
+        );
+    }
+
+    #[test]
+    fn test_seconds_to_ns_rejects_overflow() {
+        // Any value > i64::MAX / 1e9 (~ year 2262) overflows on multiply.
+        let huge = i64::MAX / 1_000_000_000 + 1;
+        let err = seconds_to_ns(huge, "episode_end_ts").unwrap_err();
+        assert!(err.to_string().contains("too large"));
+    }
 
     /// Helper: find the value at a named column in the first row of an Observation.
     fn obs_value(obs: &modelenv_proto::Observation, column: &str) -> f64 {
