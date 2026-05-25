@@ -1203,14 +1203,21 @@ fn speculative_price_snapshot_source_uri(
     schedule: IntervalSchedule,
     snapshot_selection_timestamp_ns: i64,
 ) -> String {
-    build_s3_object_uri(
-        source_uri,
-        schedule,
-        align_down_execution_dt(
-            Utc.timestamp_nanos(snapshot_selection_timestamp_ns),
-            schedule.cadence,
-        ),
-    )
+    let dt = Utc.timestamp_nanos(snapshot_selection_timestamp_ns);
+    // EOM monthly snapshots are named at the START of the month AFTER the one
+    // they cover; the producer writes the "end of month M" snapshot at start
+    // of M+1, with the contained bar timestamped at start of M (verified
+    // against year=2012/month=02/20120201T000000Z.parquet which holds the
+    // bar timestamped 2012-01-01). For a mid-month cursor we therefore align
+    // UP to the next month boundary so we hit the file that actually contains
+    // month M's completed bar. Hourly / daily / weekly producers are
+    // forward-looking (file at T contains bar opening at T), so align_down
+    // stays correct for those cadences.
+    let aligned = match schedule.cadence {
+        ExecutionCadence::Monthly => align_up_execution_dt(dt, schedule.cadence),
+        _ => align_down_execution_dt(dt, schedule.cadence),
+    };
+    build_s3_object_uri(source_uri, schedule, aligned)
 }
 
 async fn determine_s3_sources_cached(
@@ -2927,6 +2934,38 @@ mod tests {
         assert_eq!(
             key,
             "s3://bucket/marketdata/eod-snapshot/symbol=USDJPY/interval=H1/year=2021/month=12/day=25/20211225T000000Z.parquet"
+        );
+    }
+
+    #[test]
+    fn monthly_speculative_snapshot_key_aligns_up_to_next_month() {
+        // 2012-01-05T23:00 UTC mid-month; the EOM file holding January's
+        // completed bar is named at start-of-February (the producer convention).
+        let mid_january_ns = 1_325_804_400_000_000_000_i64;
+        let key = speculative_price_snapshot_source_uri(
+            "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1",
+            interval_schedule("MN").unwrap(),
+            mid_january_ns,
+        );
+        assert_eq!(
+            key,
+            "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1/year=2012/month=02/20120201T000000Z.parquet"
+        );
+    }
+
+    #[test]
+    fn monthly_speculative_snapshot_key_at_month_boundary_is_idempotent() {
+        // Cursor exactly at start-of-month February, already aligned, so the
+        // URI stays at year=2012/month=02 (holds January's bar). No skip to March.
+        let feb_first_ns = 1_328_054_400_000_000_000_i64; // 2012-02-01T00:00 UTC
+        let key = speculative_price_snapshot_source_uri(
+            "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1",
+            interval_schedule("MN").unwrap(),
+            feb_first_ns,
+        );
+        assert_eq!(
+            key,
+            "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1/year=2012/month=02/20120201T000000Z.parquet"
         );
     }
 
