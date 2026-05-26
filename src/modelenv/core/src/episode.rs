@@ -1518,7 +1518,17 @@ pub async fn preload_training_market_data(
     let (tick_snapshot_ts, tick_start_ts, tick_end_ts) =
         resolve_training_tick_query(price_snapshot_ts, 0, 0, resolved_start_ts, resolved_end_ts);
 
+    // Scope the news preload to the training tick window when supplied so
+    // that pre-2021 training runs don't pull the latest (2026+) news
+    // snapshot file pointlessly; the per-episode loader requests news
+    // partitions inside the episode bounds, which won't intersect the
+    // latest file anyway. With no window (full M1 reference span) we still
+    // skip the preload of news; per-episode init will fetch what it needs.
     let news_source = build_news_data_source(s3_prefix, symbol);
+    let (news_preload_start, news_preload_end) = match tick_window {
+        Some((s, e)) => (Some(s), Some(e)),
+        None => (None, None),
+    };
     info!(
         "Preloading training news for {} from {}",
         symbol, news_source
@@ -1527,8 +1537,8 @@ pub async fn preload_training_market_data(
         local_cache_dir,
         market_data_cache,
         &news_source,
-        None,
-        None,
+        news_preload_start,
+        news_preload_end,
     )
     .await
     {
