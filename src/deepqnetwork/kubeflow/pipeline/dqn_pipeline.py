@@ -74,6 +74,7 @@ def dqn_training(
             "--symbol", symbol,
             "--episode-start-ts", str(episode_start_ts),
             "--episode-end-ts", str(episode_end_ts),
+            "--step-size-seconds", str(step_size_seconds),
             "--num-episodes", str(num_episodes_per_range),
             "--batch-size", str(batch_size),
             "--learning-rate", str(learning_rate),

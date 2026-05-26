@@ -443,6 +443,12 @@ def parse_args() -> argparse.Namespace:
         help="Episode end timestamp override",
     )
     parser.add_argument(
+        "--step-size-seconds",
+        type=int,
+        default=None,
+        help="Step size in seconds for the modelenv cursor (override)",
+    )
+    parser.add_argument(
         "--date-start",
         type=str,
         default=None,
@@ -556,6 +562,8 @@ def main() -> None:
         overrides["episode_start_ts"] = args.episode_start_ts
     if args.episode_end_ts is not None:
         overrides["episode_end_ts"] = args.episode_end_ts
+    if args.step_size_seconds is not None:
+        overrides["step_size_seconds"] = args.step_size_seconds
     if args.date_start is not None:
         overrides["date_start"] = args.date_start
     if args.date_end is not None:
