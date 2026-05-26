@@ -1146,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_no_tick_sources_error_detects_all_typed_variants() {
+    fn test_is_archive_gap_error_detects_all_typed_variants() {
         for typed in [
             DataLoaderError::NoTickSourcesInRange,
             DataLoaderError::NoSourcesMatchedInRange {
@@ -1172,7 +1172,7 @@ mod tests {
         ] {
             let err: anyhow::Error = typed.into();
             assert!(
-                is_no_tick_sources_error(&err),
+                is_archive_gap_error(&err),
                 "expected fallback to trigger for {:#}",
                 err
             );
@@ -1180,39 +1180,38 @@ mod tests {
     }
 
     #[test]
-    fn test_is_no_tick_sources_error_ignores_untyped_errors() {
+    fn test_is_archive_gap_error_ignores_untyped_errors() {
         // A bare anyhow!() that happens to contain similar wording must NOT
         // satisfy the predicate, that's the whole point of the typed-error
         // refactor.
         let err = anyhow::anyhow!("No parquet sources matched the requested time range manually");
-        assert!(!is_no_tick_sources_error(&err));
+        assert!(!is_archive_gap_error(&err));
 
         let err = anyhow::anyhow!("AccessDenied calling s3:ListObjectsV2");
-        assert!(!is_no_tick_sources_error(&err));
+        assert!(!is_archive_gap_error(&err));
     }
 
     #[test]
-    fn test_is_no_tick_sources_error_walks_anyhow_context_chain() {
+    fn test_is_archive_gap_error_walks_anyhow_context_chain() {
         let typed = DataLoaderError::NoTickSourcesInRange;
         let root: anyhow::Error = typed.into();
         let wrapped = root.context("Failed to load training ticks for USDJPY");
-        assert!(is_no_tick_sources_error(&wrapped));
+        assert!(is_archive_gap_error(&wrapped));
     }
 
 }
 
-/// True when an `anyhow::Error` from the tick loader indicates the parquet
-/// archive has no partitions covering the requested range, i.e. tick data
-/// is genuinely unavailable, as opposed to a transient/auth failure.
-///
-/// Walks the anyhow error chain so wrapped errors (`.with_context(...)`) are
-/// still recognised by their root `DataLoaderError` variant, avoids string
-/// matching on the formatted message.
-pub(crate) fn is_no_tick_sources_error(err: &anyhow::Error) -> bool {
+/// True when an `anyhow::Error` from the data loader indicates the parquet
+/// archive has no partitions covering the requested range, applies to any
+/// data type (ticks, news, bars). Walks the anyhow error chain so wrapped
+/// errors (`.with_context(...)`) are still recognised by their root
+/// `DataLoaderError` variant, avoids string matching on the formatted
+/// message.
+pub(crate) fn is_archive_gap_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         cause
             .downcast_ref::<DataLoaderError>()
-            .is_some_and(DataLoaderError::is_no_tick_sources)
+            .is_some_and(DataLoaderError::is_archive_gap)
     })
 }
 
@@ -1344,6 +1343,16 @@ pub async fn initialize_episode(
     .await
     {
         Ok(news) => news,
+        // News archive starts well after the price archive (no pre-2021 news
+        // sources). Treat archive gaps as "no news for this episode", log
+        // and proceed with an empty Vec rather than failing the Reset.
+        Err(err) if is_archive_gap_error(&err) => {
+            warn!(
+                "No news parquet sources for {} in episode range, proceeding with empty news. Underlying: {:#}",
+                symbol, err
+            );
+            Vec::new()
+        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1379,7 +1388,7 @@ pub async fn initialize_episode(
             synth
         }
         Ok(empty) => empty,
-        Err(err) if is_no_tick_sources_error(&err) && m1_fallback_allowed => {
+        Err(err) if is_archive_gap_error(&err) && m1_fallback_allowed => {
             let synth = synth_m1_ticks_for_range(&bars_map, tick_start_ts, tick_end_ts);
             warn!(
                 "Tick parquet missing for {} in range) synthesised {} M1-derived ticks (bid=low, ask=high)",
@@ -1526,6 +1535,12 @@ pub async fn preload_training_market_data(
         Ok(_) => {
             info!("Finished preloading training news for {}", symbol);
         }
+        Err(err) if is_archive_gap_error(&err) => {
+            warn!(
+                "No news parquet sources for {} in preload range, per-episode loader will proceed with empty news. Underlying: {:#}",
+                symbol, err
+            );
+        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -1559,7 +1574,7 @@ pub async fn preload_training_market_data(
         // ``initialize_episode`` will either fall back to M1-derived ticks (when
         // step_size_seconds is a whole-minute multiple) or surface the failure
         // there with the actual step_size in context.
-        Err(err) if is_no_tick_sources_error(&err) => {
+        Err(err) if is_archive_gap_error(&err) => {
             warn!(
                 "No tick parquet sources for {} in preload range, deferring to per-episode M1 fallback. Underlying: {:#}",
                 symbol, err

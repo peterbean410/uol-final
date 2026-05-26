@@ -58,10 +58,12 @@ pub enum DataLoaderError {
 }
 
 impl DataLoaderError {
-    /// True for variants that indicate "no tick parquet matches the requested
-    /// range", i.e. the archive genuinely lacks data, so an M1-bar fallback
-    /// (when step_size is whole-minute) is meaningful.
-    pub fn is_no_tick_sources(&self) -> bool {
+    /// True for variants that indicate "no parquet partitions cover the
+    /// requested range", i.e. the archive genuinely lacks data for the
+    /// requested window, as opposed to a transient/auth/schema failure.
+    /// Callers in episode.rs use this to decide whether to (a) synthesise
+    /// ticks from M1 bars or (b) proceed with an empty news vec.
+    pub fn is_archive_gap(&self) -> bool {
         matches!(
             self,
             DataLoaderError::NoTickSourcesInRange
