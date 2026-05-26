@@ -2,7 +2,7 @@
 # Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base
 # Requirements: DQN-R4, DQN-R5
 #
-# Rebuild marker: 9e2a900-modelenv-shared-bar-snapshot-per-session
+# Rebuild marker: fd9c480-modelenv-typed-errors-tick-routing-regime-stats
 
 FROM python:3.11-slim
 
