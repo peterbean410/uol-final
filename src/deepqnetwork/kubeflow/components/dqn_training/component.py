@@ -24,6 +24,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ class ModelenvSidecar:
     ) -> None:
         self._process: subprocess.Popen | None = None
         self._stderr_lines: list[str] = []
+        self._stderr_pump: "threading.Thread | None" = None
         self._symbol = symbol
         # When all four are set, modelenv scopes its startup tick preload to
         # this window (date_start..=date_end × [hour_start..hour_end]) instead
@@ -140,6 +142,28 @@ class ModelenvSidecar:
             "modelenv sidecar process started",
             extra={"pid": self._process.pid},
         )
+
+        # Stream modelenv stderr to the parent's stderr live (visible in
+        # `kubectl logs`) AND retain it in self._stderr_lines for the
+        # post-mortem dump on graceful shutdown. Without the pump, the
+        # pipe buffers silently and the only chance to see modelenv logs
+        # is a graceful shutdown drain, useless when Reset hangs.
+        def _pump_stderr() -> None:
+            assert self._process is not None and self._process.stderr is not None
+            try:
+                for raw_line in iter(self._process.stderr.readline, b""):
+                    line = raw_line.decode("utf-8", errors="replace").rstrip()
+                    if not line:
+                        continue
+                    self._stderr_lines.append(line)
+                    print(f"[modelenv] {line}", file=sys.stderr, flush=True)
+            except (OSError, ValueError):
+                pass
+
+        self._stderr_pump = threading.Thread(
+            target=_pump_stderr, name="modelenv-stderr-pump", daemon=True,
+        )
+        self._stderr_pump.start()
 
     def wait_for_ready(self) -> None:
         """Wait for the modelenv gRPC server to accept connections.
@@ -247,28 +271,15 @@ class ModelenvSidecar:
             )
 
     def _capture_stderr(self) -> str:
-        """Return any available stderr from the subprocess without blocking.
+        """Return all stderr lines accumulated by the pump thread.
 
-        Previously this called ``self._process.stderr.read()`` with no
-        argument, which is a blocking read-to-EOF; if the subprocess was
-        still alive (e.g., wait_for_ready timed out while modelenv was
-        finishing its S3 preload), the call hung indefinitely and pinned
-        the whole component pod. Set the fd non-blocking so ``.read()``
-        returns whatever is buffered/ready and never waits.
+        The pump thread continuously drains the pipe and appends each line
+        to ``self._stderr_lines``. We briefly join the pump so any final
+        lines emitted after SIGTERM but before process exit get flushed
+        into the buffer.
         """
-        if self._process is None or self._process.stderr is None:
-            return "\n".join(self._stderr_lines)
-
-        try:
-            os.set_blocking(self._process.stderr.fileno(), False)
-            stderr_data = self._process.stderr.read()
-            if stderr_data:
-                output = stderr_data.decode("utf-8", errors="replace").strip()
-                if output:
-                    self._stderr_lines.append(output)
-        except (OSError, ValueError, BlockingIOError):
-            pass
-
+        if self._stderr_pump is not None and self._stderr_pump.is_alive():
+            self._stderr_pump.join(timeout=2.0)
         return "\n".join(self._stderr_lines)
 
 
