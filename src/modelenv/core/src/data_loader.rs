@@ -446,6 +446,7 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
                 start_ns,
                 end_ns.min(snapshot_ts),
                 "ticks",
+                Some(cache),
             )
             .await?
         } else if source_uri.ends_with(".parquet") {
@@ -1344,6 +1345,7 @@ async fn determine_s3_sources_cached(
             start_timestamp_ns,
             effective_end_ns,
             "range",
+            cache,
         )
         .await;
     }
@@ -1784,7 +1786,16 @@ async fn latest_object_under_prefix(bucket: &str, prefix: &str) -> Result<String
 ///
 /// Most of the value lands on tick data, where ~48 hours of every weekend
 /// are guaranteed-missing yet were each costing a slow point lookup.
-async fn list_existing_s3_parquet_sources(source_uri: &str) -> Result<Vec<String>> {
+async fn list_existing_s3_parquet_sources(
+    source_uri: &str,
+    cache: Option<&MarketDataCache>,
+) -> Result<Vec<String>> {
+    if let Some(cache) = cache {
+        if let Some(cached) = cache.s3_listing(source_uri).await {
+            return Ok(cached);
+        }
+    }
+
     let (bucket, root_prefix) = parse_s3_uri(source_uri)?;
     let root_prefix = with_trailing_slash(&root_prefix);
 
@@ -1821,6 +1832,10 @@ async fn list_existing_s3_parquet_sources(source_uri: &str) -> Result<Vec<String
         .map(|value| format!("s3://{bucket}/{value}"))
         .collect();
 
+    if let Some(cache) = cache {
+        cache.put_s3_listing(source_uri.to_string(), keys.clone()).await;
+    }
+
     Ok(keys)
 }
 
@@ -1834,8 +1849,9 @@ async fn list_existing_s3_parquet_sources_in_range(
     start_timestamp_ns: i64,
     end_timestamp_ns: i64,
     time_interval: &str,
+    cache: Option<&MarketDataCache>,
 ) -> Result<Vec<String>> {
-    let candidates = list_existing_s3_parquet_sources(source_uri).await?;
+    let candidates = list_existing_s3_parquet_sources(source_uri, cache).await?;
     select_candidate_sources_with_range_details(
         candidates,
         source_uri,

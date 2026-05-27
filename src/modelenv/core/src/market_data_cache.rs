@@ -16,6 +16,7 @@ struct MarketDataCacheState {
     price_bars: HashMap<String, Vec<Bar>>,
     news_items: HashMap<String, Vec<News>>,
     tick_items: HashMap<String, Vec<Tick>>,
+    s3_listings: HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -67,5 +68,17 @@ impl MarketDataCache {
 
     pub async fn put_tick_items(&self, source: String, ticks: Vec<Tick>) {
         self.state.lock().await.tick_items.insert(source, ticks);
+    }
+
+    /// Cached output of `aws s3api list-objects-v2 --prefix <source_uri>`.
+    /// Keyed by the S3 prefix URI. The listing is reused across the session
+    /// so per-episode tick / bar resolution doesn't re-pay the ~10-15s
+    /// `list-objects-v2` cost when the bucket has tens of thousands of keys.
+    pub async fn s3_listing(&self, source_uri: &str) -> Option<Vec<String>> {
+        self.state.lock().await.s3_listings.get(source_uri).cloned()
+    }
+
+    pub async fn put_s3_listing(&self, source_uri: String, keys: Vec<String>) {
+        self.state.lock().await.s3_listings.insert(source_uri, keys);
     }
 }
