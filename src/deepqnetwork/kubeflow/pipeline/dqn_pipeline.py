@@ -35,6 +35,24 @@ MODELENV_CACHE_PVC = "modelenv-cache"
 MODELENV_CACHE_MOUNT = "/tmp/modelenv-cache"
 
 
+def _mount_minio_creds(task) -> None:
+    """Inject MinIO accesskey/secretkey from the mlpipeline-minio-artifact secret.
+
+    `dqn_model_registration` reads the backtest_metrics artifact via boto3 and
+    needs MINIO_ACCESS_KEY / MINIO_SECRET_KEY to reach the in-cluster MinIO when
+    the artifact URI is `minio://...`. The Secret is created by the KFP install
+    in the same namespace as each pipeline run.
+    """
+    kubernetes.use_secret_as_env(
+        task,
+        secret_name="mlpipeline-minio-artifact",
+        secret_key_to_env={
+            "accesskey": "MINIO_ACCESS_KEY",
+            "secretkey": "MINIO_SECRET_KEY",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Container Components
 # ---------------------------------------------------------------------------
@@ -371,6 +389,247 @@ def build_dqn_pipeline_config(
 
 
 # ---------------------------------------------------------------------------
+# Model Registration (lightweight Python component, mirrors forecaster pattern)
+# ---------------------------------------------------------------------------
+
+
+@dsl.component(
+    base_image="python:3.11-slim",
+    packages_to_install=["boto3", "model-registry"],
+)
+def dqn_model_registration(
+    model_checkpoint: Input[Model],
+    backtest_metrics: Input[Metrics],
+    pipeline_run_id: str,
+    registry_url: str,
+    symbol: str,
+    config_json: str,
+):
+    """Register the trained DQN agent in Model Registry after the backtest gate.
+
+    Reads the backtest_metrics JSON artifact, checks the degradation gate, and
+    registers + promotes the checkpoint to the production stage under the name
+    ``deepqnetwork-{symbol.lower()}``; the same name the dqnpf-intraday
+    pipeline resolves at evaluation time. Mirrors the forecaster
+    `model_registration` flow: bootstrap-promotes the first version when no
+    production exists, otherwise demotes the incumbent to staging.
+
+    Gracefully degrades on Model Registry SDK unavailability (logs and
+    returns); any other registration failure fails the pipeline step so the
+    checkpoint stays in S3 for inspection.
+    """
+    import json
+    import logging
+    import os
+    import sys
+    import uuid
+    from datetime import datetime, timezone
+    from urllib.parse import urlparse
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    def _log(msg: str, extra: dict = None) -> None:
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": "INFO",
+            "logger": __name__,
+            "message": msg,
+            "component": "dqn_model_registration",
+        }
+        if extra:
+            entry.update(extra)
+        print(json.dumps(entry), file=sys.stdout)
+
+    backtest_metrics_uri = backtest_metrics.uri
+    model_checkpoint_uri = model_checkpoint.uri
+
+    # Step 1: Read backtest metrics ------------------------------------------
+    _log("Reading backtest metrics", extra={"uri": backtest_metrics_uri})
+
+    import boto3
+
+    def _get_object_bytes(uri: str) -> bytes:
+        """URI-aware read: minio://b/k → MinIO; s3://b/k → AWS S3; bare key → AWS S3."""
+        parsed = urlparse(uri)
+        scheme = (parsed.scheme or "").lower()
+        if scheme == "minio":
+            client = boto3.client(
+                "s3",
+                endpoint_url="http://minio-service.kubeflow:9000",
+                aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+                aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+                region_name="us-east-1",
+            )
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+        elif scheme == "s3":
+            client = boto3.client("s3")
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+        else:
+            client = boto3.client("s3")
+            bucket = "prod-fintech-forex-sg-731833471586"
+            key = uri.lstrip("/")
+        return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+    try:
+        bt = json.loads(_get_object_bytes(backtest_metrics_uri).decode("utf-8"))
+    except Exception as e:
+        _log(
+            "Failed to read backtest metrics; failing pipeline step",
+            extra={"error": str(e)},
+        )
+        raise
+
+    # Step 2: Check degradation gate -----------------------------------------
+    gate = bt.get("degradation_gate", {})
+    gate_passed = gate.get("gate_passed", False)
+    gate_skipped = gate.get("gate_skipped", False)
+    gate_reason = gate.get("reason", "")
+
+    _log(
+        "Degradation gate result",
+        extra={
+            "gate_passed": gate_passed,
+            "gate_skipped": gate_skipped,
+            "reason": gate_reason,
+        },
+    )
+
+    if not gate_passed:
+        _log(
+            "DQN did not pass degradation gate; skipping registration. "
+            "Checkpoint retained in S3 for manual review.",
+            extra={"gate_reason": gate_reason},
+        )
+        return
+
+    # Step 3: Register in Model Registry -------------------------------------
+    _log(
+        "Gate passed; registering DQN in Model Registry",
+        extra={"registry_url": registry_url},
+    )
+
+    try:
+        from model_registry import ModelRegistry
+
+        registry = ModelRegistry(
+            server_address=registry_url, author="dqn-pipeline"
+        )
+
+        model_name = f"deepqnetwork-{symbol.lower()}"
+        version_id = str(uuid.uuid4())
+        config = json.loads(config_json) if config_json else {}
+        bt_metrics = bt.get("backtest_metrics", {})
+
+        existing_production: list = []
+        try:
+            for v in registry.get_model_versions(model_name):
+                if (v.custom_properties or {}).get(
+                    "lifecycle_stage"
+                ) == "production":
+                    existing_production.append(v)
+        except Exception:
+            # Registered model does not exist yet, first deployment.
+            pass
+
+        has_production = bool(existing_production)
+        if not has_production:
+            _log("No production DQN exists; bootstrapping initial deployment")
+
+        custom_properties = {
+            "version_id": version_id,
+            "symbol": symbol,
+            "step_size_seconds": str(config.get("step_size_seconds", "")),
+            "training_mode": str(config.get("training_mode", "")),
+            "training_timestamp": bt.get("timestamp", ""),
+            "cumulative_pnl": str(bt_metrics.get("cumulative_pnl", "")),
+            "sharpe_ratio": str(bt_metrics.get("sharpe_ratio", "")),
+            "max_drawdown": str(bt_metrics.get("max_drawdown", "")),
+            "win_rate": str(bt_metrics.get("win_rate", "")),
+            "avg_episode_reward": str(bt_metrics.get("avg_episode_reward", "")),
+            "hyperparameters": json.dumps(
+                {
+                    "gamma": config.get("gamma"),
+                    "epsilon_start": config.get("epsilon_start"),
+                    "epsilon_end": config.get("epsilon_end"),
+                    "epsilon_decay_steps": config.get("epsilon_decay_steps"),
+                    "batch_size": config.get("batch_size"),
+                    "learning_rate": config.get("learning_rate"),
+                    "replay_buffer_size": config.get("replay_buffer_size"),
+                    "target_update_freq": config.get("target_update_freq"),
+                    "hidden_dims": config.get("hidden_dims"),
+                    "num_episodes_per_range": config.get("num_episodes_per_range"),
+                }
+            ),
+            "pipeline_run_id": pipeline_run_id,
+            "lifecycle_stage": "production" if not has_production else "staging",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        registry.register_model(
+            name=model_name,
+            uri=model_checkpoint_uri,
+            model_format_name="pytorch",
+            model_format_version="2",
+            version=version_id,
+            description=(
+                f"DQN trained on {symbol} step_size={config.get('step_size_seconds')}s "
+                f"(run={pipeline_run_id})"
+            ),
+            version_description=f"version {version_id}",
+            metadata=custom_properties,
+        )
+
+        _log(
+            "DQN registered successfully",
+            extra={
+                "version_id": version_id,
+                "model_name": model_name,
+                "sharpe_ratio": bt_metrics.get("sharpe_ratio"),
+                "cumulative_pnl": bt_metrics.get("cumulative_pnl"),
+            },
+        )
+
+        if has_production:
+            new_version = registry.get_model_version(model_name, version_id)
+            if new_version is not None:
+                new_version.custom_properties["lifecycle_stage"] = "production"
+                registry.update(new_version)
+
+            for prev in existing_production:
+                prev.custom_properties["lifecycle_stage"] = "staging"
+                registry.update(prev)
+                _log(
+                    "Demoted previous production DQN version",
+                    extra={
+                        "version_id": (prev.custom_properties or {}).get(
+                            "version_id"
+                        )
+                    },
+                )
+
+        _log(
+            "DQN promoted to production",
+            extra={"version_id": version_id, "model_name": model_name},
+        )
+
+    except ImportError as e:
+        _log(
+            "Model Registry SDK not available; skipping registration",
+            extra={"error": str(e)},
+        )
+    except Exception as e:
+        _log(
+            "DQN registration failed; failing the pipeline step. "
+            "Model checkpoint remains in S3.",
+            extra={"error": str(e)},
+        )
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Pipeline Definition
 # ---------------------------------------------------------------------------
 
@@ -395,6 +654,7 @@ def dqn_pipeline(
     date_end: str = "",
     hour_of_day_start: int = 0,
     hour_of_day_end: int = 23,
+    model_registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
 ):
     """DQN Pipeline: config → train → backtest.
 
@@ -495,3 +755,26 @@ def dqn_pipeline(
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
+
+    # -----------------------------------------------------------------------
+    # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)
+    #
+    # Registers the trained checkpoint as ``deepqnetwork-{symbol.lower()}`` in
+    # the Kubeflow Model Registry and promotes it to the production stage when
+    # the backtest degradation gate passed. The dqnpf-intraday-pipeline reads
+    # production-stage entries by that exact name to assemble the combined
+    # DQN+Forecaster evaluation.
+    # -----------------------------------------------------------------------
+    registration_task = dqn_model_registration(
+        model_checkpoint=training_task.outputs["model_checkpoint"],
+        backtest_metrics=backtest_task.outputs["backtest_metrics"],
+        pipeline_run_id=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+        registry_url=model_registry_url,
+        symbol=symbol,
+        config_json=config_task.outputs["config_json"],
+    )
+    registration_task.set_retry(num_retries=1)
+    _mount_minio_creds(registration_task)
+    # Force registration to wait for backtest, KFP would otherwise schedule
+    # them in parallel since registration only reads the backtest output URI.
+    registration_task.after(backtest_task)
