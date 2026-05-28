@@ -702,6 +702,12 @@ def dqn_pipeline(
         hour_of_day_start=hour_of_day_start,
         hour_of_day_end=hour_of_day_end,
     )
+    # Disable caching across the DAG. Training/backtest produce versioned
+    # artifacts whose KFP cache key didn't change between image rebuilds;
+    # the cache served stale outputs from broken-image runs and broke the
+    # registration step. Each training run is intentionally one-shot;
+    # caching has no value here. Same posture as dqnpf-intraday-pipeline.
+    config_task.set_caching_options(enable_caching=False)
 
     # -----------------------------------------------------------------------
     # Step 1: DQN Training (with modelenv sidecar, 1 GPU, 16Gi memory)
@@ -723,6 +729,7 @@ def dqn_pipeline(
         hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     training_task.set_retry(num_retries=2)
+    training_task.set_caching_options(enable_caching=False)
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
     training_task.set_gpu_limit(1)
@@ -751,6 +758,7 @@ def dqn_pipeline(
         hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     backtest_task.set_retry(num_retries=1)
+    backtest_task.set_caching_options(enable_caching=False)
     backtest_task.set_memory_request("4Gi")
     backtest_task.set_memory_limit("4Gi")
     kubernetes.mount_pvc(
@@ -780,6 +788,7 @@ def dqn_pipeline(
         config_json=config_task.outputs["config_json"],
     )
     registration_task.set_retry(num_retries=1)
+    registration_task.set_caching_options(enable_caching=False)
     _mount_minio_creds(registration_task)
     # Force registration to wait for backtest, KFP would otherwise schedule
     # them in parallel since registration only reads the backtest output URI.
