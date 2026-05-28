@@ -359,19 +359,23 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
 
 def upload_checkpoint_to_s3(
     checkpoint_dir: str,
-    s3_key: str,
+    output_uri: str,
     bucket: str = S3_BUCKET,
 ) -> None:
-    """Find the final checkpoint in the directory and upload to S3.
+    """Find the final checkpoint in the directory and upload to the URI's store.
 
-    Looks for the checkpoint with the highest episode number.
+    URI-aware: routes ``minio://`` to in-cluster MinIO, ``s3://`` to AWS S3,
+    bare keys to the default bucket. See ``deepqnetwork.artifact_io``.
 
     Args:
         checkpoint_dir: Local directory containing checkpoint files.
-        s3_key: S3 object key path for the checkpoint artifact.
-        bucket: S3 bucket name.
+        output_uri: KFP artifact URI for the checkpoint (one of
+            ``minio://b/k``, ``s3://b/k``, or a bare key).
+        bucket: Fallback bucket for bare-key URIs.
     """
     from pathlib import Path
+
+    from deepqnetwork.artifact_io import put_file
 
     checkpoint_path = Path(checkpoint_dir)
     checkpoint_files = sorted(checkpoint_path.glob("dqn_episode_*.pt"))
@@ -385,21 +389,19 @@ def upload_checkpoint_to_s3(
     final_checkpoint_path = checkpoint_files[-1]
 
     logger.info(
-        "Uploading checkpoint to S3",
+        "Uploading checkpoint",
         extra={
             "local_path": str(final_checkpoint_path),
-            "s3_key": s3_key,
-            "bucket": bucket,
+            "output_uri": output_uri,
         },
     )
 
-    s3 = boto3.client("s3")
-    s3.upload_file(str(final_checkpoint_path), bucket, s3_key)
+    put_file(output_uri, str(final_checkpoint_path), default_bucket=bucket)
 
     logger.info(
-        "Checkpoint uploaded to S3",
+        "Checkpoint uploaded",
         extra={
-            "s3_key": s3_key,
+            "output_uri": output_uri,
             "size_bytes": final_checkpoint_path.stat().st_size,
         },
     )
@@ -686,10 +688,10 @@ def main() -> None:
         # Step 7: Always stop the sidecar on exit
         sidecar.stop()
 
-    # Step 8: Upload final checkpoint to S3
+    # Step 8: Upload final checkpoint to the KFP-advertised store
     upload_checkpoint_to_s3(
         checkpoint_dir=dqn_config.checkpoint_dir,
-        s3_key=args.checkpoint_output_path,
+        output_uri=args.checkpoint_output_path,
         bucket=args.bucket,
     )
 

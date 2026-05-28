@@ -731,6 +731,9 @@ def dqn_pipeline(
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
+    # Checkpoint upload now URI-routes via deepqnetwork.artifact_io; mount
+    # MinIO creds so the minio:// URI KFP advertises can actually be written.
+    _mount_minio_creds(training_task)
 
     # -----------------------------------------------------------------------
     # Step 2: DQN Backtest (CPU-only, 4Gi memory)
@@ -755,6 +758,9 @@ def dqn_pipeline(
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
+    # Backtest reads the checkpoint URI from training and writes its own
+    # metrics URI; both now URI-route via deepqnetwork.artifact_io.
+    _mount_minio_creds(backtest_task)
 
     # -----------------------------------------------------------------------
     # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)

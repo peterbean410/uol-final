@@ -506,41 +506,46 @@ def degradation_gate(
 
 
 def download_checkpoint_from_s3(
-    checkpoint_path: str,
+    checkpoint_uri: str,
     bucket: str = S3_BUCKET,
 ) -> str:
-    """Download a DQN checkpoint from S3 to a local path.
+    """Download a DQN checkpoint to a local path.
+
+    URI-aware: routes ``minio://`` to in-cluster MinIO, ``s3://`` to AWS S3,
+    bare keys to the default bucket. See ``deepqnetwork.artifact_io``.
 
     Args:
-        checkpoint_path: S3 object key for the checkpoint.
-        bucket: S3 bucket name.
+        checkpoint_uri: KFP artifact URI for the checkpoint (one of
+            ``minio://b/k``, ``s3://b/k``, or a bare key).
+        bucket: Fallback bucket for bare-key URIs.
 
     Returns:
         Local file path of the downloaded checkpoint.
 
     Raises:
-        FileNotFoundError: If the S3 key does not exist.
+        FileNotFoundError: If the object does not exist.
     """
-    s3 = boto3.client("s3")
+    from deepqnetwork.artifact_io import download_file
+
     local_path = "/tmp/dqn_checkpoint.pt"
 
     logger.info(
-        "Downloading DQN checkpoint from S3",
-        extra={"s3_key": checkpoint_path, "bucket": bucket},
+        "Downloading DQN checkpoint",
+        extra={"checkpoint_uri": checkpoint_uri},
     )
 
     try:
-        s3.download_file(bucket, checkpoint_path, local_path)
+        download_file(checkpoint_uri, local_path, default_bucket=bucket)
     except Exception as e:
         if "NoSuchKey" in str(type(e).__name__) or "404" in str(e):
             raise FileNotFoundError(
-                f"Checkpoint not found: s3://{bucket}/{checkpoint_path}"
+                f"Checkpoint not found: {checkpoint_uri}"
             ) from e
         raise
 
     logger.info(
         "DQN checkpoint downloaded",
-        extra={"s3_key": checkpoint_path, "local_path": local_path},
+        extra={"checkpoint_uri": checkpoint_uri, "local_path": local_path},
     )
     return local_path
 
@@ -591,30 +596,33 @@ def load_production_metrics_from_s3(
 
 def upload_metrics_to_s3(
     metrics: dict,
-    output_path: str,
+    output_uri: str,
     bucket: str = S3_BUCKET,
 ) -> None:
-    """Upload evaluation metrics as a JSON artifact to S3.
+    """Upload evaluation metrics as a JSON artifact to the URI's store.
+
+    URI-aware: routes ``minio://`` to in-cluster MinIO, ``s3://`` to AWS S3,
+    bare keys to the default bucket. See ``deepqnetwork.artifact_io``.
 
     Args:
         metrics: Dictionary of evaluation results to serialize.
-        output_path: S3 key path for the output JSON artifact.
-        bucket: S3 bucket name.
+        output_uri: KFP artifact URI for the output JSON artifact.
+        bucket: Fallback bucket for bare-key URIs.
     """
-    s3 = boto3.client("s3")
+    from deepqnetwork.artifact_io import put_object_bytes
 
-    payload = json.dumps(metrics, indent=2)
+    payload = json.dumps(metrics, indent=2).encode("utf-8")
 
-    s3.put_object(
-        Bucket=bucket,
-        Key=output_path,
-        Body=payload.encode("utf-8"),
-        ContentType="application/json",
+    put_object_bytes(
+        output_uri,
+        payload,
+        content_type="application/json",
+        default_bucket=bucket,
     )
 
     logger.info(
-        "Evaluation metrics uploaded to S3",
-        extra={"s3_key": output_path, "size_bytes": len(payload)},
+        "Evaluation metrics uploaded",
+        extra={"output_uri": output_uri, "size_bytes": len(payload)},
     )
 
 
@@ -754,9 +762,9 @@ def main() -> None:
         },
     )
 
-    # Step 1: Download checkpoint from S3
+    # Step 1: Download checkpoint from its KFP-advertised store (MinIO/S3/bare key)
     local_checkpoint_path = download_checkpoint_from_s3(
-        args.checkpoint_path, bucket=args.bucket
+        checkpoint_uri=args.checkpoint_path, bucket=args.bucket
     )
 
     # Step 2: Load checkpoint into DQNAdvisor
@@ -943,7 +951,7 @@ def main() -> None:
     }
 
     # Step 9: Upload metrics to S3
-    upload_metrics_to_s3(output, args.output_path, bucket=args.bucket)
+    upload_metrics_to_s3(output, output_uri=args.output_path, bucket=args.bucket)
 
     # Log final summary
     if not gate_passed:
