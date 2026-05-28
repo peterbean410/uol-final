@@ -193,10 +193,16 @@ class DqnpfRegistryClient:
         return None
 
 
-def resolve_production_checkpoint(model_name: str, registry_url: str = "http://model-registry:8080") -> str:
+def resolve_production_checkpoint(
+    model_name: str,
+    registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
+) -> str:
     """Module-level convenience function to resolve the latest production checkpoint.
 
     Used by the backtest component and predictor to look up parent checkpoints.
+    The default URL points at the in-cluster model-registry-service used
+    everywhere else in this repo (pipelines, InferenceService manifest, Airflow
+    trigger).
     """
     client = DqnpfRegistryClient(registry_url=registry_url)
     return client.resolve_production_checkpoint(model_name)

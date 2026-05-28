@@ -188,16 +188,25 @@ CheckpointResolver = Callable[[str, str], str]
 def _default_checkpoint_resolver(model_name: str, lifecycle_stage: str) -> str:
     """Default resolver delegates to the combined Model Registry client.
 
-    The real implementation lives under
-    ``tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client`` and is
-    built in Task 31.1. We import lazily so this module is testable without
-    the registry client present.
+    ``lifecycle_stage`` is part of the resolver protocol but
+    ``resolve_production_checkpoint`` only looks up the ``production``
+    stage (its only contract); we accept the arg for API stability but
+    do not forward it. The registry URL is read from the
+    ``MODEL_REGISTRY_URL`` env var (matches the predictor's
+    InferenceService and Airflow trigger conventions) and falls back to
+    the in-cluster service DNS.
     """
+    import os
+
     from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
         resolve_production_checkpoint,
     )
 
-    return resolve_production_checkpoint(model_name, lifecycle_stage)
+    registry_url = os.environ.get(
+        "MODEL_REGISTRY_URL",
+        "http://model-registry-service.kubeflow.svc.cluster.local:8080",
+    )
+    return resolve_production_checkpoint(model_name, registry_url=registry_url)
 
 
 # ---------------------------------------------------------------------------
