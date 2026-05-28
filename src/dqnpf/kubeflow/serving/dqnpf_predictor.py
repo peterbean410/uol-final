@@ -153,7 +153,7 @@ class DqnpfIntradayPredictor(kserve.Model):
             "DQN_MODEL_REGISTRY_NAME", "deepqnetwork-usdjpy"
         )
         self._forecaster_registry_name = os.environ.get(
-            "FORECASTER_MODEL_REGISTRY_NAME", "probabilisticforecaster-usdjpy"
+            "FORECASTER_MODEL_REGISTRY_NAME", "probabilistic-transformer-usdjpy-h1"
         )
 
         self._env_client: _ServingEnvClient | None = None

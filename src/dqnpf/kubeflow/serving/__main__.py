@@ -12,7 +12,7 @@ Environment variables:
     DEVICE: PyTorch device (default: "cpu").
     DQN_MODEL_REGISTRY_NAME: Registry name for DQN model (default: "deepqnetwork-usdjpy").
     FORECASTER_MODEL_REGISTRY_NAME: Registry name for Forecaster model
-        (default: "probabilisticforecaster-usdjpy").
+        (default: "probabilistic-transformer-usdjpy-h1").
 
 Requirements: 20.1, 22.1
 """

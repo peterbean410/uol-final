@@ -137,14 +137,14 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(tmp_path: Path) -> No
         assert cfg.dqn_checkpoint_path == "s3://bucket/deepqnetwork-usdjpy/production.pt"
         assert (
             cfg.forecaster_checkpoint_path
-            == "s3://bucket/probabilisticforecaster-usdjpy/production.pt"
+            == "s3://bucket/probabilistic-transformer-usdjpy-h1/production.pt"
         )
         return _passing_comparison()
 
     payload = run_dqnpf_backtest(
         integration_config_yaml=str(yaml_path),
         dqn_model_registry_name="deepqnetwork-usdjpy",
-        forecaster_model_registry_name="probabilisticforecaster-usdjpy",
+        forecaster_model_registry_name="probabilistic-transformer-usdjpy-h1",
         output_artifact_path=str(output_path),
         checkpoint_resolver=resolver,
         run_backtest_fn=runner,
@@ -154,7 +154,7 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(tmp_path: Path) -> No
     assert calls["runner"] == 1
     assert calls["resolver"] == [
         ("deepqnetwork-usdjpy", "production"),
-        ("probabilisticforecaster-usdjpy", "production"),
+        ("probabilistic-transformer-usdjpy-h1", "production"),
     ]
     assert output_path.exists()
     written = json.loads(output_path.read_text())
@@ -169,7 +169,7 @@ def test_run_dqnpf_backtest_records_failing_thresholds(tmp_path: Path) -> None:
     payload = run_dqnpf_backtest(
         integration_config_yaml=str(yaml_path),
         dqn_model_registry_name="deepqnetwork-usdjpy",
-        forecaster_model_registry_name="probabilisticforecaster-usdjpy",
+        forecaster_model_registry_name="probabilistic-transformer-usdjpy-h1",
         output_artifact_path=str(output_path),
         checkpoint_resolver=lambda n, s: f"s3://bucket/{n}.pt",
         run_backtest_fn=lambda cfg: _failing_comparison(),
@@ -194,7 +194,7 @@ def test_run_dqnpf_backtest_uses_pipeline_stages(tmp_path: Path) -> None:
     run_dqnpf_backtest(
         integration_config_yaml=str(yaml_path),
         dqn_model_registry_name="deepqnetwork-usdjpy",
-        forecaster_model_registry_name="probabilisticforecaster-usdjpy",
+        forecaster_model_registry_name="probabilistic-transformer-usdjpy-h1",
         output_artifact_path=str(output_path),
         checkpoint_resolver=lambda n, s: stages.append((n, s)) or f"s3://{n}/{s}.pt",
         run_backtest_fn=lambda cfg: _passing_comparison(),
@@ -203,7 +203,7 @@ def test_run_dqnpf_backtest_uses_pipeline_stages(tmp_path: Path) -> None:
 
     assert stages == [
         ("deepqnetwork-usdjpy", "staging"),
-        ("probabilisticforecaster-usdjpy", "staging"),
+        ("probabilistic-transformer-usdjpy-h1", "staging"),
     ]
 
 
@@ -220,7 +220,7 @@ def test_run_dqnpf_backtest_emits_summary_log(
         run_dqnpf_backtest(
             integration_config_yaml=str(yaml_path),
             dqn_model_registry_name="deepqnetwork-usdjpy",
-            forecaster_model_registry_name="probabilisticforecaster-usdjpy",
+            forecaster_model_registry_name="probabilistic-transformer-usdjpy-h1",
             output_artifact_path=str(output_path),
             checkpoint_resolver=lambda n, s: "s3://stub",
             run_backtest_fn=lambda cfg: _passing_comparison(),

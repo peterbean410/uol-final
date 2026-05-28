@@ -3,7 +3,7 @@
 # Description: Combined DQN + ProbabilisticForecaster intraday integration: runs the screening backtest against production-stage parent checkpoints from the Model Registry and emits a BacktestComparison + ThresholdReport artifact.
 # Inputs:
 #    dqn_model_registry_name: str [Default: 'deepqnetwork-usdjpy']
-#    forecaster_model_registry_name: str [Default: 'probabilisticforecaster-usdjpy']
+#    forecaster_model_registry_name: str [Default: 'probabilistic-transformer-usdjpy-h1']
 #    integration_config_yaml: str [Default: '/etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml']
 components:
   comp-dqnpf-backtest:
@@ -74,7 +74,7 @@ root:
         isOptional: true
         parameterType: STRING
       forecaster_model_registry_name:
-        defaultValue: probabilisticforecaster-usdjpy
+        defaultValue: probabilistic-transformer-usdjpy-h1
         isOptional: true
         parameterType: STRING
       integration_config_yaml:

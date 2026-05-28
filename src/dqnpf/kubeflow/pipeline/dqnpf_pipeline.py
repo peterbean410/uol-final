@@ -82,7 +82,7 @@ def dqnpf_intraday_pipeline(
         "/etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml"
     ),
     dqn_model_registry_name: str = "deepqnetwork-usdjpy",
-    forecaster_model_registry_name: str = "probabilisticforecaster-usdjpy",
+    forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1",
 ):
     """Single-step DAG: dqnpf_backtest with retry(3).
 

@@ -251,7 +251,7 @@ class TestParameterForwarding:
             run_id = trigger.submit_run(
                 integration_config_yaml="/etc/dqnpf/config/dqnpf_pipeline_config.yaml",
                 dqn_model_registry_name="deepqnetwork-usdjpy",
-                forecaster_model_registry_name="probabilisticforecaster-usdjpy",
+                forecaster_model_registry_name="probabilistic-transformer-usdjpy-h1",
                 episode_start_ts=episode_start_ts,
                 episode_end_ts=episode_end_ts,
             )
@@ -307,7 +307,7 @@ class TestParameterForwarding:
             trigger.client = mock_client
 
             dqn_name = "deepqnetwork-usdjpy"
-            forecaster_name = "probabilisticforecaster-usdjpy"
+            forecaster_name = "probabilistic-transformer-usdjpy-h1"
             config_yaml = "/etc/dqnpf/config/custom_config.yaml"
 
             trigger.submit_run(
@@ -370,7 +370,7 @@ class TestParameterForwarding:
             trigger.submit_run(
                 integration_config_yaml="/etc/dqnpf/config/dqnpf_pipeline_config.yaml",
                 dqn_model_registry_name="deepqnetwork-usdjpy",
-                forecaster_model_registry_name="probabilisticforecaster-usdjpy",
+                forecaster_model_registry_name="probabilistic-transformer-usdjpy-h1",
             )
 
             call_args = mock_client.create_run_from_pipeline_func.call_args

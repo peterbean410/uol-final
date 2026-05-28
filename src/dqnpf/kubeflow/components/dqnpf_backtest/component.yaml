@@ -21,7 +21,7 @@ inputs:
   - name: forecaster_model_registry_name
     type: String
     description: Model Registry entry name for the Forecaster parent checkpoint.
-    default: probabilisticforecaster-usdjpy
+    default: probabilistic-transformer-usdjpy-h1
 
 outputs:
   - name: backtest_report

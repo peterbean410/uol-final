@@ -68,7 +68,7 @@ spec:
           - name: DQN_MODEL_REGISTRY_NAME
             value: "deepqnetwork-usdjpy"
           - name: FORECASTER_MODEL_REGISTRY_NAME
-            value: "probabilisticforecaster-usdjpy"
+            value: "probabilistic-transformer-usdjpy-h1"
           - name: MODEL_REGISTRY_URL
             value: "http://model-registry-service.kubeflow.svc.cluster.local:8080"
           # MinIO credentials for fetching checkpoint artifacts whose URI in

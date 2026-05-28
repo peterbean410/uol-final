@@ -22,7 +22,7 @@ seed: 0
 
 # --- Pipeline-level fields ---
 dqn_model_registry_name: "deepqnetwork-usdjpy"
-forecaster_model_registry_name: "probabilisticforecaster-usdjpy"
+forecaster_model_registry_name: "probabilistic-transformer-usdjpy-h1"
 dqn_lifecycle_stage: "production"
 forecaster_lifecycle_stage: "production"
 gpu_enabled: false

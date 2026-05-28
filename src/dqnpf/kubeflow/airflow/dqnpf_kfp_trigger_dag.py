@@ -34,7 +34,7 @@ _KFP_HOST = "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
 # Parent model registry names
 _DQN_MODEL_REGISTRY_NAME = "deepqnetwork-usdjpy"
-_FORECASTER_MODEL_REGISTRY_NAME = "probabilisticforecaster-usdjpy"
+_FORECASTER_MODEL_REGISTRY_NAME = "probabilistic-transformer-usdjpy-h1"
 
 # Walk-forward window: 30 days of episode data for backtest
 _WALKFORWARD_DAYS = 30

@@ -53,7 +53,7 @@ class DqnpfPipelineConfig:
 
     # --- Pipeline-level fields ---
     dqn_model_registry_name: str = "deepqnetwork-usdjpy"
-    forecaster_model_registry_name: str = "probabilisticforecaster-usdjpy"
+    forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1"
     dqn_lifecycle_stage: str = "production"
     forecaster_lifecycle_stage: str = "production"
     gpu_enabled: bool = False

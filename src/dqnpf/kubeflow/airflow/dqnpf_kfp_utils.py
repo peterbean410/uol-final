@@ -78,7 +78,7 @@ class DqnpfKFPTrigger:
         self,
         integration_config_yaml: str,
         dqn_model_registry_name: str = "deepqnetwork-usdjpy",
-        forecaster_model_registry_name: str = "probabilisticforecaster-usdjpy",
+        forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1",
         episode_start_ts: int | None = None,
         episode_end_ts: int | None = None,
     ) -> str:
@@ -210,7 +210,7 @@ class DqnpfKFPTrigger:
 
 # Default parent model registry names
 DEFAULT_DQN_MODEL_REGISTRY_NAME = "deepqnetwork-usdjpy"
-DEFAULT_FORECASTER_MODEL_REGISTRY_NAME = "probabilisticforecaster-usdjpy"
+DEFAULT_FORECASTER_MODEL_REGISTRY_NAME = "probabilistic-transformer-usdjpy-h1"
 
 
 def check_parent_models_available(
