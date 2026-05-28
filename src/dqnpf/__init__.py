@@ -1,33 +1,13 @@
 """Intraday trading agent: DQN + ProbabilisticForecaster integration layer.
 
-Exports the public interface used by training and backtesting entry points.
+Symbols are intentionally NOT re-exported at the package root so that
+lightweight consumers (pipeline DSL compilation in CI, config inspection)
+don't pay the cost of importing numpy/torch via forecaster_bridge etc.
+Use the explicit module paths:
+
+    from tradingmodel.intraday.dqnpf.action_mapper import map_action, ACTION_MAP
+    from tradingmodel.intraday.dqnpf.config import IntegrationConfig, load_config
+    from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
+    from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
+    from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
 """
-
-from __future__ import annotations
-
-from tradingmodel.intraday.dqnpf.action_mapper import (
-    ACTION_MAP,
-    ACTION_NAMES,
-    ActionUnit,
-    Direction,
-    map_action,
-)
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig, load_config
-from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer, ScreenedAction
-from tradingmodel.intraday.dqnpf.signal_cache import CachedSignal, SignalCache
-
-__all__ = [
-    "ACTION_MAP",
-    "ACTION_NAMES",
-    "ActionUnit",
-    "CachedSignal",
-    "Direction",
-    "ForecasterBridge",
-    "IntegrationConfig",
-    "IntegrationLayer",
-    "ScreenedAction",
-    "SignalCache",
-    "load_config",
-    "map_action",
-]

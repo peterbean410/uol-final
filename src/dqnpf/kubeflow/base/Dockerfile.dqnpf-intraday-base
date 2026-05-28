@@ -44,7 +44,7 @@ COPY tradingmodel/ /app/tradingmodel/
 ENV PYTHONPATH=/app:${PYTHONPATH:-}
 
 # Build-time import smoke test (Requirements 20.1, 20.2, DQNPF-IMG-1)
-RUN python -c "from tradingmodel.intraday.dqnpf import IntegrationLayer; \
+RUN python -c "from tradingmodel.intraday.dqnpf.integration import IntegrationLayer; \
 from deepqnetwork.advisor import DQNAdvisor; \
 from probabilisticforecaster.inference import ForecasterInference; \
 print('dqnpf-intraday-base import smoke OK')"

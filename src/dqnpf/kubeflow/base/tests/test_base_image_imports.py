@@ -36,7 +36,7 @@ def test_required_module_importable(module_name: str, attr: str) -> None:
 
 def test_dual_import_smoke_runs_in_process() -> None:
     """The exact import line baked into the Dockerfile must succeed locally."""
-    from tradingmodel.intraday.dqnpf import IntegrationLayer  # noqa: F401
+    from tradingmodel.intraday.dqnpf.integration import IntegrationLayer  # noqa: F401
     from deepqnetwork.advisor import DQNAdvisor  # noqa: F401
     from probabilisticforecaster.inference import ForecasterInference  # noqa: F401
 
@@ -48,7 +48,7 @@ def test_dockerfile_contains_import_smoke_step() -> None:
     )
     assert dockerfile.exists(), f"missing {dockerfile}"
     content = dockerfile.read_text()
-    assert "from tradingmodel.intraday.dqnpf import IntegrationLayer" in content
+    assert "from tradingmodel.intraday.dqnpf.integration import IntegrationLayer" in content
     assert "from deepqnetwork.advisor import DQNAdvisor" in content
     assert "from probabilisticforecaster.inference import ForecasterInference" in content
 
