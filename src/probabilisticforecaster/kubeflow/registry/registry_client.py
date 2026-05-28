@@ -64,8 +64,13 @@ class ForecasterRegistryClient:
         Args:
             registry_url: URL of the Kubeflow Model Registry server.
         """
+        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
+        # defaults is_secure=True and refuses without a token even for http.
         self.registry = ModelRegistry(
-            server_address=registry_url, author="forecaster-pipeline"
+            server_address=registry_url,
+            author="forecaster-pipeline",
+            is_secure=not registry_url.lower().startswith("http://"),
+            user_token="",
         )
 
     def _registered_model_name(self, symbol: str, horizon: int) -> str:

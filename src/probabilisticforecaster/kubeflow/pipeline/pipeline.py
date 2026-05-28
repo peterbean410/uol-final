@@ -468,7 +468,10 @@ def resolve_production_checkpoint(
 
     try:
         registry = ModelRegistry(
-            server_address=registry_url, author="forecaster-pipeline"
+            server_address=registry_url,
+            author="forecaster-pipeline",
+            is_secure=not registry_url.lower().startswith("http://"),
+            user_token="",
         )
         versions = list(registry.get_model_versions(model_name))
     except Exception as e:
@@ -641,7 +644,10 @@ def model_registration(
         from model_registry import ModelRegistry
 
         registry = ModelRegistry(
-            server_address=registry_url, author="forecaster-pipeline"
+            server_address=registry_url,
+            author="forecaster-pipeline",
+            is_secure=not registry_url.lower().startswith("http://"),
+            user_token="",
         )
 
         # Build model name from symbol and horizon

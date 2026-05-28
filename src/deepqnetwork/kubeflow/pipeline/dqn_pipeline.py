@@ -514,8 +514,13 @@ def dqn_model_registration(
     try:
         from model_registry import ModelRegistry
 
+        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
+        # defaults is_secure=True and refuses without a token even for http.
         registry = ModelRegistry(
-            server_address=registry_url, author="dqn-pipeline"
+            server_address=registry_url,
+            author="dqn-pipeline",
+            is_secure=not registry_url.lower().startswith("http://"),
+            user_token="",
         )
 
         model_name = f"deepqnetwork-{symbol.lower()}"

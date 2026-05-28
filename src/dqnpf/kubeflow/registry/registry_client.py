@@ -35,8 +35,16 @@ class DqnpfRegistryClient:
     MODEL_NAME = "dqnpf-intraday"
 
     def __init__(self, registry_url: str):
+        # The in-cluster model-registry-service exposes plain HTTP on 8080;
+        # model-registry SDK >= 0.2.16 defaults is_secure=True and raises
+        # `user token must be provided for secure connection` unless we
+        # opt out explicitly even for http:// URLs.
+        is_secure = not registry_url.lower().startswith("http://")
         self.registry = ModelRegistry(
-            server_address=registry_url, author="dqnpf-pipeline"
+            server_address=registry_url,
+            author="dqnpf-pipeline",
+            is_secure=is_secure,
+            user_token="",
         )
 
     def register_combined_version(
