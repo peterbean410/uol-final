@@ -126,15 +126,21 @@ class DqnpfRegistryClient:
         return version_id
 
     def resolve_production_checkpoint(self, model_name: str) -> str:
-        """Return the S3 path of the latest production-stage entry for model_name.
+        """Return the checkpoint path of the latest production-stage entry.
 
-        Raises ValueError if no production entry exists.
+        Combined dqnpf-intraday versions (written by this client) store the
+        path in the ``s3_path`` custom property. Parent models (DQN,
+        forecaster) are registered via ModelRegistry.register_model(uri=...),
+        which records the checkpoint path on the ModelVersion/ModelArtifact
+        rather than a custom property, so fall back to those for parents.
+
+        Raises ValueError if no production entry exists or it has no path.
         """
         versions = self.registry.get_model_versions(model_name)
         production_versions = [
             v
             for v in versions
-            if v.custom_properties.get("lifecycle_stage") == "production"
+            if (v.custom_properties or {}).get("lifecycle_stage") == "production"
         ]
 
         if not production_versions:
@@ -142,13 +148,37 @@ class DqnpfRegistryClient:
                 f"No production-stage version found for model '{model_name}'"
             )
 
-        # Sort by registered_at descending, return the most recent
-        production_versions.sort(
-            key=lambda v: v.custom_properties.get("registered_at", ""),
-            reverse=True,
-        )
+        # Sort newest-first. Combined versions stamp ``registered_at``; parent
+        # models (DQN/forecaster) stamp ``created_at``, accept either.
+        def _registered_ts(v) -> str:
+            props = v.custom_properties or {}
+            return props.get("registered_at") or props.get("created_at") or ""
 
-        return production_versions[0].custom_properties["s3_path"]
+        production_versions.sort(key=_registered_ts, reverse=True)
+        latest = production_versions[0]
+
+        # 1) Combined versions: explicit s3_path custom property.
+        s3_path = (latest.custom_properties or {}).get("s3_path")
+        if s3_path:
+            return s3_path
+
+        # 2) Some SDK versions surface the artifact uri directly on the version.
+        version_uri = getattr(latest, "uri", None)
+        if version_uri:
+            return version_uri
+
+        # 3) Canonical model-registry path: the uri lives on the ModelArtifact.
+        get_artifact = getattr(self.registry, "get_model_artifact", None)
+        if get_artifact is not None:
+            artifact = get_artifact(model_name, latest.name)
+            artifact_uri = getattr(artifact, "uri", None) if artifact else None
+            if artifact_uri:
+                return artifact_uri
+
+        raise ValueError(
+            f"Production version for model '{model_name}' has no checkpoint "
+            f"path (no s3_path custom property and no model artifact uri)"
+        )
 
     def promote_to_production(self, version_id: str) -> bool:
         """Promote a version to production stage.

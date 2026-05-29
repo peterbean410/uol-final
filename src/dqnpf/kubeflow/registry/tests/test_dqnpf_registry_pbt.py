@@ -429,6 +429,57 @@ class TestProductionLookupReturnsLatest:
 
 
 # ---------------------------------------------------------------------------
+# Property DQNPF-REG-2b: Parent models resolve via artifact uri (no s3_path)
+# ---------------------------------------------------------------------------
+
+
+class TestParentModelResolvesViaUri:
+    """Parent models (DQN/forecaster) carry no ``s3_path`` custom property.
+
+    They are registered via ModelRegistry.register_model(uri=...), so the
+    checkpoint path lives on the version/artifact uri. resolve_production_
+    checkpoint() must return that uri rather than raising KeyError on a
+    missing ``s3_path`` key (regression for the dqnpf-backtest failure).
+
+    **Validates: Requirements 23.1**
+    """
+
+    @given(uri=s3_paths, created_offset=st.integers(min_value=0, max_value=10))
+    @settings(
+        max_examples=30,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    def test_resolve_returns_uri_when_no_s3_path(
+        self, uri: str, created_offset: int
+    ):
+        """A production version without s3_path resolves to its uri."""
+        client = create_test_client()
+        model_name = "deepqnetwork-usdjpy"
+        client.registry.register_model(name=model_name)
+
+        created_at = (
+            datetime(2024, 1, 1, tzinfo=timezone.utc)
+            + timedelta(days=created_offset)
+        ).isoformat()
+        # Parent-model custom_properties: created_at, lifecycle_stage; NO s3_path.
+        client.registry.register_model_version(
+            name=str(uuid.uuid4()),
+            version="1",
+            model_name=model_name,
+            uri=uri,
+            description="Parent DQN version",
+            custom_properties={
+                "version_id": str(uuid.uuid4()),
+                "lifecycle_stage": "production",
+                "created_at": created_at,
+            },
+        )
+
+        assert client.resolve_production_checkpoint(model_name) == uri
+
+
+# ---------------------------------------------------------------------------
 # Property DQNPF-REG-3: Archive respects retention
 # ---------------------------------------------------------------------------
 
