@@ -16,12 +16,21 @@ Requirements: 21.1
 from pathlib import Path
 from typing import Union
 
-from kfp import compiler, dsl
+from kfp import compiler, dsl, kubernetes
 from kfp.dsl import Dataset, Output
 
 # ECR registry base matches the rest of the platform's images.
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
 COMPONENT_IMAGE = f"{ECR_BASE}/dqnpf-intraday-backtest:latest"
+
+# The in-pod modelenv sidecar runs in Training mode (modelenv's default) and
+# preloads market data on startup. The deepqnetwork warmup DAG populates this
+# RWX PVC; mounting it at modelenv's DEFAULT_LOCAL_CACHE_DIR lets the preload
+# read from the warm cache instead of pulling everything from S3 (which blows
+# past the sidecar healthcheck timeout). Matches the DQN training/backtest
+# components (see deepqnetwork/kubeflow/pipeline/dqn_pipeline.py).
+MODELENV_CACHE_PVC = "modelenv-cache"
+MODELENV_CACHE_MOUNT = "/tmp/modelenv-cache"
 
 PIPELINE_NAME = "dqnpf-intraday-pipeline"
 PIPELINE_DESCRIPTION = (
@@ -99,6 +108,13 @@ def dqnpf_intraday_pipeline(
     # Disable caching: every backtest run resolves fresh production checkpoints
     # and emits a versioned artifact, cached output would be a foot-gun.
     task.set_caching_options(enable_caching=False)
+    # Mount the warm modelenv cache so the in-pod sidecar's training-data
+    # preload reads locally instead of downloading from S3 on every run.
+    kubernetes.mount_pvc(
+        task,
+        pvc_name=MODELENV_CACHE_PVC,
+        mount_path=MODELENV_CACHE_MOUNT,
+    )
 
 
 # ---------------------------------------------------------------------------

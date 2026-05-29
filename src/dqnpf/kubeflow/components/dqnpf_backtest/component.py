@@ -51,7 +51,10 @@ logger = logging.getLogger(__name__)
 _MODELENV_BINARY = os.environ.get(
     "MODELENV_BINARY", "/usr/local/bin/modelenv-server"
 )
-_MODELENV_HEALTHCHECK_TIMEOUT_S = 30.0
+# modelenv runs in Training mode (its default) and preloads market data before
+# binding the gRPC port. Even reading from the warm cache PVC this takes longer
+# than 30s, so allow the same headroom the DQN backtest component uses.
+_MODELENV_HEALTHCHECK_TIMEOUT_S = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +62,24 @@ _MODELENV_HEALTHCHECK_TIMEOUT_S = 30.0
 # ---------------------------------------------------------------------------
 
 
-def _wait_for_port(host: str, port: int, timeout_s: float) -> None:
-    """Block until ``host:port`` accepts a TCP connection, or raise on timeout."""
+def _wait_for_port(
+    host: str, port: int, timeout_s: float, proc: subprocess.Popen
+) -> None:
+    """Block until ``host:port`` accepts a TCP connection, or raise.
+
+    Fails fast (rather than waiting out the full timeout) if the modelenv
+    process exits before the port opens. modelenv's own logs stream to this
+    pod's stdout/stderr, so the cause is visible above this error.
+    """
     deadline = time.monotonic() + timeout_s
     last_err: Exception | None = None
     while time.monotonic() < deadline:
+        returncode = proc.poll()
+        if returncode is not None:
+            raise RuntimeError(
+                f"modelenv exited before binding {host}:{port} "
+                f"(returncode={returncode}); see modelenv logs above"
+            )
         try:
             with socket.create_connection((host, port), timeout=1.0):
                 return
@@ -90,13 +106,13 @@ def _start_modelenv_sidecar(symbol: str, port: int = 50051) -> subprocess.Popen:
     )
     # modelenv-server takes --addr host:port (default 0.0.0.0:50051) and
     # rejects unknown flags, so --port is invalid. Bind on all interfaces so
-    # the localhost healthcheck below connects.
+    # the localhost healthcheck below connects. Inherit this process's
+    # stdout/stderr so modelenv's startup logs land in the pod logs for
+    # debugging (rather than being swallowed by an undrained pipe).
     proc = subprocess.Popen(
         [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
     )
-    _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S)
+    _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S, proc)
     logger.info(json.dumps({"event": "modelenv.ready", "port": port}))
     return proc
 
