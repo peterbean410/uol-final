@@ -45,7 +45,12 @@ from tradingmodel.intraday.dqnpf.kubeflow.pipeline.config_schema import (
 
 logger = logging.getLogger(__name__)
 
-_MODELENV_BINARY = os.environ.get("MODELENV_BINARY", "/usr/local/bin/modelenv")
+# dqn/base installs the binary as /usr/local/bin/modelenv-server (see
+# Dockerfile.dqn-base); the DQN training/backtest components reference the same
+# path. Match it here.
+_MODELENV_BINARY = os.environ.get(
+    "MODELENV_BINARY", "/usr/local/bin/modelenv-server"
+)
 _MODELENV_HEALTHCHECK_TIMEOUT_S = 30.0
 
 
@@ -83,8 +88,11 @@ def _start_modelenv_sidecar(symbol: str, port: int = 50051) -> subprocess.Popen:
             }
         )
     )
+    # modelenv-server takes --addr host:port (default 0.0.0.0:50051) and
+    # rejects unknown flags, so --port is invalid. Bind on all interfaces so
+    # the localhost healthcheck below connects.
     proc = subprocess.Popen(
-        [_MODELENV_BINARY, "--port", str(port), "--symbol", symbol],
+        [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )

@@ -1,7 +1,7 @@
 # dqnpf-intraday base image, combined predictor and KFP backtest base.
 #
 # Extends the DQN base image (PyTorch CPU, grpcio, environment_pb2, modelenv
-# binary at /usr/local/bin/modelenv) with the probabilisticforecaster and
+# binary at /usr/local/bin/modelenv-server) with the probabilisticforecaster and
 # tradingmodel.intraday.dqnpf packages so that DQNAdvisor, ForecasterInference,
 # and IntegrationLayer can all be imported in a single Python process.
 #
