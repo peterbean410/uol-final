@@ -13,6 +13,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 from model_registry import ModelRegistry
 
@@ -39,9 +40,18 @@ class DqnpfRegistryClient:
         # model-registry SDK >= 0.2.16 defaults is_secure=True and raises
         # `user token must be provided for secure connection` unless we
         # opt out explicitly even for http:// URLs.
-        is_secure = not registry_url.lower().startswith("http://")
+        #
+        # The SDK builds its final endpoint as f"{server_address}:{port}",
+        # so the port must be handed to it via the `port` kwarg, embedding
+        # it in server_address (e.g. "...:8080") collides with the default
+        # port=443 and yields an invalid "...:8080:443" URL.
+        parsed = urlsplit(registry_url)
+        is_secure = parsed.scheme != "http"
+        server_address = f"{parsed.scheme}://{parsed.hostname}"
+        port = parsed.port or (443 if is_secure else 80)
         self.registry = ModelRegistry(
-            server_address=registry_url,
+            server_address=server_address,
+            port=port,
             author="dqnpf-pipeline",
             is_secure=is_secure,
             user_token="",

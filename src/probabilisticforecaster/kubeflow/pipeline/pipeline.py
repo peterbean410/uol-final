@@ -467,10 +467,19 @@ def resolve_production_checkpoint(
         return ""
 
     try:
+        from urllib.parse import urlsplit
+
+        # The SDK builds its endpoint as f"{server_address}:{port}", so the
+        # port must go through the `port` kwarg, embedding it in
+        # server_address collides with the default port and yields a broken
+        # "...:8080:443" URL.
+        parsed = urlsplit(registry_url)
+        is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
-            server_address=registry_url,
+            server_address=f"{parsed.scheme}://{parsed.hostname}",
+            port=parsed.port or (443 if is_secure else 80),
             author="forecaster-pipeline",
-            is_secure=not registry_url.lower().startswith("http://"),
+            is_secure=is_secure,
             user_token="",
         )
         versions = list(registry.get_model_versions(model_name))
@@ -641,12 +650,21 @@ def model_registration(
     )
 
     try:
+        from urllib.parse import urlsplit
+
         from model_registry import ModelRegistry
 
+        # The SDK builds its endpoint as f"{server_address}:{port}", so the
+        # port must go through the `port` kwarg, embedding it in
+        # server_address collides with the default port and yields a broken
+        # "...:8080:443" URL.
+        parsed = urlsplit(registry_url)
+        is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
-            server_address=registry_url,
+            server_address=f"{parsed.scheme}://{parsed.hostname}",
+            port=parsed.port or (443 if is_secure else 80),
             author="forecaster-pipeline",
-            is_secure=not registry_url.lower().startswith("http://"),
+            is_secure=is_secure,
             user_token="",
         )
 

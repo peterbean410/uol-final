@@ -208,10 +208,24 @@ def register_and_promote(
 
     # Step 2: Connect to Model Registry and check for production model -------
     try:
+        from urllib.parse import urlsplit
+
         from model_registry import ModelRegistry
 
+        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
+        # defaults is_secure=True and refuses without a token even for http.
+        # The SDK builds its endpoint as f"{server_address}:{port}", so the
+        # port must go through the `port` kwarg, embedding it in
+        # server_address collides with the default port and yields a broken
+        # "...:8080:443" URL.
+        parsed = urlsplit(registry_url)
+        is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
-            server_address=registry_url, author="dqn-pipeline"
+            server_address=f"{parsed.scheme}://{parsed.hostname}",
+            port=parsed.port or (443 if is_secure else 80),
+            author="dqn-pipeline",
+            is_secure=is_secure,
+            user_token="",
         )
     except ImportError as e:
         _log(
