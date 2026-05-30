@@ -346,7 +346,20 @@ def run_dqnpf_backtest(
             _stop_modelenv_sidecar(sidecar)
 
     payload = _serialise_result(comparison, report, integration_cfg)
-    Path(output_artifact_path).write_text(json.dumps(payload, default=str, indent=2))
+    payload_json = json.dumps(payload, default=str, indent=2)
+    # KFP hands us the artifact's minio:// (or s3://) URI; torch/Path can't write
+    # to those schemes, so route uploads through artifact_io like the DQN side.
+    # Bare local paths (unit tests) write directly.
+    if urlparse(output_artifact_path).scheme.lower() in ("minio", "s3"):
+        from deepqnetwork import artifact_io
+
+        artifact_io.put_object_bytes(
+            output_artifact_path,
+            payload_json.encode("utf-8"),
+            content_type="application/json",
+        )
+    else:
+        Path(output_artifact_path).write_text(payload_json)
     _emit_summary_logs(comparison, report)
 
     return payload

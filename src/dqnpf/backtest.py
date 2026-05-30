@@ -315,6 +315,8 @@ def _run_episode(
     )
     records: list[StepRecord] = []
     step_idx = 0
+    warmup_logged = False
+    forecaster_engaged = False
     while not getattr(obs, "done", False):
         state = preprocessor.process(obs)
         dqn_result = dqn.recommend_action(state)
@@ -323,7 +325,14 @@ def _run_episode(
         try:
             mu, sigma = cache.get_or_compute(latest_ts, bridge.compute_signal)
             forecaster_ready = True
-        except (ValueError, KeyError):
+            if not forecaster_engaged:
+                logger.info(
+                    "forecaster engaged at step %d (latest_bar_ts=%d)",
+                    step_idx,
+                    latest_ts,
+                )
+                forecaster_engaged = True
+        except (ValueError, KeyError) as exc:
             # Forecaster warm-up: modelenv's recent_bars only fills in as the
             # episode steps forward (it returns up to RECENT_WINDOW completed
             # bars before the cursor), so the first ~LOOKBACK_WINDOW M5 bars are
@@ -332,6 +341,15 @@ def _run_episode(
             # run DQN-only for these steps instead of failing the backtest.
             mu, sigma = 0.0, 0.0
             forecaster_ready = False
+            if not warmup_logged:
+                logger.warning(
+                    "forecaster warm-up/skip starting at step %d "
+                    "(latest_bar_ts=%d): %s",
+                    step_idx,
+                    latest_ts,
+                    exc,
+                )
+                warmup_logged = True
 
         high_sigma = forecaster_ready and sigma > config.variance_threshold
 
