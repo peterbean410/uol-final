@@ -241,7 +241,7 @@ def _default_checkpoint_resolver(model_name: str, lifecycle_stage: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _materialize_checkpoint(uri: str, dest_dir: str) -> str:
+def _materialize_checkpoint(uri: str, dest_dir: str, name: str) -> str:
     """Resolve a checkpoint URI to a readable local file path.
 
     The Model Registry hands back the KFP artifact URI of the parent
@@ -250,6 +250,11 @@ def _materialize_checkpoint(uri: str, dest_dir: str) -> str:
     the object to a local file via the same URI-routing the DQN/forecaster
     components use. Bare local paths (unit tests, pre-downloaded files) pass
     through unchanged.
+
+    ``name`` disambiguates the local filename: both the DQN and forecaster
+    artifact URIs end in ``model_checkpoint``, so deriving the filename from
+    the URI basename alone would collide and the second download would clobber
+    the first.
     """
     scheme = urlparse(uri).scheme.lower()
     if scheme not in ("minio", "s3"):
@@ -259,9 +264,8 @@ def _materialize_checkpoint(uri: str, dest_dir: str) -> str:
     # MINIO_ACCESS_KEY/MINIO_SECRET_KEY) and s3:// to AWS S3.
     from deepqnetwork import artifact_io
 
-    local_path = os.path.join(
-        dest_dir, os.path.basename(urlparse(uri).path) or "checkpoint"
-    )
+    basename = os.path.basename(urlparse(uri).path) or "checkpoint"
+    local_path = os.path.join(dest_dir, f"{name}-{basename}")
     artifact_io.download_file(uri, local_path)
     return local_path
 
@@ -310,8 +314,8 @@ def run_dqnpf_backtest(
     # The resolved paths are KFP artifact URIs (minio://, s3://); torch.load
     # needs local files, so download them before the backtest opens them.
     ckpt_dir = tempfile.mkdtemp(prefix="dqnpf-ckpt-")
-    dqn_local = _materialize_checkpoint(dqn_path, ckpt_dir)
-    fc_local = _materialize_checkpoint(fc_path, ckpt_dir)
+    dqn_local = _materialize_checkpoint(dqn_path, ckpt_dir, "dqn")
+    fc_local = _materialize_checkpoint(fc_path, ckpt_dir, "forecaster")
 
     integration_cfg = _build_integration_config(
         pipeline_cfg,
