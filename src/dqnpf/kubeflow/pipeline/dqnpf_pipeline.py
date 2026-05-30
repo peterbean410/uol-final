@@ -115,6 +115,17 @@ def dqnpf_intraday_pipeline(
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
+    # The parent checkpoints resolve to minio:// KFP artifact URIs; the
+    # component downloads them via deepqnetwork.artifact_io, which needs the
+    # in-cluster MinIO credentials. Mirrors the DQN pipeline's _mount_minio_creds.
+    kubernetes.use_secret_as_env(
+        task,
+        secret_name="mlpipeline-minio-artifact",
+        secret_key_to_env={
+            "accesskey": "MINIO_ACCESS_KEY",
+            "secretkey": "MINIO_SECRET_KEY",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

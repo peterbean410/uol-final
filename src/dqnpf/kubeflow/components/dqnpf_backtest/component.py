@@ -26,10 +26,12 @@ import logging
 import os
 import socket
 import subprocess
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import yaml
 
@@ -239,6 +241,31 @@ def _default_checkpoint_resolver(model_name: str, lifecycle_stage: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _materialize_checkpoint(uri: str, dest_dir: str) -> str:
+    """Resolve a checkpoint URI to a readable local file path.
+
+    The Model Registry hands back the KFP artifact URI of the parent
+    checkpoint, e.g. ``minio://mlpipeline/v2/artifacts/.../model_checkpoint``
+    (or ``s3://...``). ``torch.load`` can't open those schemes, so download
+    the object to a local file via the same URI-routing the DQN/forecaster
+    components use. Bare local paths (unit tests, pre-downloaded files) pass
+    through unchanged.
+    """
+    scheme = urlparse(uri).scheme.lower()
+    if scheme not in ("minio", "s3"):
+        return uri
+
+    # deepqnetwork.artifact_io routes minio:// to the in-cluster MinIO (using
+    # MINIO_ACCESS_KEY/MINIO_SECRET_KEY) and s3:// to AWS S3.
+    from deepqnetwork import artifact_io
+
+    local_path = os.path.join(
+        dest_dir, os.path.basename(urlparse(uri).path) or "checkpoint"
+    )
+    artifact_io.download_file(uri, local_path)
+    return local_path
+
+
 def run_dqnpf_backtest(
     integration_config_yaml: str,
     dqn_model_registry_name: str,
@@ -280,10 +307,16 @@ def run_dqnpf_backtest(
         forecaster_model_registry_name, pipeline_cfg.forecaster_lifecycle_stage
     )
 
+    # The resolved paths are KFP artifact URIs (minio://, s3://); torch.load
+    # needs local files, so download them before the backtest opens them.
+    ckpt_dir = tempfile.mkdtemp(prefix="dqnpf-ckpt-")
+    dqn_local = _materialize_checkpoint(dqn_path, ckpt_dir)
+    fc_local = _materialize_checkpoint(fc_path, ckpt_dir)
+
     integration_cfg = _build_integration_config(
         pipeline_cfg,
-        dqn_checkpoint_path=dqn_path,
-        forecaster_checkpoint_path=fc_path,
+        dqn_checkpoint_path=dqn_local,
+        forecaster_checkpoint_path=fc_local,
     )
 
     logger.info(
