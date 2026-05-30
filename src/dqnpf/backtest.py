@@ -320,16 +320,28 @@ def _run_episode(
         dqn_result = dqn.recommend_action(state)
 
         latest_ts = _latest_bar_ts(env_client, config.symbol)
-        mu, sigma = cache.get_or_compute(latest_ts, bridge.compute_signal)
-        high_sigma = sigma > config.variance_threshold
+        try:
+            mu, sigma = cache.get_or_compute(latest_ts, bridge.compute_signal)
+            forecaster_ready = True
+        except (ValueError, KeyError):
+            # Forecaster warm-up: modelenv's recent_bars only fills in as the
+            # episode steps forward (it returns up to RECENT_WINDOW completed
+            # bars before the cursor), so the first ~LOOKBACK_WINDOW M5 bars are
+            # unavailable at episode start. Until the forecaster has enough
+            # history it is not valid (cf. IntegrationConfig.min_bars_warmup);
+            # run DQN-only for these steps instead of failing the backtest.
+            mu, sigma = 0.0, 0.0
+            forecaster_ready = False
 
-        if integration is not None:
+        high_sigma = forecaster_ready and sigma > config.variance_threshold
+
+        if integration is not None and forecaster_ready:
             screened = integration.screen(dqn_result, mu, sigma)
             final_action = screened.action
             reason = screened.reason
         else:
             final_action = dqn_result.action
-            reason = "baseline"
+            reason = "baseline" if integration is None else "warmup"
 
         order_id = f"{config.symbol}-{step_idx}"
         step_response = env_client.step(final_action, order_id)
