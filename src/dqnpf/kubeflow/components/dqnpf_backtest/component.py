@@ -4,8 +4,9 @@ Responsibilities (Requirement 21):
 
 1. Read the integration config YAML and resolve checkpoint paths from the
    Model Registry for the DQN and Forecaster parent models.
-2. Launch ``modelenv`` as a subprocess sidecar and wait for the gRPC server
-   to come up on ``localhost:50051``.
+2. Launch ``modelenv-server`` as a subprocess sidecar (mounting the warm
+   modelenv-cache PVC) and wait for the gRPC server to come up on
+   ``localhost:50051``.
 3. Invoke :func:`tradingmodel.intraday.dqnpf.backtest.run_backtest` and then
    :func:`validate_thresholds`.
 4. Write a single JSON artifact at the KFP output path containing the
