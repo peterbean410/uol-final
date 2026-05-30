@@ -118,6 +118,22 @@ class EnvironmentClient:
         request = environment_pb2.ObserveRequest(symbol=symbol)
         return self._call_with_retry("ReferenceData", request)
 
+    def recent_bars(self, symbol: str):
+        """Call RecentBars() RPC to retrieve recent completed bars per interval.
+
+        Args:
+            symbol: Trading symbol (e.g. "USDJPY").
+
+        Returns:
+            A RecentBarsResponse protobuf message whose ``bars`` field maps an
+            interval label (e.g. "M5") to a BarList of completed Bars.
+
+        Raises:
+            ConnectionError: If all retry attempts are exhausted.
+        """
+        request = environment_pb2.RecentBarsRequest(symbol=symbol)
+        return self._call_with_retry("RecentBars", request)
+
     def close(self) -> None:
         """Close the gRPC channel cleanly."""
         self._channel.close()
