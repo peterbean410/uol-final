@@ -12,6 +12,7 @@ import torch
 from tradingmodel.intraday.dqnpf.forecaster_bridge import (
     FEATURE_DIM,
     LOOKBACK_WINDOW,
+    RECENT_BARS_COUNT,
     ForecasterBridge,
     _bars_to_dataframe,
 )
@@ -43,9 +44,11 @@ class _FakeEnvClient:
     def __init__(self, response: _FakeResponse) -> None:
         self._response = response
         self.calls: list[str] = []
+        self.counts: list[int] = []
 
-    def recent_bars(self, symbol: str) -> _FakeResponse:
+    def recent_bars(self, symbol: str, count: int = 0) -> _FakeResponse:
         self.calls.append(symbol)
+        self.counts.append(count)
         return self._response
 
 
@@ -109,6 +112,9 @@ def test_compute_signal_pipeline_with_mock_grpc_client() -> None:
 
     assert (mu, sigma) == (0.42, 2.71)
     assert env.calls == ["USDJPY"]
+    # Must request the deep feature window (1440 + 36), not the default 64, or
+    # compute_features would never have enough history and warm-up would be 100%.
+    assert env.counts == [RECENT_BARS_COUNT]
     assert len(forecaster.received) == 1
     received = forecaster.received[0]
     assert received.shape == (LOOKBACK_WINDOW, FEATURE_DIM)

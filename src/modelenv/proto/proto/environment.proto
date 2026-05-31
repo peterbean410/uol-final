@@ -57,6 +57,10 @@ message ObserveRequest {
 
 message RecentBarsRequest {
   string symbol = 1;
+  // Number of most-recent completed bars to return per interval. 0 (unset)
+  // falls back to the default RECENT_WINDOW. Consumers needing a deeper
+  // lookback (e.g. the forecaster's 1440-bar feature window) set this.
+  uint32 count = 2;
 }
 
 message RecentBarsResponse {
@@ -272,6 +276,11 @@ message Observation {
   double reward = 3;
   // Whether the episode has terminated.
   bool done = 4;
+  // Raw change in total equity (unrealised + 12m realised PnL) for the action
+  // that produced this observation, in quote-currency price units * volume,
+  // BEFORE the reward's penalties, regime z-score normalisation and clipping.
+  // This is the un-normalised monetary PnL delta; 0.0 for Reset / LiveData.
+  double raw_pnl_delta = 5;
 }
 
 message StepResponse {

@@ -23,6 +23,15 @@ logger = logging.getLogger(__name__)
 _BAR_COLUMNS = ["Timestamp", "Open", "High", "Low", "Close", "Volume"]
 LOOKBACK_WINDOW = 36
 FEATURE_DIM = 16
+# Rolling window compute_features warms up over and then drops from the front.
+# Must match probabilisticforecaster.features.compute_features' default.
+HISTORICAL_WINDOW = 1440
+# Completed M5 bars to request from RecentBars. compute_features drops the first
+# HISTORICAL_WINDOW rows, so we need HISTORICAL_WINDOW + LOOKBACK_WINDOW bars for
+# at least LOOKBACK_WINDOW feature rows to survive. Without this the RPC's
+# default 64-bar window is < HISTORICAL_WINDOW and the forecaster never leaves
+# warm-up (every step falls back to DQN-only).
+RECENT_BARS_COUNT = HISTORICAL_WINDOW + LOOKBACK_WINDOW
 
 
 class _ForecasterLike(Protocol):
@@ -30,7 +39,7 @@ class _ForecasterLike(Protocol):
 
 
 class _EnvClientLike(Protocol):
-    def recent_bars(self, symbol: str) -> Any: ...
+    def recent_bars(self, symbol: str, count: int = 0) -> Any: ...
 
 
 def _bars_to_dataframe(bar_list: Any) -> pd.DataFrame:
@@ -96,7 +105,9 @@ class ForecasterBridge:
             KeyError: If "M5" is missing from the RecentBarsResponse.
             ValueError: If the M5 series has fewer than 36 bars.
         """
-        response = self._env_client.recent_bars(self._symbol)
+        response = self._env_client.recent_bars(
+            self._symbol, count=RECENT_BARS_COUNT
+        )
         bars = getattr(response, "bars", None)
         if bars is None or "M5" not in bars:
             available = list(bars.keys()) if bars is not None else []
@@ -121,7 +132,7 @@ class ForecasterBridge:
                 f"need at least {LOOKBACK_WINDOW}"
             )
 
-        features_df = compute_features(bars_df)
+        features_df = compute_features(bars_df, historical_window=HISTORICAL_WINDOW)
         if features_df.shape[1] != FEATURE_DIM:
             raise ValueError(
                 f"compute_features returned {features_df.shape[1]} columns, "

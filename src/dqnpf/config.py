@@ -40,6 +40,9 @@ class IntegrationConfig:
         episode_start_ts: Unix-seconds start of each episode window.
         episode_end_ts: Unix-seconds end of each episode window.
         seed: Seed forwarded to modelenv Reset() for reproducibility.
+        pip_size: Price increment of one pip for ``symbol``, used to convert
+            the environment's raw monetary PnL into pips for reporting.
+            Default 0.01 (USDJPY and other JPY quote pairs).
     """
 
     symbol: str = "USDJPY"
@@ -59,8 +62,11 @@ class IntegrationConfig:
     episode_start_ts: int = 0
     episode_end_ts: int = 0
     seed: int = 0
+    pip_size: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.pip_size <= 0:
+            raise ValueError("pip_size must be positive")
         if self.variance_threshold < 0:
             raise ValueError("variance_threshold must be non-negative")
         if self.max_risk_long_units < 0:

@@ -158,6 +158,9 @@ pub struct Environment {
     disable_hedging: bool,
     // Track previous step's total equity for delta_V_t calculation
     prev_total_equity: Option<f64>,
+    // Raw (un-normalised) equity change from the most recent calculate_reward
+    // call, surfaced on the Observation as raw_pnl_delta for monetary reporting.
+    last_raw_pnl_delta: f64,
     // Regime-conditional reward normalisation (3 volatility bins).
     // Stats persist across episodes; only prev_total_equity resets.
     regime_reward_stats: RegimeRewardStats,
@@ -208,6 +211,7 @@ impl Environment {
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
             disable_hedging: true,
             prev_total_equity: None,
+            last_raw_pnl_delta: 0.0,
             regime_reward_stats: RegimeRewardStats::new(
                 DEFAULT_VOL_LOW_THRESHOLD,
                 DEFAULT_VOL_HIGH_THRESHOLD,
@@ -606,6 +610,7 @@ impl Environment {
             live_ticks,
             done: false,
             reward: 0.0,
+            raw_pnl_delta: 0.0,
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,
@@ -679,6 +684,7 @@ impl Environment {
                 };
 
                 observation.reward = reward;
+                observation.raw_pnl_delta = self.last_raw_pnl_delta;
                 observation.done = !still_running;
                 Ok(StepResponse {
                     data: Some(self.normalise_observation(observation.into_observation())),
@@ -801,6 +807,7 @@ impl Environment {
                 };
 
                 observation.reward = reward;
+                observation.raw_pnl_delta = self.last_raw_pnl_delta;
                 Ok(StepResponse {
                     data: Some(self.normalise_observation(observation.into_observation())),
                     info: "".to_string(),
@@ -883,6 +890,13 @@ impl Environment {
         req: RecentBarsRequest,
     ) -> Result<RecentBarsResponse> {
         use crate::episode::RECENT_WINDOW;
+        // 0 (unset) falls back to RECENT_WINDOW. A larger count lets deep-history
+        // consumers (e.g. the forecaster's 1440-bar feature window) pull more.
+        let window = if req.count == 0 {
+            RECENT_WINDOW
+        } else {
+            req.count as usize
+        };
         let mut bars: HashMap<String, BarList> = HashMap::new();
         match self.mode {
             Mode::Training => {
@@ -895,7 +909,7 @@ impl Environment {
                         if let Some(idx) =
                             episode.interval_cursor_at_or_before(interval, cursor)
                         {
-                            let start = idx.saturating_sub(RECENT_WINDOW);
+                            let start = idx.saturating_sub(window);
                             let recent: Vec<modelenv_proto::Bar> = all_bars
                                 .get(start..idx)
                                 .map(|s| s.to_vec())
@@ -914,7 +928,7 @@ impl Environment {
                 let broker = self.get_broker_gateway()?;
                 for interval in crate::data_loader::TIME_INTERVALS {
                     let recent = broker
-                        .recent_bars(&req.symbol, interval, RECENT_WINDOW)
+                        .recent_bars(&req.symbol, interval, window)
                         .await?;
                     bars.insert(interval.to_string(), BarList {
                         bars: recent.into_iter().rev().collect(),
@@ -1032,6 +1046,10 @@ impl Environment {
 
         // Update previous total equity for next step
         self.prev_total_equity = Some(current_total_equity);
+
+        // Surface the raw (pre-penalty, pre-normalisation) equity change so the
+        // observation can report monetary PnL alongside the clipped reward.
+        self.last_raw_pnl_delta = delta_v_t;
 
         // Calculate asymmetric drawdown penalty
         // Only apply penalty when delta_V_t is negative

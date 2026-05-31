@@ -163,7 +163,7 @@ class MockEnvClient:
             obs = MockObservation(reward=0.0, done=True)
         return MockStepResponse(data=obs)
 
-    def recent_bars(self, symbol: str) -> MockRecentBarsResponse:
+    def recent_bars(self, symbol: str, count: int = 0) -> MockRecentBarsResponse:
         idx = self.recent_bars_calls
         self.recent_bars_calls += 1
         if callable(self._bars_responses):

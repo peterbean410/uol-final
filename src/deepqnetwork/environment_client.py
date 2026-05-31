@@ -118,11 +118,15 @@ class EnvironmentClient:
         request = environment_pb2.ObserveRequest(symbol=symbol)
         return self._call_with_retry("ReferenceData", request)
 
-    def recent_bars(self, symbol: str):
+    def recent_bars(self, symbol: str, count: int = 0):
         """Call RecentBars() RPC to retrieve recent completed bars per interval.
 
         Args:
             symbol: Trading symbol (e.g. "USDJPY").
+            count: Number of most-recent completed bars to request per interval.
+                0 (default) lets the server use its default RECENT_WINDOW.
+                Deep-history consumers (e.g. the forecaster's 1440-bar feature
+                window) pass a larger value.
 
         Returns:
             A RecentBarsResponse protobuf message whose ``bars`` field maps an
@@ -131,7 +135,7 @@ class EnvironmentClient:
         Raises:
             ConnectionError: If all retry attempts are exhausted.
         """
-        request = environment_pb2.RecentBarsRequest(symbol=symbol)
+        request = environment_pb2.RecentBarsRequest(symbol=symbol, count=count)
         return self._call_with_retry("RecentBars", request)
 
     def close(self) -> None:

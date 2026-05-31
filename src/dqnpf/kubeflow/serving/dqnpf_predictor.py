@@ -121,9 +121,13 @@ class _ServingEnvClient:
         """Delegate to base EnvironmentClient."""
         return self._base.reference_data(symbol)
 
-    def recent_bars(self, symbol: str):
-        """Call RecentBars RPC on the modelenv sidecar."""
-        request = environment_pb2.RecentBarsRequest(symbol=symbol)
+    def recent_bars(self, symbol: str, count: int = 0):
+        """Call RecentBars RPC on the modelenv sidecar.
+
+        ``count`` is forwarded so the ForecasterBridge can request its deep
+        feature-window history (default 0 -> server's RECENT_WINDOW).
+        """
+        request = environment_pb2.RecentBarsRequest(symbol=symbol, count=count)
         return self._stub.RecentBars(request, timeout=self._timeout)
 
     def close(self) -> None:

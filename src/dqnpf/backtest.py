@@ -41,6 +41,10 @@ class StepRecord:
     sigma: float
     reward: float
     high_sigma: bool
+    # Raw (un-normalised) equity change in quote-currency price units * volume,
+    # before the reward's penalties / regime z-score / clipping. Used to report
+    # monetary and pip PnL. Defaults to 0.0 when modelenv predates the field.
+    raw_pnl_delta: float = 0.0
 
     @property
     def screened(self) -> bool:
@@ -70,6 +74,17 @@ class BacktestComparison:
     quarterly_pnl_combined: dict[str, float]
     quarterly_pnl_baseline: dict[str, float]
     high_sigma_time_fraction: float
+    # Monetary PnL: sum of raw (un-normalised) equity changes, in the
+    # environment's quote-currency price units * volume. Unlike *_return
+    # (which sums clipped, regime-normalised rewards) these carry money.
+    combined_raw_pnl: float = 0.0
+    baseline_raw_pnl: float = 0.0
+    # Same PnL expressed in pips (raw_pnl / pip_size).
+    combined_pnl_pips: float = 0.0
+    baseline_pnl_pips: float = 0.0
+    # Per-quarter raw monetary PnL (YYYY-Qn -> sum of raw_pnl_delta).
+    quarterly_raw_pnl_combined: dict[str, float] = field(default_factory=dict)
+    quarterly_raw_pnl_baseline: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -108,6 +123,22 @@ def quarterly_pnl(records: Sequence[StepRecord]) -> dict[str, float]:
         quarter = (dt.month - 1) // 3 + 1
         key = f"{dt.year}-Q{quarter}"
         out[key] = out.get(key, 0.0) + r.reward
+    return out
+
+
+def raw_pnl_total(records: Sequence[StepRecord]) -> float:
+    """Sum the raw (un-normalised) monetary PnL across all steps."""
+    return sum(r.raw_pnl_delta for r in records)
+
+
+def quarterly_raw_pnl(records: Sequence[StepRecord]) -> dict[str, float]:
+    """Group raw monetary PnL by calendar quarter (``YYYY-Qn`` keys)."""
+    out: dict[str, float] = {}
+    for r in records:
+        dt = datetime.fromtimestamp(r.timestamp_ns / 1_000_000_000, tz=timezone.utc)
+        quarter = (dt.month - 1) // 3 + 1
+        key = f"{dt.year}-Q{quarter}"
+        out[key] = out.get(key, 0.0) + r.raw_pnl_delta
     return out
 
 
@@ -161,9 +192,16 @@ def negative_pnl_proportion(
 
 
 def compare_results(
-    combined: Sequence[StepRecord], baseline: Sequence[StepRecord]
+    combined: Sequence[StepRecord],
+    baseline: Sequence[StepRecord],
+    *,
+    pip_size: float = 0.01,
 ) -> BacktestComparison:
-    """Aggregate two record streams into a BacktestComparison."""
+    """Aggregate two record streams into a BacktestComparison.
+
+    ``pip_size`` converts the raw monetary PnL into pips for the
+    ``*_pnl_pips`` fields (0.01 for USDJPY / JPY quote pairs).
+    """
     combined_rewards = [r.reward for r in combined]
     baseline_rewards = [r.reward for r in baseline]
 
@@ -173,6 +211,9 @@ def compare_results(
         if combined
         else 0.0
     )
+
+    combined_raw = raw_pnl_total(combined)
+    baseline_raw = raw_pnl_total(baseline)
 
     return BacktestComparison(
         combined_return=sum(combined_rewards),
@@ -198,6 +239,12 @@ def compare_results(
         quarterly_pnl_combined=quarterly_pnl(combined),
         quarterly_pnl_baseline=quarterly_pnl(baseline),
         high_sigma_time_fraction=high_time_fraction,
+        combined_raw_pnl=combined_raw,
+        baseline_raw_pnl=baseline_raw,
+        combined_pnl_pips=combined_raw / pip_size,
+        baseline_pnl_pips=baseline_raw / pip_size,
+        quarterly_raw_pnl_combined=quarterly_raw_pnl(combined),
+        quarterly_raw_pnl_baseline=quarterly_raw_pnl(baseline),
     )
 
 
@@ -375,6 +422,7 @@ def _run_episode(
                 sigma=float(sigma),
                 reward=float(getattr(obs, "reward", 0.0)),
                 high_sigma=high_sigma,
+                raw_pnl_delta=float(getattr(obs, "raw_pnl_delta", 0.0)),
             )
         )
         step_idx += 1
@@ -444,7 +492,9 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
             )
         )
 
-    comparison = compare_results(combined_records, baseline_records)
+    comparison = compare_results(
+        combined_records, baseline_records, pip_size=config.pip_size
+    )
     report = validate_thresholds(comparison)
 
     logger.info(
@@ -464,6 +514,13 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
         "suppression_by_reason=%s quarterly_combined=%s",
         comparison.suppression_by_reason,
         comparison.quarterly_pnl_combined,
+    )
+    logger.info(
+        "monetary PnL: combined=%.4f (%.1f pips) baseline=%.4f (%.1f pips)",
+        comparison.combined_raw_pnl,
+        comparison.combined_pnl_pips,
+        comparison.baseline_raw_pnl,
+        comparison.baseline_pnl_pips,
     )
     if report.passed:
         logger.info("threshold validation: PASSED")
