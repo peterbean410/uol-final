@@ -94,6 +94,14 @@ class BacktestComparison:
     # Fraction of combined steps where |mu| exceeds directional_tolerance, i.e.
     # how often the directional veto's conviction precondition is met.
     abs_mu_above_tolerance_fraction: float = 0.0
+    # Money-based counterparts of *_sharpe and *_negative_pnl_proportion,
+    # computed from raw_pnl_delta instead of the normalised reward. The Req 14.1
+    # and 14.3 gates validate against THESE so they reward real profitability;
+    # the reward-based fields above are retained for reference.
+    combined_sharpe_pnl: float = 0.0
+    baseline_sharpe_pnl: float = 0.0
+    high_sigma_negative_raw_pnl_proportion_combined: float = 0.0
+    high_sigma_negative_raw_pnl_proportion_baseline: float = 0.0
 
 
 @dataclass
@@ -224,6 +232,16 @@ def negative_pnl_proportion(
     return sum(1 for r in in_regime if r.reward < 0) / len(in_regime)
 
 
+def negative_raw_pnl_proportion(
+    records: Sequence[StepRecord], *, high_sigma: bool
+) -> float:
+    """Fraction of steps in the regime with raw (money) PnL < 0; 0.0 if none."""
+    in_regime = [r for r in records if r.high_sigma is high_sigma]
+    if not in_regime:
+        return 0.0
+    return sum(1 for r in in_regime if r.raw_pnl_delta < 0) / len(in_regime)
+
+
 def compare_results(
     combined: Sequence[StepRecord],
     baseline: Sequence[StepRecord],
@@ -290,6 +308,14 @@ def compare_results(
         sigma_distribution_combined=_distribution([r.sigma for r in combined]),
         abs_mu_distribution_combined=_distribution([abs(r.mu) for r in combined]),
         abs_mu_above_tolerance_fraction=abs_mu_above_tol,
+        combined_sharpe_pnl=compute_sharpe([r.raw_pnl_delta for r in combined]),
+        baseline_sharpe_pnl=compute_sharpe([r.raw_pnl_delta for r in baseline]),
+        high_sigma_negative_raw_pnl_proportion_combined=negative_raw_pnl_proportion(
+            combined, high_sigma=True
+        ),
+        high_sigma_negative_raw_pnl_proportion_baseline=negative_raw_pnl_proportion(
+            baseline, high_sigma=True
+        ),
     )
 
 
@@ -299,11 +325,13 @@ def validate_thresholds(
     """Verify Req 14.1–14.5 against a comparison; return failure list."""
     failures: list[str] = []
 
-    # Req 14.1: combined Sharpe > baseline Sharpe
-    if not (comparison.combined_sharpe > comparison.baseline_sharpe):
+    # Req 14.1: combined money-PnL Sharpe > baseline money-PnL Sharpe.
+    # Evaluated on raw_pnl_delta (real money), not the normalised reward, which
+    # can contradict actual profitability.
+    if not (comparison.combined_sharpe_pnl > comparison.baseline_sharpe_pnl):
         failures.append(
-            f"14.1 sharpe: combined={comparison.combined_sharpe:.4f} "
-            f"<= baseline={comparison.baseline_sharpe:.4f}"
+            f"14.1 sharpe (money): combined={comparison.combined_sharpe_pnl:.4f} "
+            f"<= baseline={comparison.baseline_sharpe_pnl:.4f}"
         )
 
     # Req 14.2: fewer trades, reduction concentrated in high-sigma
@@ -324,15 +352,16 @@ def validate_thresholds(
                 f"{high_reduction}/{total_reduction} below 50%"
             )
 
-    # Req 14.3: combined high-sigma negative-PnL proportion < baseline
+    # Req 14.3: combined high-sigma negative-PnL proportion < baseline.
+    # Evaluated on raw money PnL (raw_pnl_delta < 0), not normalised reward.
     if not (
-        comparison.high_sigma_negative_pnl_proportion_combined
-        < comparison.high_sigma_negative_pnl_proportion_baseline
+        comparison.high_sigma_negative_raw_pnl_proportion_combined
+        < comparison.high_sigma_negative_raw_pnl_proportion_baseline
     ):
         failures.append(
-            "14.3 high-sigma neg-PnL proportion: "
-            f"combined={comparison.high_sigma_negative_pnl_proportion_combined:.4f} "
-            f">= baseline={comparison.high_sigma_negative_pnl_proportion_baseline:.4f}"
+            "14.3 high-sigma neg-PnL proportion (money): "
+            f"combined={comparison.high_sigma_negative_raw_pnl_proportion_combined:.4f} "
+            f">= baseline={comparison.high_sigma_negative_raw_pnl_proportion_baseline:.4f}"
         )
 
     # Req 14.4: low-sigma PnL degradation ≤ tolerance
@@ -446,7 +475,9 @@ def _run_episode(
         high_sigma = forecaster_ready and sigma > config.variance_threshold
 
         if integration is not None and forecaster_ready:
-            screened = integration.screen(dqn_result, mu, sigma)
+            screened = integration.screen(
+                dqn_result, mu, sigma, timestamp_ns=_step_timestamp_ns(config, step_idx)
+            )
             final_action = screened.action
             reason = screened.reason
         else:

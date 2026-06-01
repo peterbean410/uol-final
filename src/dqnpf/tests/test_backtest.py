@@ -17,6 +17,7 @@ from tradingmodel.intraday.dqnpf.backtest import (
     count_trades,
     count_trades_in_regime,
     negative_pnl_proportion,
+    negative_raw_pnl_proportion,
     quarterly_pnl,
     suppression_stats,
     validate_thresholds,
@@ -250,6 +251,11 @@ def _passing_comparison() -> BacktestComparison:
         quarterly_pnl_combined={"2024-Q1": 0.3, "2024-Q2": 0.3, "2024-Q3": 0.4},
         quarterly_pnl_baseline={"2024-Q1": 0.2, "2024-Q2": 0.2, "2024-Q3": 0.1},
         high_sigma_time_fraction=0.3,
+        # Money-based fields are what 14.1 / 14.3 validate against.
+        combined_sharpe_pnl=0.8,
+        baseline_sharpe_pnl=0.4,
+        high_sigma_negative_raw_pnl_proportion_combined=0.2,
+        high_sigma_negative_raw_pnl_proportion_baseline=0.5,
     )
 
 
@@ -262,7 +268,7 @@ def test_threshold_report_passes_on_good_comparison() -> None:
 
 def test_threshold_141_fails_when_sharpe_not_better() -> None:
     cmp = _passing_comparison()
-    cmp.combined_sharpe = 0.3
+    cmp.combined_sharpe_pnl = 0.3  # money-PnL Sharpe below baseline (0.4)
     report = validate_thresholds(cmp)
     assert report.passed is False
     assert any("14.1" in f for f in report.failures)
@@ -288,7 +294,8 @@ def test_threshold_142_fails_when_reduction_not_in_high_sigma() -> None:
 
 def test_threshold_143_fails_when_negative_pnl_proportion_worse() -> None:
     cmp = _passing_comparison()
-    cmp.high_sigma_negative_pnl_proportion_combined = 0.6  # worse than baseline 0.5
+    # money-based proportion worse than baseline 0.5
+    cmp.high_sigma_negative_raw_pnl_proportion_combined = 0.6
     report = validate_thresholds(cmp)
     assert any("14.3" in f for f in report.failures)
 
@@ -327,8 +334,8 @@ def test_threshold_145_passes_when_distributed() -> None:
 
 def test_threshold_146_failures_listed_when_multiple_break() -> None:
     cmp = _passing_comparison()
-    cmp.combined_sharpe = 0.0
-    cmp.trades_combined = 100
+    cmp.combined_sharpe_pnl = 0.0  # breaks 14.1 (money Sharpe not > baseline)
+    cmp.trades_combined = 100  # breaks 14.2
     report = validate_thresholds(cmp)
     assert report.passed is False
     assert len(report.failures) >= 2
@@ -413,3 +420,44 @@ def test_compare_results_empty_signal_distributions_are_zeroed() -> None:
         "max": 0.0,
     }
     assert cmp.abs_mu_above_tolerance_fraction == 0.0
+
+
+# ---------------------------------------------------------------------------
+# compare_results: money-based (raw PnL) fields
+# ---------------------------------------------------------------------------
+
+
+def test_negative_raw_pnl_proportion_uses_money_not_reward() -> None:
+    # reward is positive but raw PnL is negative on 2 of 3 high-sigma steps.
+    recs = [
+        _rec(reward=1.0, high_sigma=True),
+        _rec(reward=1.0, high_sigma=True),
+        _rec(reward=1.0, high_sigma=True),
+    ]
+    recs[0].raw_pnl_delta = -2.0
+    recs[1].raw_pnl_delta = -1.0
+    recs[2].raw_pnl_delta = 3.0
+    assert negative_raw_pnl_proportion(recs, high_sigma=True) == pytest.approx(2 / 3)
+    # reward-based proportion sees zero negatives (all rewards > 0).
+    assert negative_pnl_proportion(recs, high_sigma=True) == 0.0
+
+
+def test_compare_results_money_fields_from_raw_pnl() -> None:
+    combined = [
+        _rec(reward=-1.0, high_sigma=True),
+        _rec(reward=-1.0, high_sigma=True),
+    ]
+    combined[0].raw_pnl_delta = 2.0
+    combined[1].raw_pnl_delta = -1.0
+    baseline = [_rec(reward=5.0, reason="baseline", high_sigma=True)]
+    baseline[0].raw_pnl_delta = -3.0
+
+    cmp = compare_results(combined, baseline)
+
+    # high-sigma raw PnL: combined has 1 negative of 2 (0.5); baseline 1 of 1 (1.0)
+    assert cmp.high_sigma_negative_raw_pnl_proportion_combined == pytest.approx(0.5)
+    assert cmp.high_sigma_negative_raw_pnl_proportion_baseline == pytest.approx(1.0)
+    # money Sharpe derives from raw_pnl_delta, independent of reward sign
+    assert cmp.combined_sharpe_pnl == pytest.approx(
+        compute_sharpe([2.0, -1.0])
+    )

@@ -153,3 +153,49 @@ def test_variance_threshold_just_above_is_high_sigma_path() -> None:
     epsilon = math.nextafter(4.5, math.inf) - 4.5
     layer.screen(_a(1), mu=0.0, sigma=4.5 + epsilon)
     assert layer.risk_long_used == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-UTC-day budget reset (timestamp_ns)
+# ---------------------------------------------------------------------------
+
+_NANOS_PER_DAY = 86_400_000_000_000
+
+
+def test_budget_resets_on_utc_day_boundary() -> None:
+    layer = make_layer(variance_threshold=1.0, max_risk_long_units=2)
+    day0 = 10 * _NANOS_PER_DAY
+    # Exhaust the day-0 budget (2 units), then a third open is blocked.
+    assert layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0).reason == "pass"
+    assert layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0 + 1).reason == "pass"
+    assert (
+        layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0 + 2).reason
+        == "budget_exhausted"
+    )
+    # Crossing into day 1 resets the budget -> opens allowed again.
+    day1 = 11 * _NANOS_PER_DAY
+    assert layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day1).reason == "pass"
+    assert layer.risk_long_used == 1
+
+
+def test_budget_does_not_reset_within_same_day() -> None:
+    layer = make_layer(variance_threshold=1.0, max_risk_long_units=2)
+    day0 = 10 * _NANOS_PER_DAY
+    layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0)
+    # Later the same UTC day (just before midnight) must not reset.
+    later = day0 + _NANOS_PER_DAY - 1
+    layer.screen(_a(1), 0.0, 5.0, timestamp_ns=later)
+    assert layer.risk_long_used == 2
+    assert (
+        layer.screen(_a(1), 0.0, 5.0, timestamp_ns=later).reason
+        == "budget_exhausted"
+    )
+
+
+def test_budget_never_resets_without_timestamp() -> None:
+    # Legacy behaviour: omitting timestamp_ns keeps the lifetime cap.
+    layer = make_layer(variance_threshold=1.0, max_risk_long_units=2)
+    layer.screen(_a(1), 0.0, 5.0)
+    layer.screen(_a(1), 0.0, 5.0)
+    assert layer.screen(_a(1), 0.0, 5.0).reason == "budget_exhausted"
+    assert layer.risk_long_used == 2

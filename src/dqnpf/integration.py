@@ -82,6 +82,11 @@ class IntegrationLayer:
         self._symbol = config.symbol
         self._risk_long_units: int = 0
         self._risk_short_units: int = 0
+        # UTC day index of the last screened step; the risk budget resets on
+        # each day boundary so high-sigma throttling is per-day rather than a
+        # one-shot lifetime cap (which would freeze trading after the first few
+        # opens when sigma is persistently above variance_threshold).
+        self._current_day: int | None = None
 
         logger.info(
             "IntegrationLayer initialised: symbol=%s, variance_threshold=%.4f, "
@@ -111,17 +116,48 @@ class IntegrationLayer:
     def risk_short_used(self) -> int:
         return self._risk_short_units
 
-    def screen(self, dqn_action: Any, mu: float, sigma: float) -> ScreenedAction:
+    _NANOS_PER_DAY = 86_400_000_000_000
+
+    def _maybe_reset_budget(self, timestamp_ns: int | None) -> None:
+        """Reset the risk budget when ``timestamp_ns`` crosses a UTC day."""
+        if timestamp_ns is None:
+            return
+        day = timestamp_ns // self._NANOS_PER_DAY
+        if day != self._current_day:
+            if self._current_day is not None:
+                logger.debug(
+                    "risk budget reset on day boundary: symbol=%s day=%d "
+                    "(was long=%d short=%d)",
+                    self._symbol,
+                    day,
+                    self._risk_long_units,
+                    self._risk_short_units,
+                )
+            self._current_day = day
+            self._risk_long_units = 0
+            self._risk_short_units = 0
+
+    def screen(
+        self,
+        dqn_action: Any,
+        mu: float,
+        sigma: float,
+        timestamp_ns: int | None = None,
+    ) -> ScreenedAction:
         """Apply risk rules in priority order: budget, directional, pass-through.
 
         Args:
             dqn_action: Object exposing ``action`` (int 0-4) and ``action_name``.
             mu: Forecaster mean forward return (bps).
             sigma: Forecaster sigma (bps).
+            timestamp_ns: Decision time in UTC nanoseconds. When provided, the
+                risk budget resets at each UTC day boundary. When ``None`` the
+                budget is never reset (legacy lifetime behaviour).
 
         Returns:
             ScreenedAction with the final action and reason.
         """
+        self._maybe_reset_budget(timestamp_ns)
         unit = map_action(dqn_action.action)
         high_sigma = sigma > self._config.variance_threshold
 
