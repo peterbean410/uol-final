@@ -251,11 +251,13 @@ def _passing_comparison() -> BacktestComparison:
         quarterly_pnl_combined={"2024-Q1": 0.3, "2024-Q2": 0.3, "2024-Q3": 0.4},
         quarterly_pnl_baseline={"2024-Q1": 0.2, "2024-Q2": 0.2, "2024-Q3": 0.1},
         high_sigma_time_fraction=0.3,
-        # Money-based fields are what 14.1 / 14.3 validate against.
+        # Money-based fields are what 14.1 / 14.3 / 14.5 validate against.
         combined_sharpe_pnl=0.8,
         baseline_sharpe_pnl=0.4,
         high_sigma_negative_raw_pnl_proportion_combined=0.2,
         high_sigma_negative_raw_pnl_proportion_baseline=0.5,
+        combined_raw_pnl=1.0,
+        quarterly_raw_pnl_combined={"2024-Q1": 0.3, "2024-Q2": 0.3, "2024-Q3": 0.4},
     )
 
 
@@ -318,16 +320,16 @@ def test_threshold_144_passes_within_tolerance() -> None:
 
 def test_threshold_145_fails_on_quarterly_concentration() -> None:
     cmp = _passing_comparison()
-    cmp.combined_return = 1.0
-    cmp.quarterly_pnl_combined = {"2024-Q1": 0.9, "2024-Q2": 0.1}
+    cmp.combined_raw_pnl = 1.0
+    cmp.quarterly_raw_pnl_combined = {"2024-Q1": 0.9, "2024-Q2": 0.1}
     report = validate_thresholds(cmp)
     assert any("14.5" in f for f in report.failures)
 
 
 def test_threshold_145_passes_when_distributed() -> None:
     cmp = _passing_comparison()
-    cmp.combined_return = 1.0
-    cmp.quarterly_pnl_combined = {"2024-Q1": 0.3, "2024-Q2": 0.4, "2024-Q3": 0.3}
+    cmp.combined_raw_pnl = 1.0
+    cmp.quarterly_raw_pnl_combined = {"2024-Q1": 0.3, "2024-Q2": 0.4, "2024-Q3": 0.3}
     report = validate_thresholds(cmp)
     assert all("14.5" not in f for f in report.failures)
 
