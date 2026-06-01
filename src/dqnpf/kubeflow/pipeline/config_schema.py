@@ -50,6 +50,7 @@ class DqnpfPipelineConfig:
     episode_start_ts: int = 0
     episode_end_ts: int = 0
     seed: int = 0
+    pip_size: float = 0.01
 
     # --- Pipeline-level fields ---
     dqn_model_registry_name: str = "deepqnetwork-usdjpy"

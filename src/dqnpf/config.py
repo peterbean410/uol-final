@@ -183,6 +183,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--episode-end-ts", dest="episode_end_ts", type=int, default=None
     )
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--pip-size", dest="pip_size", type=float, default=None)
     return parser
 
 
