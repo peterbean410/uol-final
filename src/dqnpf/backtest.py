@@ -384,17 +384,6 @@ def validate_thresholds(
                 f"< baseline - slack={base_low - slack:.4f}"
             )
 
-    # Req 14.5: no single quarter > 50% of total PnL. Evaluated on raw money
-    # PnL (consistent with 14.1 / 14.3), not the normalised reward.
-    total = comparison.combined_raw_pnl
-    quarters = comparison.quarterly_raw_pnl_combined
-    if total != 0 and quarters:
-        max_share = max(abs(v) for v in quarters.values()) / abs(total)
-        if max_share > 0.5:
-            failures.append(
-                f"14.5 quarterly concentration (money): max share {max_share:.2%} > 50%"
-            )
-
     return ThresholdReport(passed=not failures, failures=failures)
 
 

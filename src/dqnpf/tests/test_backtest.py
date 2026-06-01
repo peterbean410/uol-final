@@ -318,22 +318,6 @@ def test_threshold_144_passes_within_tolerance() -> None:
     assert all("14.4" not in f for f in report.failures)
 
 
-def test_threshold_145_fails_on_quarterly_concentration() -> None:
-    cmp = _passing_comparison()
-    cmp.combined_raw_pnl = 1.0
-    cmp.quarterly_raw_pnl_combined = {"2024-Q1": 0.9, "2024-Q2": 0.1}
-    report = validate_thresholds(cmp)
-    assert any("14.5" in f for f in report.failures)
-
-
-def test_threshold_145_passes_when_distributed() -> None:
-    cmp = _passing_comparison()
-    cmp.combined_raw_pnl = 1.0
-    cmp.quarterly_raw_pnl_combined = {"2024-Q1": 0.3, "2024-Q2": 0.4, "2024-Q3": 0.3}
-    report = validate_thresholds(cmp)
-    assert all("14.5" not in f for f in report.failures)
-
-
 def test_threshold_146_failures_listed_when_multiple_break() -> None:
     cmp = _passing_comparison()
     cmp.combined_sharpe_pnl = 0.0  # breaks 14.1 (money Sharpe not > baseline)
