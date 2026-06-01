@@ -85,6 +85,15 @@ class BacktestComparison:
     # Per-quarter raw monetary PnL (YYYY-Qn -> sum of raw_pnl_delta).
     quarterly_raw_pnl_combined: dict[str, float] = field(default_factory=dict)
     quarterly_raw_pnl_baseline: dict[str, float] = field(default_factory=dict)
+    # Forecaster signal distributions over the combined run (min/median/p95/max),
+    # so the report shows where sigma sits vs variance_threshold and where
+    # |mu| sits vs directional_tolerance. high_sigma_time_fraction already gives
+    # the fraction with sigma > variance_threshold.
+    sigma_distribution_combined: dict[str, float] = field(default_factory=dict)
+    abs_mu_distribution_combined: dict[str, float] = field(default_factory=dict)
+    # Fraction of combined steps where |mu| exceeds directional_tolerance, i.e.
+    # how often the directional veto's conviction precondition is met.
+    abs_mu_above_tolerance_fraction: float = 0.0
 
 
 @dataclass
@@ -124,6 +133,30 @@ def quarterly_pnl(records: Sequence[StepRecord]) -> dict[str, float]:
         key = f"{dt.year}-Q{quarter}"
         out[key] = out.get(key, 0.0) + r.reward
     return out
+
+
+def _distribution(values: Sequence[float]) -> dict[str, float]:
+    """min / median / p95 / max of a value series (empty -> zeros).
+
+    Used to expose where the forecaster's sigma and |mu| actually sit relative
+    to variance_threshold / directional_tolerance, so a mis-scaled threshold
+    (e.g. one the signal never crosses) is visible from the report alone.
+    """
+    if not values:
+        return {"min": 0.0, "median": 0.0, "p95": 0.0, "max": 0.0}
+    s = sorted(values)
+    n = len(s)
+
+    def _nearest_rank(p: float) -> float:
+        idx = min(n - 1, max(0, int(round(p * (n - 1)))))
+        return s[idx]
+
+    return {
+        "min": s[0],
+        "median": _nearest_rank(0.5),
+        "p95": _nearest_rank(0.95),
+        "max": s[-1],
+    }
 
 
 def raw_pnl_total(records: Sequence[StepRecord]) -> float:
@@ -196,11 +229,14 @@ def compare_results(
     baseline: Sequence[StepRecord],
     *,
     pip_size: float = 0.01,
+    directional_tolerance: float = 1.0,
 ) -> BacktestComparison:
     """Aggregate two record streams into a BacktestComparison.
 
     ``pip_size`` converts the raw monetary PnL into pips for the
     ``*_pnl_pips`` fields (0.01 for USDJPY / JPY quote pairs).
+    ``directional_tolerance`` is the |mu| deadband used to report how often the
+    directional veto's conviction precondition is met.
     """
     combined_rewards = [r.reward for r in combined]
     baseline_rewards = [r.reward for r in baseline]
@@ -214,6 +250,12 @@ def compare_results(
 
     combined_raw = raw_pnl_total(combined)
     baseline_raw = raw_pnl_total(baseline)
+
+    abs_mu_above_tol = (
+        sum(1 for r in combined if abs(r.mu) > directional_tolerance) / len(combined)
+        if combined
+        else 0.0
+    )
 
     return BacktestComparison(
         combined_return=sum(combined_rewards),
@@ -245,6 +287,9 @@ def compare_results(
         baseline_pnl_pips=baseline_raw / pip_size,
         quarterly_raw_pnl_combined=quarterly_raw_pnl(combined),
         quarterly_raw_pnl_baseline=quarterly_raw_pnl(baseline),
+        sigma_distribution_combined=_distribution([r.sigma for r in combined]),
+        abs_mu_distribution_combined=_distribution([abs(r.mu) for r in combined]),
+        abs_mu_above_tolerance_fraction=abs_mu_above_tol,
     )
 
 
@@ -493,7 +538,10 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
         )
 
     comparison = compare_results(
-        combined_records, baseline_records, pip_size=config.pip_size
+        combined_records,
+        baseline_records,
+        pip_size=config.pip_size,
+        directional_tolerance=config.directional_tolerance,
     )
     report = validate_thresholds(comparison)
 
@@ -521,6 +569,15 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
         comparison.combined_pnl_pips,
         comparison.baseline_raw_pnl,
         comparison.baseline_pnl_pips,
+    )
+    logger.info(
+        "signal distributions (combined): sigma=%s vs variance_threshold=%.4f "
+        "| abs_mu=%s vs directional_tolerance=%.4f (|mu|>tol fraction=%.4f)",
+        comparison.sigma_distribution_combined,
+        config.variance_threshold,
+        comparison.abs_mu_distribution_combined,
+        config.directional_tolerance,
+        comparison.abs_mu_above_tolerance_fraction,
     )
     if report.passed:
         logger.info("threshold validation: PASSED")
