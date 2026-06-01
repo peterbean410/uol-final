@@ -10,6 +10,7 @@ from tradingmodel.intraday.dqnpf.backtest import (
     BacktestComparison,
     StepRecord,
     ThresholdReport,
+    _distribution,
     compare_results,
     compute_sharpe,
     conditional_pnl,
@@ -343,3 +344,72 @@ def test_step_record_screened_property() -> None:
     assert _rec(reason="baseline").screened is False
     assert _rec(reason="budget_exhausted").screened is True
     assert _rec(reason="directional_conflict").screened is True
+
+
+# ---------------------------------------------------------------------------
+# _distribution
+# ---------------------------------------------------------------------------
+
+
+def test_distribution_empty_returns_zeros() -> None:
+    assert _distribution([]) == {"min": 0.0, "median": 0.0, "p95": 0.0, "max": 0.0}
+
+
+def test_distribution_single_value_all_equal() -> None:
+    assert _distribution([3.5]) == {"min": 3.5, "median": 3.5, "p95": 3.5, "max": 3.5}
+
+
+def test_distribution_is_order_independent() -> None:
+    ascending = _distribution([1.0, 2.0, 3.0, 4.0, 5.0])
+    shuffled = _distribution([3.0, 1.0, 5.0, 2.0, 4.0])
+    assert ascending == shuffled
+
+
+def test_distribution_min_max_median_p95() -> None:
+    d = _distribution([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+    assert d["min"] == 0.0
+    assert d["max"] == 9.0
+    # nearest-rank on n=10: median -> idx round(0.5*9)=4 -> 4.0; p95 -> idx round(0.95*9)=9 -> 9.0
+    assert d["median"] == 4.0
+    assert d["p95"] == 9.0
+
+
+def test_distribution_handles_negative_and_unsorted() -> None:
+    d = _distribution([-2.0, 5.0, -10.0, 0.0])
+    assert d["min"] == -10.0
+    assert d["max"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# compare_results: signal distributions
+# ---------------------------------------------------------------------------
+
+
+def test_compare_results_reports_signal_distributions() -> None:
+    combined = [
+        _rec(mu=0.5, sigma=1.0, high_sigma=False),
+        _rec(mu=2.0, sigma=3.0, high_sigma=False),
+        _rec(mu=-3.5, sigma=4.0, high_sigma=False),
+        _rec(mu=0.2, sigma=2.0, high_sigma=False),
+        _rec(mu=1.5, sigma=6.0, high_sigma=True),
+    ]
+    baseline = [_rec(reason="baseline", mu=0.0, sigma=1.0, high_sigma=False)]
+
+    cmp = compare_results(combined, baseline, directional_tolerance=1.0)
+
+    assert cmp.sigma_distribution_combined["min"] == 1.0
+    assert cmp.sigma_distribution_combined["max"] == 6.0
+    assert cmp.abs_mu_distribution_combined["max"] == 3.5
+    # |mu| > 1.0 for mu in {2.0, 3.5, 1.5} -> 3/5
+    assert cmp.abs_mu_above_tolerance_fraction == pytest.approx(0.6)
+
+
+def test_compare_results_empty_signal_distributions_are_zeroed() -> None:
+    cmp = compare_results([], [], directional_tolerance=1.0)
+    assert cmp.sigma_distribution_combined == {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+    }
+    assert cmp.abs_mu_above_tolerance_fraction == 0.0
