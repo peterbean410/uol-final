@@ -115,6 +115,31 @@ def test_cli_argv_only_covers_integration_fields(cfg: DqnpfPipelineConfig) -> No
 
 
 # ---------------------------------------------------------------------------
+# Mirror integrity: DqnpfPipelineConfig must declare every IntegrationConfig
+# field, or to_integration_config() raises AttributeError at runtime (it
+# iterates the live IntegrationConfig field set and getattr()s each off self).
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_config_mirrors_every_integration_field() -> None:
+    """Every IntegrationConfig field is mirrored on DqnpfPipelineConfig."""
+    pipeline_fields = {f.name for f in fields(DqnpfPipelineConfig)}
+    missing = _INTEGRATION_FIELDS - pipeline_fields
+    assert not missing, (
+        f"DqnpfPipelineConfig is missing mirrored IntegrationConfig field(s): "
+        f"{sorted(missing)}. Add them (with matching defaults) and a --flag in "
+        f"config._build_parser, else to_integration_config()/to_cli_args break."
+    )
+
+
+def test_default_pipeline_config_builds_integration_config() -> None:
+    """The default config produces a valid IntegrationConfig (pod startup path)."""
+    ic = DqnpfPipelineConfig().to_integration_config()
+    for name in _INTEGRATION_FIELDS:
+        assert getattr(ic, name) == getattr(DqnpfPipelineConfig(), name), name
+
+
+# ---------------------------------------------------------------------------
 # DQNPF-CFG-3: Invalid configs surface errors
 # ---------------------------------------------------------------------------
 
