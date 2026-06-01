@@ -38,6 +38,7 @@ def _rec(
     high_sigma: bool = True,
     mu: float = 0.0,
     timestamp_ns: int | None = None,
+    max_total_margin: float = 0.0,
 ) -> StepRecord:
     return StepRecord(
         timestamp_ns=timestamp_ns if timestamp_ns is not None else _ts(2024),
@@ -48,6 +49,7 @@ def _rec(
         sigma=sigma,
         reward=reward,
         high_sigma=high_sigma,
+        max_total_margin=max_total_margin,
     )
 
 
@@ -447,3 +449,25 @@ def test_compare_results_money_fields_from_raw_pnl() -> None:
     assert cmp.combined_sharpe_pnl == pytest.approx(
         compute_sharpe([2.0, -1.0])
     )
+
+
+# ---------------------------------------------------------------------------
+# compare_results: max_total_margin
+# ---------------------------------------------------------------------------
+
+
+def test_compare_results_max_total_margin() -> None:
+    """Peak total open volume is the max of per-step max_total_margin values."""
+    combined = [
+        _rec(max_total_margin=0.0),
+        _rec(max_total_margin=1.0),
+        _rec(max_total_margin=3.0),
+        _rec(max_total_margin=2.0),  # lower than peak; monotonically non-decreasing
+    ]
+    baseline = [
+        _rec(reason="baseline", max_total_margin=0.0),
+        _rec(reason="baseline", max_total_margin=5.0),
+    ]
+    cmp = compare_results(combined, baseline)
+    assert cmp.max_total_margin_combined == 3.0
+    assert cmp.max_total_margin_baseline == 5.0

@@ -163,11 +163,18 @@ pub struct Environment {
     // so the agent can distinguish a 50-pip loss from a 1-pip loss.
     reward_scale: f64,
     disable_hedging: bool,
+    // Leverage ratio for margin calculation: max_total_margin = total_notional / leverage.
+    leverage: f64,
     // Track previous step's total equity for delta_V_t calculation
     prev_total_equity: Option<f64>,
     // Raw (un-normalised) equity change from the most recent calculate_reward
     // call, surfaced on the Observation as raw_pnl_delta for monetary reporting.
     last_raw_pnl_delta: f64,
+    // Peak total margin required in the current episode (sum of volume *
+    // entry_price across open positions, divided by leverage).  Resets to 0.0 on
+    // reset(), monotonically increases during the episode.  Units are
+    // quote-currency notional / leverage (e.g. JPY / leverage for USDJPY).
+    max_total_margin: f64,
     // Regime-conditional reward normalisation (3 volatility bins).
     // Stats persist across episodes; only prev_total_equity resets.
     regime_reward_stats: RegimeRewardStats,
@@ -218,8 +225,10 @@ impl Environment {
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
             reward_scale: 0.01, // 1 pip = 0.01 price units for USDJPY; tune for other CCYs
             disable_hedging: true,
+            leverage: 200.0,
             prev_total_equity: None,
             last_raw_pnl_delta: 0.0,
+            max_total_margin: 0.0,
             regime_reward_stats: RegimeRewardStats::new(
                 DEFAULT_VOL_LOW_THRESHOLD,
                 DEFAULT_VOL_HIGH_THRESHOLD,
@@ -298,6 +307,11 @@ impl Environment {
         self
     }
 
+    pub fn with_leverage(mut self, leverage: f64) -> Self {
+        self.leverage = leverage;
+        self
+    }
+
     pub fn reward_parameters(&self) -> (f64, f64, f64, f64) {
         (
             self.reward_lambda,
@@ -366,6 +380,7 @@ impl Environment {
         self.last_action = None;
         self.last_swap_accrual_timestamp = 0;
         self.last_observation_timestamp_ns = None;
+        self.max_total_margin = 0.0;
     }
 
     fn reset_reward_state(&mut self) {
@@ -625,6 +640,7 @@ impl Environment {
             done: false,
             reward: 0.0,
             raw_pnl_delta: 0.0,
+            max_total_margin: 0.0,
             m15_double_bottom_low,
             m15_double_bottom_high,
             m15_double_top_high,
@@ -661,6 +677,15 @@ impl Environment {
 
                 self.mark_positions_to_market()?;
                 self.apply_action(&action)?;
+
+                // Track peak total notional (volume × entry_price) as margin proxy.
+                let total_notional: f64 = self
+                    .positions
+                    .iter()
+                    .map(|p| p.volume * p.entry_price)
+                    .sum();
+                self.max_total_margin =
+                    self.max_total_margin.max(total_notional / self.leverage);
 
                 let realised_pnl_12m = self
                     .closed_position_window
@@ -699,6 +724,7 @@ impl Environment {
 
                 observation.reward = reward;
                 observation.raw_pnl_delta = self.last_raw_pnl_delta;
+                observation.max_total_margin = self.max_total_margin;
                 observation.done = !still_running;
                 Ok(StepResponse {
                     data: Some(self.normalise_observation(observation.into_observation())),
@@ -804,6 +830,15 @@ impl Environment {
 
                 let mut observation = self.build_live_observation(self.symbol.clone()).await?;
 
+                // Track peak total notional (volume × entry_price) as margin proxy.
+                let total_notional: f64 = self
+                    .positions
+                    .iter()
+                    .map(|p| p.volume * p.entry_price)
+                    .sum();
+                self.max_total_margin =
+                    self.max_total_margin.max(total_notional / self.leverage);
+
                 // Determine volatility regime from M5 BB width.
                 if let Some(bin) =
                     Self::extract_regime_bin(&observation.ta, &self.regime_reward_stats)
@@ -822,6 +857,7 @@ impl Environment {
 
                 observation.reward = reward;
                 observation.raw_pnl_delta = self.last_raw_pnl_delta;
+                observation.max_total_margin = self.max_total_margin;
                 Ok(StepResponse {
                     data: Some(self.normalise_observation(observation.into_observation())),
                     info: "".to_string(),

@@ -281,6 +281,11 @@ message Observation {
   // BEFORE the reward's penalties, regime z-score normalisation and clipping.
   // This is the un-normalised monetary PnL delta; 0.0 for Reset / LiveData.
   double raw_pnl_delta = 5;
+  // Peak margin required in the current episode (sum of volume * entry_price
+  // across open positions, divided by leverage).  Resets to 0.0 on Reset(),
+  // monotonically increases during the episode.  Units are quote-currency
+  // notional / leverage (e.g. JPY / leverage for USDJPY).
+  double max_total_margin = 6;
 }
 
 message StepResponse {

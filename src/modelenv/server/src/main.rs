@@ -38,7 +38,8 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_lambda(config.reward_lambda)
     .with_reward_action_penalty(config.reward_action_penalty)
     .with_reward_holding_penalty(config.reward_holding_penalty)
-    .with_disable_hedging(config.disable_hedging);
+    .with_disable_hedging(config.disable_hedging)
+    .with_leverage(config.leverage);
 
     // Compute the training tick window once so it can both scope the tick
     // preload AND default the bar-snapshot timestamp.
@@ -363,6 +364,6 @@ mod tests {
 
         let environment = build_environment(&config);
 
-        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002));
+        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 0.01));
     }
 }

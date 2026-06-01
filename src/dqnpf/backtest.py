@@ -45,6 +45,10 @@ class StepRecord:
     # before the reward's penalties / regime z-score / clipping. Used to report
     # monetary and pip PnL. Defaults to 0.0 when modelenv predates the field.
     raw_pnl_delta: float = 0.0
+    # Peak margin required in the episode so far (sum of volume * entry_price
+    # across open positions, divided by leverage).  Resets to 0 on reset(),
+    # monotonically increases.  Units: JPY / leverage for USDJPY.
+    max_total_margin: float = 0.0
 
     @property
     def screened(self) -> bool:
@@ -102,6 +106,11 @@ class BacktestComparison:
     baseline_sharpe_pnl: float = 0.0
     high_sigma_negative_raw_pnl_proportion_combined: float = 0.0
     high_sigma_negative_raw_pnl_proportion_baseline: float = 0.0
+    # Peak total notional exposure across the backtest run (max of per-step
+    # max_total_margin across all steps).  Resets per episode, so this is the
+    # largest episode-level peak seen in the run.
+    max_total_margin_combined: float = 0.0
+    max_total_margin_baseline: float = 0.0
 
 
 @dataclass
@@ -275,6 +284,10 @@ def compare_results(
         else 0.0
     )
 
+    # Episode-level peak of total open position volume.
+    combined_max_margin = max((r.max_total_margin for r in combined), default=0.0)
+    baseline_max_margin = max((r.max_total_margin for r in baseline), default=0.0)
+
     return BacktestComparison(
         combined_return=sum(combined_rewards),
         baseline_return=sum(baseline_rewards),
@@ -316,6 +329,8 @@ def compare_results(
         high_sigma_negative_raw_pnl_proportion_baseline=negative_raw_pnl_proportion(
             baseline, high_sigma=True
         ),
+        max_total_margin_combined=combined_max_margin,
+        max_total_margin_baseline=baseline_max_margin,
     )
 
 
@@ -489,6 +504,7 @@ def _run_episode(
                 reward=float(getattr(obs, "reward", 0.0)),
                 high_sigma=high_sigma,
                 raw_pnl_delta=float(getattr(obs, "raw_pnl_delta", 0.0)),
+                max_total_margin=float(getattr(obs, "max_total_margin", 0.0)),
             )
         )
         step_idx += 1

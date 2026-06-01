@@ -161,6 +161,9 @@ pub struct Config {
     pub reward_holding_penalty: f64,
     /// When true, close opposite-side positions before opening new ones (no hedging)
     pub disable_hedging: bool,
+    /// Leverage ratio for margin calculation (margin = notional / leverage).
+    /// Defaults to 30 (30:1), a common retail forex leverage.
+    pub leverage: f64,
     /// Optional training-mode preload scoping. When the four fields below are
     /// all set, the startup preload only fetches ticks covering the trainer's
     /// per-date episode windows (date_start..=date_end × [hour_start..hour_end])
@@ -187,6 +190,7 @@ impl Default for Config {
             reward_action_penalty: 0.001,
             reward_holding_penalty: 1e-6,
             disable_hedging: true,
+            leverage: 200.0,
             training_date_start: None,
             training_date_end: None,
             training_hour_start: None,
@@ -365,6 +369,14 @@ impl Config {
                         return Err(anyhow::anyhow!("--reward-holding-penalty requires a value"));
                     }
                 }
+                "--leverage" => {
+                    if i + 1 < args.len() {
+                        self.leverage = args[i + 1].parse()?;
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--leverage requires a value"));
+                    }
+                }
                 "--training-date-start" => {
                     if i + 1 < args.len() {
                         self.training_date_start = Some(args[i + 1].clone());
@@ -515,6 +527,12 @@ impl Config {
         {
             if let Ok(value) = reward_holding_penalty_env.parse::<f64>() {
                 self.reward_holding_penalty = value;
+            }
+        }
+
+        if let Some(leverage_env) = Self::non_empty_env(env_get, "MODELENV_LEVERAGE") {
+            if let Ok(value) = leverage_env.parse::<f64>() {
+                self.leverage = value;
             }
         }
 
@@ -708,6 +726,7 @@ impl Config {
         info!("Reward Action Penalty: {}", self.reward_action_penalty);
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Disable Hedging: {}", self.disable_hedging);
+        info!("Leverage: {}:1", self.leverage);
 
         match (
             self.training_date_start.as_deref(),
@@ -784,6 +803,7 @@ fn print_help() {
     println!("  --reward-lambda <LAMBDA>   Asymmetric drawdown penalty coefficient (default: 1.0)");
     println!("  --reward-action-penalty <C_A>    Action penalty coefficient (default: 0.001)");
     println!("  --reward-holding-penalty <C_H>   Holding penalty coefficient (default: 1e-6)");
+    println!("  --leverage <RATIO>            Leverage ratio for margin calculation (default: 30)");
     println!("  --help                     Display this help and exit");
     println!();
     println!("Environment Variables:");
@@ -803,6 +823,7 @@ fn print_help() {
     println!("  MODELENV_REWARD_LAMBDA     Same as --reward-lambda");
     println!("  MODELENV_REWARD_ACTION_PENALTY   Same as --reward-action-penalty");
     println!("  MODELENV_REWARD_HOLDING_PENALTY  Same as --reward-holding-penalty");
+    println!("  MODELENV_LEVERAGE              Same as --leverage");
 }
 
 #[cfg(test)]
