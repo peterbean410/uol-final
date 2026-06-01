@@ -32,6 +32,12 @@ HISTORICAL_WINDOW = 1440
 # default 64-bar window is < HISTORICAL_WINDOW and the forecaster never leaves
 # warm-up (every step falls back to DQN-only).
 RECENT_BARS_COUNT = HISTORICAL_WINDOW + LOOKBACK_WINDOW
+# The forecaster emits mu/sigma as raw forward-return *fractions* (e.g. sigma
+# ~0.00137 = 0.137%). The integration layer's thresholds (variance_threshold,
+# directional_tolerance) are documented and tuned in *basis points*. Convert
+# the forecaster output to bps here, at the single integration boundary, so the
+# documented bps contract holds. 1 unit fraction = 10,000 bps.
+BPS_PER_UNIT = 10_000.0
 
 
 class _ForecasterLike(Protocol):
@@ -99,7 +105,8 @@ class ForecasterBridge:
         """Call RecentBars, extract M5 bars, compute features, predict.
 
         Returns:
-            (mu, sigma) as Python floats.
+            (mu, sigma) as Python floats, in basis points (the forecaster's
+            raw fractional output scaled by BPS_PER_UNIT).
 
         Raises:
             KeyError: If "M5" is missing from the RecentBarsResponse.
@@ -121,7 +128,9 @@ class ForecasterBridge:
     def compute_signal_from_bars(self, bars_df: pd.DataFrame) -> tuple[float, float]:
         """Compute (mu, sigma) from a pre-loaded M5 bar DataFrame.
 
-        Used during warm-up and testing to bypass the gRPC call.
+        Used during warm-up and testing to bypass the gRPC call. Returns
+        (mu, sigma) in basis points (raw fractional output scaled by
+        BPS_PER_UNIT).
 
         Raises:
             ValueError: If the bar series has fewer than 36 rows.
@@ -146,4 +155,6 @@ class ForecasterBridge:
 
         tensor = _features_to_tensor(features_df)
         mu, sigma = self._forecaster.predict(tensor)
-        return float(mu), float(sigma)
+        # Convert raw return fractions -> basis points (the units the
+        # integration layer's thresholds are expressed in).
+        return float(mu) * BPS_PER_UNIT, float(sigma) * BPS_PER_UNIT

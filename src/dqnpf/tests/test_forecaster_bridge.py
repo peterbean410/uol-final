@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from tradingmodel.intraday.dqnpf.forecaster_bridge import (
+    BPS_PER_UNIT,
     FEATURE_DIM,
     LOOKBACK_WINDOW,
     RECENT_BARS_COUNT,
@@ -110,7 +111,8 @@ def test_compute_signal_pipeline_with_mock_grpc_client() -> None:
     bridge = ForecasterBridge(forecaster=forecaster, symbol="USDJPY", env_client=env)
     mu, sigma = bridge.compute_signal()
 
-    assert (mu, sigma) == (0.42, 2.71)
+    # Forecaster emits raw fractions; the bridge converts to basis points.
+    assert (mu, sigma) == (0.42 * BPS_PER_UNIT, 2.71 * BPS_PER_UNIT)
     assert env.calls == ["USDJPY"]
     # Must request the deep feature window (1440 + 36), not the default 64, or
     # compute_features would never have enough history and warm-up would be 100%.
@@ -157,9 +159,28 @@ def test_compute_signal_from_bars_with_mock_dataframe() -> None:
     )
     mu, sigma = bridge.compute_signal_from_bars(bars_df)
 
-    assert (mu, sigma) == (-0.1, 1.2)
+    assert (mu, sigma) == (-0.1 * BPS_PER_UNIT, 1.2 * BPS_PER_UNIT)
     assert forecaster.received[0].shape == (LOOKBACK_WINDOW, FEATURE_DIM)
     assert forecaster.received[0].dtype == torch.float32
+
+
+def test_compute_signal_converts_fraction_output_to_bps() -> None:
+    """A realistic raw-fraction output (~0.00137) is scaled to basis points."""
+    bars = _make_bars(1500)
+    bars_df = pd.DataFrame(
+        [(b.timestamp_ns, b.open, b.high, b.low, b.close, b.volume) for b in bars],
+        columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"],
+    )
+    # Magnitudes mirror the live forecaster: fractions, not bps.
+    forecaster = _FakeForecaster(mu=0.000286, sigma=0.001379)
+    bridge = ForecasterBridge(
+        forecaster=forecaster, symbol="USDJPY", env_client=_FakeEnvClient(_FakeResponse({}))
+    )
+
+    mu, sigma = bridge.compute_signal_from_bars(bars_df)
+
+    assert mu == pytest.approx(2.86, abs=1e-2)   # 0.000286 * 10_000
+    assert sigma == pytest.approx(13.79, abs=1e-2)  # 0.001379 * 10_000
 
 
 def test_compute_signal_from_bars_few_rows_raises_value_error() -> None:
