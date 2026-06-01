@@ -53,6 +53,7 @@ class DQNConfig:
     weight_decay: float = 0.0
     grad_clip_norm: float = 10.0
     loss_function: str = "huber"
+    use_double: bool = True         # Double DQN: use online net for action selection, target for eval
 
     # Training
     num_episodes_per_range: int = 3000
@@ -140,6 +141,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--dropout", type=float, default=None)
     parser.add_argument("--dueling", action="store_true", default=None)
+    parser.add_argument("--use-double", action="store_true", default=None, dest="use_double")
     parser.add_argument("--num-episodes-per-range", dest="num_episodes_per_range", type=int, default=None)
     parser.add_argument("--max-steps-per-episode", type=int, default=None)
     parser.add_argument("--checkpoint-interval", type=int, default=None)
@@ -186,6 +188,7 @@ _CLI_TO_CONFIG = {
     "checkpoint_dir": "checkpoint_dir",
     "log_interval": "log_interval",
     "loss_function": "loss_function",
+    "use_double": "use_double",
 }
 
 

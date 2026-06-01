@@ -155,6 +155,13 @@ pub struct Environment {
     reward_lambda: f64,
     reward_action_penalty: f64,
     reward_holding_penalty: f64,
+    // Fixed scale for the reward denominator. delta_v_t and penalties are divided
+    // by this constant so different currency pairs train on comparable reward
+    // magnitudes. For USDJPY one pip = 0.01 price units, so 0.01 is a natural
+    // default (a 1-pip gain → reward ≈ 1). Unlike the old per-regime z-score
+    // normalisation, this preserves the relative scale of large vs small moves
+    // so the agent can distinguish a 50-pip loss from a 1-pip loss.
+    reward_scale: f64,
     disable_hedging: bool,
     // Track previous step's total equity for delta_V_t calculation
     prev_total_equity: Option<f64>,
@@ -209,6 +216,7 @@ impl Environment {
             reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
             reward_action_penalty: 0.001, // Default action penalty (scaled to USD/JPY spread)
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
+            reward_scale: 0.01, // 1 pip = 0.01 price units for USDJPY; tune for other CCYs
             disable_hedging: true,
             prev_total_equity: None,
             last_raw_pnl_delta: 0.0,
@@ -271,6 +279,11 @@ impl Environment {
         self
     }
 
+    pub fn with_reward_scale(mut self, reward_scale: f64) -> Self {
+        self.reward_scale = reward_scale;
+        self
+    }
+
     pub fn with_reward_vol_thresholds(
         mut self,
         vol_low: f64,
@@ -285,11 +298,12 @@ impl Environment {
         self
     }
 
-    pub fn reward_parameters(&self) -> (f64, f64, f64) {
+    pub fn reward_parameters(&self) -> (f64, f64, f64, f64) {
         (
             self.reward_lambda,
             self.reward_action_penalty,
             self.reward_holding_penalty,
+            self.reward_scale,
         )
     }
 
@@ -1021,10 +1035,11 @@ impl Environment {
 
     /// Calculate reward based on action.
     ///
-    /// The raw reward (delta equity minus penalties) is z-score normalised
-    /// using per-volatility-regime running statistics. Regime stats are never
-    /// reset, so the normalised scale is stable from the first step of every
-    /// episode.
+    /// The raw monetary step PnL (delta equity minus penalties) is divided by
+    /// ``reward_scale`` (a fixed, pair-specific constant; default 0.01 = 1 pip
+    /// for USDJPY). Unlike the old per-regime z-score + clip regime, this
+    /// preserves the relative scale of large vs small moves so the DQN can
+    /// distinguish a 50-pip loss from a 1-pip loss on the training signal.
     fn calculate_reward(&mut self, action: &Action) -> Result<f64> {
         // Get current timestamp
         let current_timestamp = self.current_timestamp();
@@ -1047,8 +1062,8 @@ impl Environment {
         // Update previous total equity for next step
         self.prev_total_equity = Some(current_total_equity);
 
-        // Surface the raw (pre-penalty, pre-normalisation) equity change so the
-        // observation can report monetary PnL alongside the clipped reward.
+        // Surface the raw (pre-penalty, pre-scaling) equity change so the
+        // observation can report monetary PnL alongside the scaled reward.
         self.last_raw_pnl_delta = delta_v_t;
 
         // Calculate asymmetric drawdown penalty
@@ -1087,18 +1102,11 @@ impl Environment {
             0.0
         };
 
-        // Calculate final reward
-        let reward = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
-
-        // Regime-conditional z-score normalisation
-        let bin = self.current_regime_bin;
-        self.regime_reward_stats.update(bin, reward);
-        let normalised_reward = self.regime_reward_stats.normalise(bin, reward);
-
-        // Clip to [-1.0, 1.0]
-        let clipped_reward = normalised_reward.clamp(-1.0, 1.0);
-
-        Ok(clipped_reward)
+        // Calculate final reward = money PnL divided by a fixed per-symbol
+        // scale, so 1 pip ≈ 1 reward unit (for USDJPY at reward_scale=0.01).
+        // Penalties share the scale; they are measured in the same units.
+        let raw = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
+        Ok(raw / self.reward_scale)
     }
 
     /// Apply an action to the environment
@@ -2094,7 +2102,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(second.data.as_ref().unwrap().reward < -0.9);
+        // Old regime-zscore+clip path would have clamped this at -1.0. With the
+        // fixed reward_scale=0.01, -0.25 / 0.01 = -25.0, so the penalty is
+        // both visible and proportional to price units.
+        assert!((second.data.as_ref().unwrap().reward - (-25.0)).abs() < 1e-9);
         assert_eq!(environment.last_action, Some(ActionType::ActionBuy1));
     }
 
@@ -2133,7 +2144,7 @@ mod tests {
         .with_reward_action_penalty(0.05)
         .with_reward_holding_penalty(0.0002);
 
-        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002));
+        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 0.01));
     }
 
     fn write_test_parquet_for_interval(

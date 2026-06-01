@@ -160,10 +160,21 @@ class DQNAgent:
         # actions shape: (batch_size,) → (batch_size, 1) for gather
         q_values_for_actions = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        # Compute Bellman target: y = r + γ * max_a' Q_target(s', a') * (1 - done)
+        # Compute Bellman target (Double DQN when use_double is True):
+        #   y = r + γ * Q_target(s', argmax_a' Q_online(s', a')) * (1 - done)
+        # Double DQN eliminates the maximisation bias of vanilla DQN by
+        # decoupling action selection (online net) from evaluation (target net).
         with torch.no_grad():
-            next_q_values = self.target_network(next_states)
-            max_next_q = next_q_values.max(dim=1).values
+            if self.config.use_double:
+                # Select the best action using the online (q_) network
+                online_next_q = self.q_network(next_states)
+                best_actions = online_next_q.argmax(dim=1)
+                # Evaluate that action using the frozen target network
+                next_q_values = self.target_network(next_states)
+                max_next_q = next_q_values.gather(1, best_actions.unsqueeze(1)).squeeze(1)
+            else:
+                next_q_values = self.target_network(next_states)
+                max_next_q = next_q_values.max(dim=1).values
             targets = rewards + self.config.gamma * max_next_q * (1.0 - dones)
 
         # Compute loss
