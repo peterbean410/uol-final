@@ -162,12 +162,21 @@ def _serialise_result(
     comparison: BacktestComparison,
     report: ThresholdReport,
     integration_config: IntegrationConfig,
+    model_provenance: dict,
 ) -> dict:
-    """Build the JSON payload written to the output Artifact path."""
+    """Build the JSON payload written to the output Artifact path.
+
+    ``model_provenance`` records *which* checkpoints the run actually used:
+    the Model Registry entry names and the resolved registry URIs
+    (``minio://``/``s3://`` ...``model_checkpoint``). ``integration_config``
+    only carries the ephemeral local temp paths the checkpoints were
+    downloaded to, which don't identify the source artifact.
+    """
     return {
         "comparison": asdict(comparison),
         "threshold_report": asdict(report),
         "integration_config": asdict(integration_config),
+        "model_provenance": model_provenance,
     }
 
 
@@ -345,7 +354,19 @@ def run_dqnpf_backtest(
         if sidecar is not None:
             _stop_modelenv_sidecar(sidecar)
 
-    payload = _serialise_result(comparison, report, integration_cfg)
+    payload = _serialise_result(
+        comparison,
+        report,
+        integration_cfg,
+        model_provenance={
+            "dqn_model_registry_name": dqn_model_registry_name,
+            "forecaster_model_registry_name": forecaster_model_registry_name,
+            # Resolved registry URIs (pre-download), the canonical checkpoint
+            # identity. integration_config only has the local temp paths.
+            "dqn_checkpoint_uri": dqn_path,
+            "forecaster_checkpoint_uri": fc_path,
+        },
+    )
     payload_json = json.dumps(payload, default=str, indent=2)
     # KFP hands us the artifact's minio:// (or s3://) URI; torch/Path can't write
     # to those schemes, so route uploads through artifact_io like the DQN side.

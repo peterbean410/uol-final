@@ -105,15 +105,23 @@ def test_serialise_result_contains_required_sections() -> None:
 
     report = validate_thresholds(comparison)
     cfg = IntegrationConfig()
-    payload = _serialise_result(comparison, report, cfg)
+    provenance = {
+        "dqn_model_registry_name": "deepqnetwork-usdjpy",
+        "forecaster_model_registry_name": "probabilistic-transformer-usdjpy-h1",
+        "dqn_checkpoint_uri": "minio://bucket/dqn/model_checkpoint",
+        "forecaster_checkpoint_uri": "minio://bucket/fc/model_checkpoint",
+    }
+    payload = _serialise_result(comparison, report, cfg, provenance)
     assert set(payload.keys()) == {
         "comparison",
         "threshold_report",
         "integration_config",
+        "model_provenance",
     }
     assert payload["comparison"]["combined_return"] == comparison.combined_return
     assert payload["threshold_report"]["passed"] is True
     assert payload["integration_config"]["symbol"] == cfg.symbol
+    assert payload["model_provenance"] == provenance
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +168,16 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(tmp_path: Path) -> No
     written = json.loads(output_path.read_text())
     assert written == payload
     assert written["threshold_report"]["passed"] is True
+    # The report records which checkpoints were used: registry names + the
+    # resolved URIs (pre-download), not the ephemeral local temp paths.
+    assert written["model_provenance"] == {
+        "dqn_model_registry_name": "deepqnetwork-usdjpy",
+        "forecaster_model_registry_name": "probabilistic-transformer-usdjpy-h1",
+        "dqn_checkpoint_uri": "s3://bucket/deepqnetwork-usdjpy/production.pt",
+        "forecaster_checkpoint_uri": (
+            "s3://bucket/probabilistic-transformer-usdjpy-h1/production.pt"
+        ),
+    }
 
 
 def test_run_dqnpf_backtest_records_failing_thresholds(tmp_path: Path) -> None:
