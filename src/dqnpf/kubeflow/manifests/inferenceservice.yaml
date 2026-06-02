@@ -16,9 +16,11 @@ metadata:
     app.kubernetes.io/part-of: fintech-forex
     app.kubernetes.io/managed-by: fluxcd
   annotations:
-    # Autoscaling configuration
-    serving.kserve.io/autoscalerClass: kpa.autoscaling.knative.dev
-    serving.kserve.io/targetUtilizationPercentage: "70"
+    # Autoscaling is configured on the predictor block below via the knative
+    # annotations + scaleMetric/scaleTarget (serverless/KPA). The
+    # serving.kserve.io/autoscalerClass annotation is NOT set: it only accepts
+    # hpa/external (RawDeployment mode), and the KServe validator rejects the
+    # knative class string here.
     # Prometheus metrics scraping (request latency, error rate,
     # suppression rate by reason, per-symbol budget utilisation
     prometheus.io/scrape: "true"
