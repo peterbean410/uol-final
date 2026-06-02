@@ -39,7 +39,8 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_action_penalty(config.reward_action_penalty)
     .with_reward_holding_penalty(config.reward_holding_penalty)
     .with_disable_hedging(config.disable_hedging)
-    .with_leverage(config.leverage);
+    .with_leverage(config.leverage)
+    .with_trade_log(config.trade_log_path.clone());
 
     // Compute the training tick window once so it can both scope the tick
     // preload AND default the bar-snapshot timestamp.

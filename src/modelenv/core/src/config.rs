@@ -174,6 +174,9 @@ pub struct Config {
     pub training_date_end: Option<String>,
     pub training_hour_start: Option<u32>,
     pub training_hour_end: Option<u32>,
+    /// Optional path to a JSONL trade log. When set, every fill and position
+    /// close is appended for offline review/debugging. Off (None) by default.
+    pub trade_log_path: Option<String>,
 }
 
 impl Default for Config {
@@ -195,6 +198,7 @@ impl Default for Config {
             training_date_end: None,
             training_hour_start: None,
             training_hour_end: None,
+            trade_log_path: None,
         }
     }
 }
@@ -409,6 +413,14 @@ impl Config {
                         return Err(anyhow::anyhow!("--training-hour-end requires a value"));
                     }
                 }
+                "--trade-log" => {
+                    if i + 1 < args.len() {
+                        self.trade_log_path = Some(args[i + 1].clone());
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--trade-log requires a value"));
+                    }
+                }
                 "--help" => {
                     print_help();
                     std::process::exit(0);
@@ -560,6 +572,10 @@ impl Config {
             if let Ok(parsed) = value.parse::<u32>() {
                 self.training_hour_end = Some(parsed);
             }
+        }
+
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRADE_LOG") {
+            self.trade_log_path = Some(value);
         }
     }
 
@@ -727,6 +743,10 @@ impl Config {
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Disable Hedging: {}", self.disable_hedging);
         info!("Leverage: {}:1", self.leverage);
+        match self.trade_log_path.as_deref() {
+            Some(path) => info!("Trade Log: {}", path),
+            None => info!("Trade Log: disabled"),
+        }
 
         match (
             self.training_date_start.as_deref(),
@@ -804,6 +824,7 @@ fn print_help() {
     println!("  --reward-action-penalty <C_A>    Action penalty coefficient (default: 0.001)");
     println!("  --reward-holding-penalty <C_H>   Holding penalty coefficient (default: 1e-6)");
     println!("  --leverage <RATIO>            Leverage ratio for margin calculation (default: 30)");
+    println!("  --trade-log <PATH>            Append fills and position closes to a JSONL file for review/debugging (default: disabled)");
     println!("  --help                     Display this help and exit");
     println!();
     println!("Environment Variables:");
@@ -824,6 +845,7 @@ fn print_help() {
     println!("  MODELENV_REWARD_ACTION_PENALTY   Same as --reward-action-penalty");
     println!("  MODELENV_REWARD_HOLDING_PENALTY  Same as --reward-holding-penalty");
     println!("  MODELENV_LEVERAGE              Same as --leverage");
+    println!("  MODELENV_TRADE_LOG            Same as --trade-log");
 }
 
 #[cfg(test)]

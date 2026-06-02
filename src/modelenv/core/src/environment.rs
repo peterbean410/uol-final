@@ -23,6 +23,7 @@ use crate::normalisation::Normaliser;
 use crate::market_data_cache::MarketDataCache;
 use crate::position::{ClosedPositionWindow, Position, Side};
 use crate::reconciliation::reconcile_positions;
+use crate::trade_log::{FillEvent, TradeLogger};
 
 const DEFAULT_STEP_SIZE_NS: i64 = 5_000_000_000;
 
@@ -186,6 +187,9 @@ pub struct Environment {
     // Training: populated from Episode after parquet load.
     // Live: updated from broker gateway on each observation.
     bars: HashMap<String, Vec<Bar>>,
+    // Optional durable JSONL log of fills and position closes. None disables it.
+    // Purely a side-channel for offline review/debugging; never read back.
+    trade_logger: Option<Arc<TradeLogger>>,
 }
 
 /// Represents a trade execution record
@@ -237,6 +241,7 @@ impl Environment {
             last_observation_timestamp_ns: None,
             normaliser: Normaliser::new(&state_columns()),
             bars: HashMap::new(),
+            trade_logger: None,
         }
     }
 
@@ -310,6 +315,48 @@ impl Environment {
     pub fn with_leverage(mut self, leverage: f64) -> Self {
         self.leverage = leverage;
         self
+    }
+
+    /// Enable the durable JSONL trade log at `path`. A `None` path leaves it
+    /// disabled. If the file cannot be opened the error is logged and the
+    /// environment continues without a trade log, logging must never block
+    /// trading or training startup.
+    pub fn with_trade_log(mut self, path: Option<String>) -> Self {
+        if let Some(path) = path {
+            match TradeLogger::open(&path) {
+                Ok(logger) => {
+                    info!("Trade log enabled at {path}");
+                    self.trade_logger = Some(Arc::new(logger));
+                }
+                Err(err) => {
+                    log::error!("Failed to open trade log {path}, continuing without it: {err:#}");
+                }
+            }
+        }
+        self
+    }
+
+    /// Update the episode peak margin from the currently open positions.
+    /// Margin is approximated as total notional (Σ volume × entry_price)
+    /// divided by leverage. The value resets to 0 on reset() and monotonically
+    /// tracks the episode high, so closing positions never lowers it. Called
+    /// after apply_action() in both training and live step paths.
+    fn update_max_total_margin(&mut self) {
+        let total_notional: f64 = self
+            .positions
+            .iter()
+            .map(|p| p.volume * p.entry_price)
+            .sum();
+        self.max_total_margin = self.max_total_margin.max(total_notional / self.leverage);
+    }
+
+    /// Record a fill: append it to the in-episode buffer and, if enabled, to the
+    /// durable trade log. Centralises both fill push sites (open and close).
+    fn record_fill(&mut self, event: FillEvent, fill: Fill) {
+        if let Some(logger) = self.trade_logger.as_ref() {
+            logger.log_fill(&self.symbol, event, &fill);
+        }
+        self.recent_fills.push(fill);
     }
 
     pub fn reward_parameters(&self) -> (f64, f64, f64, f64) {
@@ -678,14 +725,7 @@ impl Environment {
                 self.mark_positions_to_market()?;
                 self.apply_action(&action)?;
 
-                // Track peak total notional (volume × entry_price) as margin proxy.
-                let total_notional: f64 = self
-                    .positions
-                    .iter()
-                    .map(|p| p.volume * p.entry_price)
-                    .sum();
-                self.max_total_margin =
-                    self.max_total_margin.max(total_notional / self.leverage);
+                self.update_max_total_margin();
 
                 let realised_pnl_12m = self
                     .closed_position_window
@@ -752,17 +792,20 @@ impl Environment {
                     let size = fill.size;
                     let partial = fill.partial;
 
-                    self.recent_fills.push(Fill {
-                        order_id: order_id.clone(),
-                        timestamp_ns: fill.timestamp_ns,
-                        price,
-                        size,
-                        side: match FillSide::try_from(fill.side) {
-                            Ok(s) => s,
-                            Err(_) => FillSide::Buy,
+                    self.record_fill(
+                        FillEvent::Open,
+                        Fill {
+                            order_id: order_id.clone(),
+                            timestamp_ns: fill.timestamp_ns,
+                            price,
+                            size,
+                            side: match FillSide::try_from(fill.side) {
+                                Ok(s) => s,
+                                Err(_) => FillSide::Buy,
+                            },
+                            partial,
                         },
-                        partial,
-                    });
+                    );
 
                     info!(
                         "Recorded fill: order_id={}, price={}, size={}, partial={}",
@@ -830,14 +873,7 @@ impl Environment {
 
                 let mut observation = self.build_live_observation(self.symbol.clone()).await?;
 
-                // Track peak total notional (volume × entry_price) as margin proxy.
-                let total_notional: f64 = self
-                    .positions
-                    .iter()
-                    .map(|p| p.volume * p.entry_price)
-                    .sum();
-                self.max_total_margin =
-                    self.max_total_margin.max(total_notional / self.leverage);
+                self.update_max_total_margin();
 
                 // Determine volatility regime from M5 BB width.
                 if let Some(bin) =
@@ -1240,23 +1276,30 @@ impl Environment {
         let closed_position =
             position.to_closed_position(close_price, current_timestamp, self.transaction_cost);
 
+        if let Some(logger) = self.trade_logger.as_ref() {
+            logger.log_close(&self.symbol, &closed_position);
+        }
+
         self.closed_position_window
             .add_closed_position(closed_position);
 
         self.positions
             .retain(|p| p.position_id != position_id);
 
-        self.recent_fills.push(Fill {
-            order_id: format!("fill_{}", current_timestamp),
-            timestamp_ns: current_timestamp,
-            price: close_price,
-            size: position.volume,
-            side: match position.side {
-                Side::Buy => FillSide::Buy,
-                Side::Sell => FillSide::Sell,
+        self.record_fill(
+            FillEvent::Close,
+            Fill {
+                order_id: format!("fill_{}", current_timestamp),
+                timestamp_ns: current_timestamp,
+                price: close_price,
+                size: position.volume,
+                side: match position.side {
+                    Side::Buy => FillSide::Buy,
+                    Side::Sell => FillSide::Sell,
+                },
+                partial: false,
             },
-            partial: false,
-        });
+        );
 
         Ok(())
     }
@@ -1405,6 +1448,43 @@ mod tests {
             .position(|c| c == column)
             .unwrap_or_else(|| panic!("column not found: {}", column));
         obs.state_data[0].values[idx]
+    }
+
+    #[test]
+    fn update_max_total_margin_tracks_monotonic_episode_peak() {
+        let mut env =
+            Environment::new(Mode::Training, "USDJPY".to_string(), "s3://unused".to_string())
+                .with_leverage(200.0);
+        assert_eq!(env.max_total_margin, 0.0, "starts at zero");
+
+        // One position: entry 150.0, volume 2 → notional 300 → /200 = 1.5.
+        env.positions
+            .push(Position::new("p1".to_string(), 150.0, 0.0, 2.0, Side::Buy, 0));
+        env.update_max_total_margin();
+        assert!(
+            (env.max_total_margin - 1.5).abs() < 1e-9,
+            "single open position must set the peak, got {}",
+            env.max_total_margin
+        );
+
+        // Add a second position → notional 450 → /200 = 2.25, peak rises.
+        env.positions
+            .push(Position::new("p2".to_string(), 150.0, 0.0, 1.0, Side::Sell, 0));
+        env.update_max_total_margin();
+        assert!(
+            (env.max_total_margin - 2.25).abs() < 1e-9,
+            "added exposure must raise the peak, got {}",
+            env.max_total_margin
+        );
+
+        // Closing every position must NOT lower the recorded peak (monotonic).
+        env.positions.clear();
+        env.update_max_total_margin();
+        assert!(
+            (env.max_total_margin - 2.25).abs() < 1e-9,
+            "flat book must preserve the episode peak, got {}",
+            env.max_total_margin
+        );
     }
 
     struct MockBrokerGateway {
@@ -1918,6 +1998,113 @@ mod tests {
         assert!((obs_value(&observation, "num_positions_buy") - 0.2).abs() < 1e-9);
         // tick_count normalised as Count { cap: 100 } → 1 / 100
         assert!((obs_value(&observation, "tick_count") - 0.01).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn test_training_step_surfaces_max_total_margin_after_buy() {
+        // End-to-end guard for the full Step RPC path: a buy must surface a
+        // non-zero max_total_margin on the returned Observation, matching the
+        // open-position book / leverage. Regression cover for a server that
+        // silently returns 0 (the field never being populated).
+        let m1_bars = (0..6)
+            .map(|i| Bar {
+                timestamp_ns: i * 60_000_000_000,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: 1000.0,
+            })
+            .collect::<Vec<_>>();
+        let m5_bars = vec![
+            Bar {
+                timestamp_ns: 0,
+                open: 200.0,
+                high: 201.0,
+                low: 199.0,
+                close: 200.5,
+                volume: 5000.0,
+            },
+            Bar {
+                timestamp_ns: 300_000_000_000,
+                open: 205.0,
+                high: 206.0,
+                low: 204.0,
+                close: 205.5,
+                volume: 5000.0,
+            },
+        ];
+
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), m1_bars), ("M5".to_string(), m5_bars)]
+                .into_iter()
+                .collect(),
+            0,
+            300_000_000_000,
+        )
+        .with_ticks(vec![
+            Tick {
+                timestamp_ns: 61_000_000_000,
+                bid: 101.10,
+                ask: 101.11,
+            },
+            Tick {
+                timestamp_ns: 119_000_000_000,
+                bid: 102.20,
+                ask: 102.21,
+            },
+        ]);
+
+        let leverage = 200.0;
+        let mut environment =
+            Environment::new(Mode::Training, "USDJPY".to_string(), "s3://unused".to_string())
+                .with_leverage(leverage);
+        environment.step_size_ns = 60_000_000_000;
+        environment.episode = Some(episode);
+
+        // Before any position is opened the peak is zero.
+        let hold = environment
+            .step(Action {
+                action: ActionType::ActionHold as i32,
+                client_order_id: "hold-1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            hold.data.unwrap().max_total_margin,
+            0.0,
+            "flat book before any trade must report zero margin"
+        );
+
+        // A buy opens a position; the Observation must surface a positive peak.
+        let buy = environment
+            .step(Action {
+                action: ActionType::ActionBuy1 as i32,
+                client_order_id: "buy-1".to_string(),
+            })
+            .await
+            .unwrap();
+        let observation = buy.data.unwrap();
+
+        let expected = environment
+            .positions
+            .iter()
+            .map(|p| p.volume * p.entry_price)
+            .sum::<f64>()
+            / leverage;
+        assert!(expected > 0.0, "buy step must leave an open position");
+        assert!(
+            observation.max_total_margin > 0.0,
+            "Observation.max_total_margin must be non-zero after a buy, got {}",
+            observation.max_total_margin
+        );
+        assert!(
+            (observation.max_total_margin - expected).abs() < 1e-9,
+            "surfaced margin {} must equal notional/leverage {}",
+            observation.max_total_margin,
+            expected
+        );
     }
 
     #[tokio::test]

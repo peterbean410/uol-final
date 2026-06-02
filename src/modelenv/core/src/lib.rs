@@ -10,3 +10,4 @@ pub mod market_data_cache;
 pub mod normalisation;
 pub mod position;
 pub mod reconciliation;
+pub mod trade_log;
