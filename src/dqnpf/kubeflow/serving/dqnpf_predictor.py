@@ -201,11 +201,13 @@ class DqnpfIntradayPredictor(kserve.Model):
             self._grpc_address,
         )
 
-        # Resolve production checkpoint paths from Model Registry
-        dqn_path = resolve_production_checkpoint(self._dqn_registry_name, "production")
-        fc_path = resolve_production_checkpoint(
-            self._forecaster_registry_name, "production"
-        )
+        # Resolve production checkpoint paths from Model Registry.
+        # resolve_production_checkpoint's 2nd positional arg is registry_url,
+        # not a lifecycle stage; it always resolves the production-stage
+        # version. Passing "production" here made it the URL (is_secure=True →
+        # "user token required"). Omit it so the in-cluster default URL is used.
+        dqn_path = resolve_production_checkpoint(self._dqn_registry_name)
+        fc_path = resolve_production_checkpoint(self._forecaster_registry_name)
 
         logger.info(
             "Resolved checkpoints: dqn=%s, forecaster=%s", dqn_path, fc_path
@@ -346,11 +348,9 @@ class DqnpfIntradayPredictor(kserve.Model):
                     resolve_production_checkpoint,
                 )
 
-                new_dqn_path = resolve_production_checkpoint(
-                    self._dqn_registry_name, "production"
-                )
+                new_dqn_path = resolve_production_checkpoint(self._dqn_registry_name)
                 new_fc_path = resolve_production_checkpoint(
-                    self._forecaster_registry_name, "production"
+                    self._forecaster_registry_name
                 )
 
                 dqn_changed = new_dqn_path != self._current_dqn_path

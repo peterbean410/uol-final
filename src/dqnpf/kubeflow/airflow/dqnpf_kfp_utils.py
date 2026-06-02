@@ -238,8 +238,11 @@ def check_parent_models_available(
 
     errors: list[str] = []
 
+    # resolve_production_checkpoint's 2nd positional arg is registry_url, not a
+    # lifecycle stage; it always resolves the production version. Omit it so
+    # the in-cluster default URL is used (passing "production" made it the URL).
     try:
-        resolve_production_checkpoint(dqn_model_registry_name, "production")
+        resolve_production_checkpoint(dqn_model_registry_name)
     except ValueError as e:
         errors.append(
             f"DQN parent model '{dqn_model_registry_name}' has no production "
@@ -247,9 +250,7 @@ def check_parent_models_available(
         )
 
     try:
-        resolve_production_checkpoint(
-            forecaster_model_registry_name, "production"
-        )
+        resolve_production_checkpoint(forecaster_model_registry_name)
     except ValueError as e:
         errors.append(
             f"Forecaster parent model '{forecaster_model_registry_name}' has "
