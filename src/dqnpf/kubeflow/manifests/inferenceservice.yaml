@@ -88,8 +88,10 @@ spec:
       # Modelenv sidecar, provides state preprocessing (53-feature vector)
       # and RecentBars M5 series for ForecasterBridge
       - name: modelenv
-        # Tag managed by Flux image automation (fluxcd/ModelenvImageAutomation.yaml);
-        # the setter marker is rewritten to the newest CI build tag on each merge.
+        # Tag managed by Flux image automation: the ImageUpdateAutomation in
+        # Platform/fluxcd app/base/DqnpfIntraday.yaml rewrites the setter marker
+        # below to the newest CI build tag (resolved by the flux-system:modelenv
+        # ImagePolicy in app/base/ModelEnv.yaml). See fluxcd/README.md.
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:latest # {"$imagepolicy": "flux-system:modelenv"}
         ports:
           - containerPort: 50051
