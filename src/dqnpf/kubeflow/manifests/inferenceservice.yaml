@@ -92,7 +92,7 @@ spec:
         # Platform/fluxcd app/base/DqnpfIntraday.yaml rewrites the setter marker
         # below to the newest CI build tag (resolved by the flux-system:modelenv
         # ImagePolicy in app/base/ModelEnv.yaml). See fluxcd/README.md.
-        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:latest # {"$imagepolicy": "flux-system:modelenv"}
+        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:202606020504 # {"$imagepolicy": "flux-system:modelenv"}
         ports:
           - containerPort: 50051
             protocol: TCP
