@@ -95,9 +95,10 @@ spec:
         # below to the newest CI build tag (resolved by the flux-system:modelenv
         # ImagePolicy in app/base/ModelEnv.yaml). See fluxcd/README.md.
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:202606020504 # {"$imagepolicy": "flux-system:modelenv"}
-        ports:
-          - containerPort: 50051
-            protocol: TCP
+        # No containerPort: knative/KServe serverless allows only ONE port
+        # across all containers in the pod (that's the kserve-container's 8080).
+        # The predictor reaches modelenv over localhost:50051 (same pod via
+        # GRPC_ADDRESS), which needs no declared containerPort.
         resources:
           requests:
             cpu: "1"
