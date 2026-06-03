@@ -8,7 +8,7 @@
 # Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-base:<sha>
 # Requirements: 20.1, 20.2, 20.3, 20.4
 #
-# Rebuild marker: 13e037a-modelenv-swap-rates (FROM fresh dqn/base with swap-capable modelenv)
+# Rebuild marker: e081406-swap-defaults (FROM fresh dqn/base with swap-default-table modelenv)
 
 ARG DQN_BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base:latest
 FROM ${DQN_BASE_IMAGE}
