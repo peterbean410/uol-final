@@ -27,6 +27,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip launching the modelenv subprocess (used when the sidecar "
         "is already running in the pod).",
     )
+    parser.add_argument(
+        "--trade-log-path",
+        default=None,
+        help="Optional path passed to the modelenv sidecar as --trade-log. "
+        "When set, every fill and position close is appended as JSONL for "
+        "offline review. Point it at a mounted PVC / artifact path so it "
+        "survives the pod.",
+    )
     return parser
 
 
@@ -39,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         forecaster_model_registry_name=args.forecaster_model_registry_name,
         output_artifact_path=args.output_artifact_path,
         start_sidecar=not args.no_sidecar,
+        trade_log_path=args.trade_log_path,
     )
     return 0
 

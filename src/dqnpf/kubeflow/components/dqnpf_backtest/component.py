@@ -95,8 +95,16 @@ def _wait_for_port(
     )
 
 
-def _start_modelenv_sidecar(symbol: str, port: int = 50051) -> subprocess.Popen:
-    """Launch modelenv as a subprocess and wait for the port to open."""
+def _start_modelenv_sidecar(
+    symbol: str, port: int = 50051, trade_log_path: str | None = None
+) -> subprocess.Popen:
+    """Launch modelenv as a subprocess and wait for the port to open.
+
+    When ``trade_log_path`` is set, modelenv is started with ``--trade-log``,
+    so every order fill and position close is appended as JSONL to that path
+    for offline review. The trade log is a pure side-channel; it does not
+    affect observations, rewards, or the backtest result.
+    """
     logger.info(
         json.dumps(
             {
@@ -104,6 +112,7 @@ def _start_modelenv_sidecar(symbol: str, port: int = 50051) -> subprocess.Popen:
                 "symbol": symbol,
                 "port": port,
                 "binary": _MODELENV_BINARY,
+                "trade_log_path": trade_log_path,
             }
         )
     )
@@ -112,9 +121,10 @@ def _start_modelenv_sidecar(symbol: str, port: int = 50051) -> subprocess.Popen:
     # the localhost healthcheck below connects. Inherit this process's
     # stdout/stderr so modelenv's startup logs land in the pod logs for
     # debugging (rather than being swallowed by an undrained pipe).
-    proc = subprocess.Popen(
-        [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol],
-    )
+    cmd = [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol]
+    if trade_log_path:
+        cmd += ["--trade-log", trade_log_path]
+    proc = subprocess.Popen(cmd)
     _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S, proc)
     logger.info(json.dumps({"event": "modelenv.ready", "port": port}))
     return proc
@@ -288,6 +298,7 @@ def run_dqnpf_backtest(
     checkpoint_resolver: CheckpointResolver | None = None,
     run_backtest_fn: Callable[[IntegrationConfig], BacktestComparison] | None = None,
     start_sidecar: bool = True,
+    trade_log_path: str | None = None,
 ) -> dict:
     """Run the dqnpf-intraday backtest and write the artifact to ``output_artifact_path``.
 
@@ -307,6 +318,11 @@ def run_dqnpf_backtest(
         start_sidecar: If True (default), launches modelenv as a subprocess.
             Set to False for unit tests that supply their own gRPC env or use
             an injected ``run_backtest_fn``.
+        trade_log_path: Optional path passed to the modelenv sidecar as
+            ``--trade-log``. When set, modelenv appends every fill and position
+            close as JSONL for offline review (a side-channel that does not
+            affect the backtest result). Point it at a mounted PVC / artifact
+            path so the file survives the pod.
 
     Returns:
         The payload dict that was written to ``output_artifact_path``.
@@ -345,7 +361,9 @@ def run_dqnpf_backtest(
     )
 
     sidecar = (
-        _start_modelenv_sidecar(integration_cfg.symbol) if start_sidecar else None
+        _start_modelenv_sidecar(integration_cfg.symbol, trade_log_path=trade_log_path)
+        if start_sidecar
+        else None
     )
     try:
         comparison = runner(integration_cfg)

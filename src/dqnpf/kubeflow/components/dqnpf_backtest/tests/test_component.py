@@ -18,11 +18,16 @@ import yaml
 
 from tradingmodel.intraday.dqnpf.backtest import BacktestComparison
 from tradingmodel.intraday.dqnpf.config import IntegrationConfig
+from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest import component
 from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.component import (
     _build_integration_config,
     _load_pipeline_config,
     _serialise_result,
+    _start_modelenv_sidecar,
     run_dqnpf_backtest,
+)
+from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.__main__ import (
+    _build_parser,
 )
 from tradingmodel.intraday.dqnpf.kubeflow.pipeline.config_schema import (
     DqnpfPipelineConfig,
@@ -223,6 +228,61 @@ def test_run_dqnpf_backtest_uses_pipeline_stages(tmp_path: Path) -> None:
         ("deepqnetwork-usdjpy", "staging"),
         ("probabilistic-transformer-usdjpy-h1", "staging"),
     ]
+
+
+def _patch_sidecar_capture(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Patch Popen + the port healthcheck so the sidecar cmd can be inspected."""
+    captured: list[list[str]] = []
+
+    class _FakeProc:
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured.append(list(cmd))
+        return _FakeProc()
+
+    monkeypatch.setattr(component.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(component, "_wait_for_port", lambda *a, **k: None)
+    return captured
+
+
+def test_sidecar_omits_trade_log_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar("USDJPY")
+    assert "--trade-log" not in captured[0]
+
+
+def test_sidecar_passes_trade_log_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar("USDJPY", trade_log_path="/mnt/cache/trades.jsonl")
+    cmd = captured[0]
+    assert cmd[cmd.index("--trade-log") + 1] == "/mnt/cache/trades.jsonl"
+
+
+def test_cli_trade_log_path_defaults_to_none() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+        ]
+    )
+    assert args.trade_log_path is None
+
+
+def test_cli_trade_log_path_parsed() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+            "--trade-log-path=/mnt/cache/trades.jsonl",
+        ]
+    )
+    assert args.trade_log_path == "/mnt/cache/trades.jsonl"
 
 
 def test_run_dqnpf_backtest_emits_summary_log(
