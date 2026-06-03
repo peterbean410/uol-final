@@ -40,6 +40,11 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_holding_penalty(config.reward_holding_penalty)
     .with_disable_hedging(config.disable_hedging)
     .with_leverage(config.leverage)
+    .with_daily_swap_rate(
+        config.symbol.clone(),
+        config.swap_rate_long,
+        config.swap_rate_short,
+    )
     .with_trade_log(config.trade_log_path.clone());
 
     // Compute the training tick window once so it can both scope the tick

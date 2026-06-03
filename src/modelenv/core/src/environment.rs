@@ -147,7 +147,10 @@ pub struct Environment {
     last_action: Option<ActionType>,
     // Configuration for P/L calculations
     transaction_cost: f64,
-    daily_swap_rates: HashMap<String, f64>,
+    // Per-symbol (long, short) daily swap rates: the per-day, per-unit-volume
+    // financing applied to open positions when a day boundary is crossed.
+    // Defaults to (0, 0) for an unconfigured symbol, i.e. no overnight financing.
+    daily_swap_rates: HashMap<String, (f64, f64)>,
     // Track the last timestamp when swap was accrued for day boundary detection
     last_swap_accrual_timestamp: i64,
     // Broker gateway for Production Mode (Arc for cloneability)
@@ -251,9 +254,14 @@ impl Environment {
         self
     }
 
-    /// Set the daily swap rate for a symbol
-    pub fn with_daily_swap_rate(mut self, symbol: String, rate: f64) -> Self {
-        self.daily_swap_rates.insert(symbol, rate);
+    /// Set the (long, short) daily swap rates for a symbol.
+    ///
+    /// Each is the per-day, per-unit-volume financing accrued on an open
+    /// position of that side when a day boundary is crossed (long rate for BUY
+    /// positions, short rate for SELL). A negative rate is a cost; positive is a
+    /// credit. Leaving this unset (the default) means no overnight financing.
+    pub fn with_daily_swap_rate(mut self, symbol: String, long_rate: f64, short_rate: f64) -> Self {
+        self.daily_swap_rates.insert(symbol, (long_rate, short_rate));
         self
     }
 
@@ -402,9 +410,9 @@ impl Environment {
         &self.mode
     }
 
-    /// Get the current swap rate for the symbol
-    fn get_swap_rate(&self) -> f64 {
-        *self.daily_swap_rates.get(&self.symbol).unwrap_or(&0.0)
+    /// Get the (long, short) daily swap rates for the symbol; (0, 0) if unset.
+    fn get_swap_rates(&self) -> (f64, f64) {
+        *self.daily_swap_rates.get(&self.symbol).unwrap_or(&(0.0, 0.0))
     }
 
     /// Check if broker gateway is configured
@@ -1308,11 +1316,17 @@ impl Environment {
     /// Returns true if swap was accrued for any position
     fn accrue_swap_on_positions(&mut self) -> Result<bool> {
         let current_timestamp = self.current_timestamp();
-        let swap_rate = self.get_swap_rate();
+        let (long_rate, short_rate) = self.get_swap_rates();
 
         let mut swap_accrued = false;
         for position in &mut self.positions {
-            if position.accrue_swap(current_timestamp, swap_rate) {
+            // Long positions carry the long rate, short positions the short rate
+            // (USDJPY overnight carry is asymmetric).
+            let rate = match position.side {
+                Side::Buy => long_rate,
+                Side::Sell => short_rate,
+            };
+            if position.accrue_swap(current_timestamp, rate) {
                 swap_accrued = true;
             }
         }
@@ -1742,6 +1756,24 @@ mod tests {
 
         // Swap should be 0.01 * 1.0 * 1.0 = 0.01
         assert_eq!(position.swap, 0.01);
+    }
+
+    #[test]
+    fn swap_rates_default_and_configured_by_symbol() {
+        // Unconfigured: no overnight financing.
+        let env =
+            Environment::new(Mode::Training, "USDJPY".to_string(), "s3://x".to_string());
+        assert_eq!(env.get_swap_rates(), (0.0, 0.0));
+
+        // Configured (long, short) for the active symbol.
+        let env = env.with_daily_swap_rate("USDJPY".to_string(), -0.5, 0.25);
+        assert_eq!(env.get_swap_rates(), (-0.5, 0.25));
+
+        // Rates set for a different symbol don't apply to the active one.
+        let other =
+            Environment::new(Mode::Training, "EURUSD".to_string(), "s3://x".to_string())
+                .with_daily_swap_rate("USDJPY".to_string(), -0.5, 0.25);
+        assert_eq!(other.get_swap_rates(), (0.0, 0.0));
     }
 
     #[test]
