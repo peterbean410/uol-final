@@ -285,6 +285,49 @@ def test_cli_trade_log_output_path_parsed() -> None:
     assert args.trade_log_output_path == "/mnt/out/trades.jsonl"
 
 
+def test_sidecar_omits_swap_rates_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar("USDJPY")
+    assert "--swap-rate-long" not in captured[0]
+    assert "--swap-rate-short" not in captured[0]
+
+
+def test_sidecar_passes_swap_rates_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar("USDJPY", swap_rate_long=-0.5, swap_rate_short=0.25)
+    cmd = captured[0]
+    assert cmd[cmd.index("--swap-rate-long") + 1] == "-0.5"
+    assert cmd[cmd.index("--swap-rate-short") + 1] == "0.25"
+
+
+def test_cli_swap_rates_default_to_zero() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+        ]
+    )
+    assert args.swap_rate_long == 0.0
+    assert args.swap_rate_short == 0.0
+
+
+def test_cli_swap_rates_parsed_as_float() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+            "--swap-rate-long=-0.5",
+            "--swap-rate-short=0.25",
+        ]
+    )
+    assert args.swap_rate_long == -0.5
+    assert args.swap_rate_short == 0.25
+
+
 def test_export_trade_log_copies_contents(tmp_path: Path) -> None:
     src = tmp_path / "trades.jsonl"
     src.write_text('{"type":"fill"}\n{"type":"close"}\n')

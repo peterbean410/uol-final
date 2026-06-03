@@ -96,7 +96,11 @@ def _wait_for_port(
 
 
 def _start_modelenv_sidecar(
-    symbol: str, port: int = 50051, trade_log_path: str | None = None
+    symbol: str,
+    port: int = 50051,
+    trade_log_path: str | None = None,
+    swap_rate_long: float = 0.0,
+    swap_rate_short: float = 0.0,
 ) -> subprocess.Popen:
     """Launch modelenv as a subprocess and wait for the port to open.
 
@@ -104,6 +108,12 @@ def _start_modelenv_sidecar(
     so every order fill and position close is appended as JSONL to that path
     for offline review. The trade log is a pure side-channel; it does not
     affect observations, rewards, or the backtest result.
+
+    ``swap_rate_long`` / ``swap_rate_short`` are the daily overnight-financing
+    rates (per unit volume) charged to BUY / SELL positions held across a day
+    boundary. They default to 0.0 (no financing, modelenv's default); when
+    non-zero they are passed through as ``--swap-rate-long`` / ``--swap-rate-short``
+    so the backtest's PnL and trade log reflect overnight swap costs.
     """
     logger.info(
         json.dumps(
@@ -113,6 +123,8 @@ def _start_modelenv_sidecar(
                 "port": port,
                 "binary": _MODELENV_BINARY,
                 "trade_log_path": trade_log_path,
+                "swap_rate_long": swap_rate_long,
+                "swap_rate_short": swap_rate_short,
             }
         )
     )
@@ -124,6 +136,10 @@ def _start_modelenv_sidecar(
     cmd = [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol]
     if trade_log_path:
         cmd += ["--trade-log", trade_log_path]
+    if swap_rate_long:
+        cmd += ["--swap-rate-long", str(swap_rate_long)]
+    if swap_rate_short:
+        cmd += ["--swap-rate-short", str(swap_rate_short)]
     proc = subprocess.Popen(cmd)
     _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S, proc)
     logger.info(json.dumps({"event": "modelenv.ready", "port": port}))
@@ -345,6 +361,8 @@ def run_dqnpf_backtest(
     run_backtest_fn: Callable[[IntegrationConfig], BacktestComparison] | None = None,
     start_sidecar: bool = True,
     trade_log_output_path: str | None = None,
+    swap_rate_long: float = 0.0,
+    swap_rate_short: float = 0.0,
 ) -> dict:
     """Run the dqnpf-intraday backtest and write the artifact to ``output_artifact_path``.
 
@@ -371,6 +389,12 @@ def run_dqnpf_backtest(
             here (a KFP outputPath, or a ``minio://`` / ``s3://`` URI). Only
             takes effect when the sidecar is started by this component. The
             trade log is a side-channel and does not affect the backtest result.
+        swap_rate_long: Daily overnight-financing rate (per unit volume) charged
+            to BUY positions held across a day boundary. Default 0.0 (no
+            financing). Passed to the modelenv sidecar as ``--swap-rate-long``.
+        swap_rate_short: Same as ``swap_rate_long`` for SELL positions, passed as
+            ``--swap-rate-short``. Both only take effect when this component
+            starts the sidecar.
 
     Returns:
         The payload dict that was written to ``output_artifact_path``.
@@ -418,7 +442,10 @@ def run_dqnpf_backtest(
 
     sidecar = (
         _start_modelenv_sidecar(
-            integration_cfg.symbol, trade_log_path=local_trade_log
+            integration_cfg.symbol,
+            trade_log_path=local_trade_log,
+            swap_rate_long=swap_rate_long,
+            swap_rate_short=swap_rate_short,
         )
         if start_sidecar
         else None

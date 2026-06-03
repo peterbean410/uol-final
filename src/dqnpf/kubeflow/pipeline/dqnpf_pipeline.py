@@ -54,6 +54,10 @@ def dqnpf_backtest(
     forecaster_model_registry_name: str,
     backtest_report: Output[Dataset],
     trade_log: Output[Dataset],
+    # Strings (not floats) so they pass straight into the container args; the
+    # __main__ CLI parses them with argparse type=float. "0.0" = no financing.
+    swap_rate_long: str = "0.0",
+    swap_rate_short: str = "0.0",
 ):
     """Run the dqnpf-intraday backtest with the modelenv sidecar in-pod.
 
@@ -79,6 +83,10 @@ def dqnpf_backtest(
             backtest_report.uri,
             "--trade-log-output-path",
             trade_log.uri,
+            "--swap-rate-long",
+            swap_rate_long,
+            "--swap-rate-short",
+            swap_rate_short,
         ],
     )
 
@@ -95,6 +103,8 @@ def dqnpf_intraday_pipeline(
     ),
     dqn_model_registry_name: str = "deepqnetwork-usdjpy",
     forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1",
+    swap_rate_long: str = "0.0",
+    swap_rate_short: str = "0.0",
 ):
     """Single-step DAG: dqnpf_backtest with retry(3).
 
@@ -106,6 +116,8 @@ def dqnpf_intraday_pipeline(
         integration_config_yaml=integration_config_yaml,
         dqn_model_registry_name=dqn_model_registry_name,
         forecaster_model_registry_name=forecaster_model_registry_name,
+        swap_rate_long=swap_rate_long,
+        swap_rate_short=swap_rate_short,
     )
     task.set_retry(num_retries=3)
     # Disable caching: every backtest run resolves fresh production checkpoints

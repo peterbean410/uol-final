@@ -34,6 +34,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "position close), exported after the run so it can be downloaded. "
         "Accepts a local path or a minio:// / s3:// URI.",
     )
+    parser.add_argument(
+        "--swap-rate-long",
+        type=float,
+        default=0.0,
+        help="Daily overnight-financing rate (per unit volume) charged to BUY "
+        "positions held across a day boundary. Default 0.0 (no financing).",
+    )
+    parser.add_argument(
+        "--swap-rate-short",
+        type=float,
+        default=0.0,
+        help="Daily overnight-financing rate (per unit volume) charged to SELL "
+        "positions held across a day boundary. Default 0.0 (no financing).",
+    )
     return parser
 
 
@@ -47,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         output_artifact_path=args.output_artifact_path,
         start_sidecar=not args.no_sidecar,
         trade_log_output_path=args.trade_log_output_path,
+        swap_rate_long=args.swap_rate_long,
+        swap_rate_short=args.swap_rate_short,
     )
     return 0
 

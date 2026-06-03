@@ -22,6 +22,19 @@ inputs:
     type: String
     description: Model Registry entry name for the Forecaster parent checkpoint.
     default: probabilistic-transformer-usdjpy-h1
+  - name: swap_rate_long
+    type: String
+    description: |
+      Daily overnight-financing rate (per unit volume) charged to BUY positions
+      held across a day boundary, passed to the modelenv sidecar. Default "0.0"
+      (no financing). Set to your broker's USDJPY long swap to reflect carry.
+    default: "0.0"
+  - name: swap_rate_short
+    type: String
+    description: |
+      Daily overnight-financing rate (per unit volume) for SELL positions.
+      Default "0.0" (no financing).
+    default: "0.0"
 
 outputs:
   - name: backtest_report
@@ -57,6 +70,10 @@ implementation:
       - { outputPath: backtest_report }
       - --trade-log-output-path
       - { outputPath: trade_log }
+      - --swap-rate-long
+      - { inputValue: swap_rate_long }
+      - --swap-rate-short
+      - { inputValue: swap_rate_short }
 
 # Retry policy and resource requests are applied at pipeline-definition time
 # (see tradingmodel/intraday/dqnpf/kubeflow/pipeline/dqnpf_pipeline.py, Task 29).
