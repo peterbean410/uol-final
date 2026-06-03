@@ -2,7 +2,7 @@
 # Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base
 # Requirements: DQN-R4, DQN-R5
 #
-# Rebuild marker: 01a8772-modelenv-s3-list-cache
+# Rebuild marker: d2d7e9d-modelenv-swap-rates (re-pull modelenv:latest with swap support)
 
 FROM python:3.11-slim
 
