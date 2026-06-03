@@ -260,7 +260,7 @@ def test_sidecar_passes_trade_log_when_set(monkeypatch: pytest.MonkeyPatch) -> N
     assert cmd[cmd.index("--trade-log") + 1] == "/mnt/cache/trades.jsonl"
 
 
-def test_cli_trade_log_path_defaults_to_none() -> None:
+def test_cli_trade_log_output_path_defaults_to_none() -> None:
     args = _build_parser().parse_args(
         [
             "--integration-config-yaml=cfg.yaml",
@@ -269,20 +269,38 @@ def test_cli_trade_log_path_defaults_to_none() -> None:
             "--output-artifact-path=out.json",
         ]
     )
-    assert args.trade_log_path is None
+    assert args.trade_log_output_path is None
 
 
-def test_cli_trade_log_path_parsed() -> None:
+def test_cli_trade_log_output_path_parsed() -> None:
     args = _build_parser().parse_args(
         [
             "--integration-config-yaml=cfg.yaml",
             "--dqn-model-registry-name=dqn",
             "--forecaster-model-registry-name=fc",
             "--output-artifact-path=out.json",
-            "--trade-log-path=/mnt/cache/trades.jsonl",
+            "--trade-log-output-path=/mnt/out/trades.jsonl",
         ]
     )
-    assert args.trade_log_path == "/mnt/cache/trades.jsonl"
+    assert args.trade_log_output_path == "/mnt/out/trades.jsonl"
+
+
+def test_export_trade_log_copies_contents(tmp_path: Path) -> None:
+    src = tmp_path / "trades.jsonl"
+    src.write_text('{"type":"fill"}\n{"type":"close"}\n')
+    dest = tmp_path / "out" / "trade_log.jsonl"
+    component._export_trade_log(str(src), str(dest))
+    assert dest.read_text() == '{"type":"fill"}\n{"type":"close"}\n'
+
+
+def test_export_trade_log_writes_empty_when_no_trades(tmp_path: Path) -> None:
+    # modelenv never created the file (no trades placed); the declared output
+    # artifact must still exist, so an empty file is written.
+    missing = tmp_path / "never-written.jsonl"
+    dest = tmp_path / "trade_log.jsonl"
+    component._export_trade_log(str(missing), str(dest))
+    assert dest.exists()
+    assert dest.read_text() == ""
 
 
 def test_run_dqnpf_backtest_emits_summary_log(

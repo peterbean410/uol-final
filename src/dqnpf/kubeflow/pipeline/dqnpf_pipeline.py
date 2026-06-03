@@ -53,6 +53,7 @@ def dqnpf_backtest(
     dqn_model_registry_name: str,
     forecaster_model_registry_name: str,
     backtest_report: Output[Dataset],
+    trade_log: Output[Dataset],
 ):
     """Run the dqnpf-intraday backtest with the modelenv sidecar in-pod.
 
@@ -76,6 +77,8 @@ def dqnpf_backtest(
             forecaster_model_registry_name,
             "--output-artifact-path",
             backtest_report.uri,
+            "--trade-log-output-path",
+            trade_log.uri,
         ],
     )
 

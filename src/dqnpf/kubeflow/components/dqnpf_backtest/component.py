@@ -289,6 +289,52 @@ def _materialize_checkpoint(uri: str, dest_dir: str, name: str) -> str:
     return local_path
 
 
+def _write_output_bytes(path: str, data: bytes, content_type: str) -> None:
+    """Write ``data`` to ``path``, routing minio:///s3:// through artifact_io.
+
+    KFP hands us the artifact's minio:// (or s3://) URI; torch/Path can't write
+    to those schemes, so route uploads through artifact_io like the DQN side.
+    Bare local paths (KFP outputPath, unit tests) are written directly, creating
+    parent directories as needed.
+    """
+    if urlparse(path).scheme.lower() in ("minio", "s3"):
+        from deepqnetwork import artifact_io
+
+        artifact_io.put_object_bytes(path, data, content_type=content_type)
+    else:
+        out = Path(path)
+        if out.parent != Path(""):
+            out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+
+
+def _export_trade_log(local_trade_log: str, trade_log_output_path: str) -> None:
+    """Copy the modelenv trade log to the downloadable output artifact.
+
+    modelenv writes the JSONL trade log to ``local_trade_log`` (a pod-local
+    file). To make it downloadable after the run we upload its contents to
+    ``trade_log_output_path`` (a KFP outputPath / minio:// / s3:// URI). The
+    declared output must always exist, so if no trade log was produced (e.g. the
+    run placed no trades) an empty file is written instead.
+    """
+    if os.path.exists(local_trade_log):
+        data = Path(local_trade_log).read_bytes()
+        lines = data.count(b"\n")
+    else:
+        data = b""
+        lines = 0
+    _write_output_bytes(trade_log_output_path, data, "application/x-ndjson")
+    logger.info(
+        json.dumps(
+            {
+                "event": "backtest.trade_log_exported",
+                "records": lines,
+                "output": trade_log_output_path,
+            }
+        )
+    )
+
+
 def run_dqnpf_backtest(
     integration_config_yaml: str,
     dqn_model_registry_name: str,
@@ -298,7 +344,7 @@ def run_dqnpf_backtest(
     checkpoint_resolver: CheckpointResolver | None = None,
     run_backtest_fn: Callable[[IntegrationConfig], BacktestComparison] | None = None,
     start_sidecar: bool = True,
-    trade_log_path: str | None = None,
+    trade_log_output_path: str | None = None,
 ) -> dict:
     """Run the dqnpf-intraday backtest and write the artifact to ``output_artifact_path``.
 
@@ -318,11 +364,13 @@ def run_dqnpf_backtest(
         start_sidecar: If True (default), launches modelenv as a subprocess.
             Set to False for unit tests that supply their own gRPC env or use
             an injected ``run_backtest_fn``.
-        trade_log_path: Optional path passed to the modelenv sidecar as
-            ``--trade-log``. When set, modelenv appends every fill and position
-            close as JSONL for offline review (a side-channel that does not
-            affect the backtest result). Point it at a mounted PVC / artifact
-            path so the file survives the pod.
+        trade_log_output_path: Optional destination for modelenv's JSONL trade
+            log (every fill + position close), exported so it can be downloaded
+            after the run. modelenv writes it to a pod-local temp file via
+            ``--trade-log``; once the backtest finishes the file is uploaded
+            here (a KFP outputPath, or a ``minio://`` / ``s3://`` URI). Only
+            takes effect when the sidecar is started by this component. The
+            trade log is a side-channel and does not affect the backtest result.
 
     Returns:
         The payload dict that was written to ``output_artifact_path``.
@@ -360,8 +408,18 @@ def run_dqnpf_backtest(
         )
     )
 
+    # modelenv only writes the trade log to a local file, so point it at a
+    # pod-local temp path and export that to the downloadable output afterwards.
+    local_trade_log = (
+        os.path.join(tempfile.mkdtemp(prefix="dqnpf-tradelog-"), "trades.jsonl")
+        if trade_log_output_path and start_sidecar
+        else None
+    )
+
     sidecar = (
-        _start_modelenv_sidecar(integration_cfg.symbol, trade_log_path=trade_log_path)
+        _start_modelenv_sidecar(
+            integration_cfg.symbol, trade_log_path=local_trade_log
+        )
         if start_sidecar
         else None
     )
@@ -369,8 +427,11 @@ def run_dqnpf_backtest(
         comparison = runner(integration_cfg)
         report = validate_thresholds(comparison)
     finally:
+        # Stop the sidecar first so the trade log is flushed/closed before export.
         if sidecar is not None:
             _stop_modelenv_sidecar(sidecar)
+        if trade_log_output_path and local_trade_log is not None:
+            _export_trade_log(local_trade_log, trade_log_output_path)
 
     payload = _serialise_result(
         comparison,
@@ -386,19 +447,9 @@ def run_dqnpf_backtest(
         },
     )
     payload_json = json.dumps(payload, default=str, indent=2)
-    # KFP hands us the artifact's minio:// (or s3://) URI; torch/Path can't write
-    # to those schemes, so route uploads through artifact_io like the DQN side.
-    # Bare local paths (unit tests) write directly.
-    if urlparse(output_artifact_path).scheme.lower() in ("minio", "s3"):
-        from deepqnetwork import artifact_io
-
-        artifact_io.put_object_bytes(
-            output_artifact_path,
-            payload_json.encode("utf-8"),
-            content_type="application/json",
-        )
-    else:
-        Path(output_artifact_path).write_text(payload_json)
+    _write_output_bytes(
+        output_artifact_path, payload_json.encode("utf-8"), "application/json"
+    )
     _emit_summary_logs(comparison, report)
 
     return payload

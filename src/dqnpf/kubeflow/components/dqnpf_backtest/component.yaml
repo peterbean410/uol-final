@@ -30,6 +30,14 @@ outputs:
       JSON artifact with three top-level keys: `comparison` (BacktestComparison),
       `threshold_report` (ThresholdReport with `passed` and `failures`), and
       `integration_config` (the IntegrationConfig used for the run).
+  - name: trade_log
+    type: Artifact
+    description: |
+      modelenv's JSONL trade log for the run: one object per line, either
+      `{"type":"fill", ...}` (an order execution) or `{"type":"close", ...}`
+      (a closed position with realised PnL). Downloadable from the KFP UI.
+      Empty if the run placed no trades. Side-channel only, does not affect
+      the backtest result.
 
 implementation:
   container:
@@ -47,6 +55,8 @@ implementation:
       - { inputValue: forecaster_model_registry_name }
       - --output-artifact-path
       - { outputPath: backtest_report }
+      - --trade-log-output-path
+      - { outputPath: trade_log }
 
 # Retry policy and resource requests are applied at pipeline-definition time
 # (see tradingmodel/intraday/dqnpf/kubeflow/pipeline/dqnpf_pipeline.py, Task 29).
