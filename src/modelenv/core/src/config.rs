@@ -177,13 +177,14 @@ pub struct Config {
     /// Optional path to a JSONL trade log. When set, every fill and position
     /// close is appended for offline review/debugging. Off (None) by default.
     pub trade_log_path: Option<String>,
-    /// Daily swap (overnight financing) rates for the configured symbol, per
-    /// unit of volume, applied to open positions when a day boundary is crossed.
-    /// `long` applies to BUY positions, `short` to SELL. Negative = cost,
-    /// positive = credit. Both default to 0.0, i.e. no overnight financing
-    /// (so backtests are unchanged unless these are set).
-    pub swap_rate_long: f64,
-    pub swap_rate_short: f64,
+    /// Optional overrides for the daily swap (overnight financing) rates of the
+    /// configured symbol, per unit of volume. `long` applies to BUY positions,
+    /// `short` to SELL; negative = cost, positive = credit. When `None` (the
+    /// default), Training/backtest mode uses modelenv's built-in per-symbol
+    /// default table (see `environment::default_daily_swap_rates`) and Live mode
+    /// uses broker-synced swap. Set either to override that symbol's rate.
+    pub swap_rate_long: Option<f64>,
+    pub swap_rate_short: Option<f64>,
 }
 
 impl Default for Config {
@@ -206,8 +207,8 @@ impl Default for Config {
             training_hour_start: None,
             training_hour_end: None,
             trade_log_path: None,
-            swap_rate_long: 0.0,
-            swap_rate_short: 0.0,
+            swap_rate_long: None,
+            swap_rate_short: None,
         }
     }
 }
@@ -432,7 +433,7 @@ impl Config {
                 }
                 "--swap-rate-long" => {
                     if i + 1 < args.len() {
-                        self.swap_rate_long = args[i + 1].parse()?;
+                        self.swap_rate_long = Some(args[i + 1].parse()?);
                         i += 2;
                     } else {
                         return Err(anyhow::anyhow!("--swap-rate-long requires a value"));
@@ -440,7 +441,7 @@ impl Config {
                 }
                 "--swap-rate-short" => {
                     if i + 1 < args.len() {
-                        self.swap_rate_short = args[i + 1].parse()?;
+                        self.swap_rate_short = Some(args[i + 1].parse()?);
                         i += 2;
                     } else {
                         return Err(anyhow::anyhow!("--swap-rate-short requires a value"));
@@ -605,12 +606,12 @@ impl Config {
 
         if let Some(value) = Self::non_empty_env(env_get, "MODELENV_SWAP_RATE_LONG") {
             if let Ok(parsed) = value.parse::<f64>() {
-                self.swap_rate_long = parsed;
+                self.swap_rate_long = Some(parsed);
             }
         }
         if let Some(value) = Self::non_empty_env(env_get, "MODELENV_SWAP_RATE_SHORT") {
             if let Ok(parsed) = value.parse::<f64>() {
-                self.swap_rate_short = parsed;
+                self.swap_rate_short = Some(parsed);
             }
         }
     }
@@ -711,12 +712,19 @@ impl Config {
             return Err(anyhow::anyhow!("local cache dir must not be empty"));
         }
 
-        if !self.swap_rate_long.is_finite() || !self.swap_rate_short.is_finite() {
-            return Err(anyhow::anyhow!(
-                "swap rates must be finite (long={}, short={})",
-                self.swap_rate_long,
-                self.swap_rate_short
-            ));
+        for (name, rate) in [
+            ("long", self.swap_rate_long),
+            ("short", self.swap_rate_short),
+        ] {
+            if let Some(value) = rate {
+                if !value.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "swap rate {} override must be finite, got {}",
+                        name,
+                        value
+                    ));
+                }
+            }
         }
 
         if self.mode != Mode::Live {
@@ -787,10 +795,15 @@ impl Config {
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Disable Hedging: {}", self.disable_hedging);
         info!("Leverage: {}:1", self.leverage);
-        info!(
-            "Daily Swap Rates (per unit volume): long={}, short={}",
-            self.swap_rate_long, self.swap_rate_short
-        );
+        match (self.swap_rate_long, self.swap_rate_short) {
+            (None, None) => info!(
+                "Daily Swap Rates: built-in defaults (Training/backtest) / broker-synced (Live)"
+            ),
+            (long, short) => info!(
+                "Daily Swap Rate overrides (per unit volume): long={:?}, short={:?}",
+                long, short
+            ),
+        }
         match self.trade_log_path.as_deref() {
             Some(path) => info!("Trade Log: {}", path),
             None => info!("Trade Log: disabled"),
@@ -873,8 +886,8 @@ fn print_help() {
     println!("  --reward-holding-penalty <C_H>   Holding penalty coefficient (default: 1e-6)");
     println!("  --leverage <RATIO>            Leverage ratio for margin calculation (default: 30)");
     println!("  --trade-log <PATH>            Append fills and position closes to a JSONL file for review/debugging (default: disabled)");
-    println!("  --swap-rate-long <RATE>       Daily swap (overnight financing) per unit volume for BUY positions (default: 0.0 = off)");
-    println!("  --swap-rate-short <RATE>      Daily swap (overnight financing) per unit volume for SELL positions (default: 0.0 = off)");
+    println!("  --swap-rate-long <RATE>       Override daily swap per unit volume for BUY positions (default: built-in per-symbol table in Training, broker in Live)");
+    println!("  --swap-rate-short <RATE>      Override daily swap per unit volume for SELL positions (default: built-in per-symbol table in Training, broker in Live)");
     println!("  --help                     Display this help and exit");
     println!();
     println!("Environment Variables:");
@@ -919,10 +932,10 @@ mod tests {
     }
 
     #[test]
-    fn swap_rates_default_to_zero() {
+    fn swap_rate_overrides_default_to_none() {
         let config = load_test_config(&["modelenv-server"], &[]).unwrap();
-        assert_eq!(config.swap_rate_long, 0.0);
-        assert_eq!(config.swap_rate_short, 0.0);
+        assert_eq!(config.swap_rate_long, None);
+        assert_eq!(config.swap_rate_short, None);
     }
 
     #[test]
@@ -938,8 +951,8 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(config.swap_rate_long, -0.5);
-        assert_eq!(config.swap_rate_short, 0.25);
+        assert_eq!(config.swap_rate_long, Some(-0.5));
+        assert_eq!(config.swap_rate_short, Some(0.25));
     }
 
     #[test]
@@ -952,8 +965,8 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(config.swap_rate_long, -0.3);
-        assert_eq!(config.swap_rate_short, 0.1);
+        assert_eq!(config.swap_rate_long, Some(-0.3));
+        assert_eq!(config.swap_rate_short, Some(0.1));
     }
 
     #[test]
@@ -963,7 +976,7 @@ mod tests {
             &[("MODELENV_SWAP_RATE_LONG", "-0.3")],
         )
         .unwrap();
-        assert_eq!(config.swap_rate_long, -0.9);
+        assert_eq!(config.swap_rate_long, Some(-0.9));
     }
 
     #[test]
@@ -973,7 +986,7 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        assert!(err.to_string().contains("swap rates must be finite"));
+        assert!(err.to_string().contains("swap rate long override must be finite"));
     }
 
     #[test]

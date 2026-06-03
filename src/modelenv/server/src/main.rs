@@ -7,7 +7,7 @@ use env_logger::Env;
 use log::{error, info};
 use modelenv_core::{
     config::{Config, Mode},
-    environment::Environment,
+    environment::{default_swap_rate_for, Environment},
 };
 
 use crate::server::EnvironmentService;
@@ -40,12 +40,24 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_holding_penalty(config.reward_holding_penalty)
     .with_disable_hedging(config.disable_hedging)
     .with_leverage(config.leverage)
-    .with_daily_swap_rate(
-        config.symbol.clone(),
-        config.swap_rate_long,
-        config.swap_rate_short,
-    )
     .with_trade_log(config.trade_log_path.clone());
+
+    // Swap rates: Training/backtest seeds the built-in per-symbol default table
+    // inside Environment::new; Live syncs from the broker. Only override here when
+    // a rate is explicitly configured, filling any unspecified side from the
+    // mode-appropriate default (the table in Training, 0.0 in Live).
+    if config.swap_rate_long.is_some() || config.swap_rate_short.is_some() {
+        let (default_long, default_short) = if matches!(config.mode, Mode::Training) {
+            default_swap_rate_for(&config.symbol)
+        } else {
+            (0.0, 0.0)
+        };
+        environment = environment.with_daily_swap_rate(
+            config.symbol.clone(),
+            config.swap_rate_long.unwrap_or(default_long),
+            config.swap_rate_short.unwrap_or(default_short),
+        );
+    }
 
     // Compute the training tick window once so it can both scope the tick
     // preload AND default the bar-snapshot timestamp.

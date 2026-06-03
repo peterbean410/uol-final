@@ -206,9 +206,38 @@ pub struct Fill {
     pub partial: bool,
 }
 
+/// Built-in daily swap (overnight financing) rates for Training/backtest mode,
+/// keyed by symbol -> (long, short) in price units per unit volume per day
+/// (1 pip = 0.01, volume 1.0 = 1 standard lot). A negative value is a cost.
+///
+/// These are used ONLY in Training mode (training + backtest). In Live mode the
+/// table is left empty and real swap is synced from the broker on position sync.
+pub fn default_daily_swap_rates() -> HashMap<String, (f64, f64)> {
+    // Pepperstone Standard USD/JPY, per 1 lot ($100,000): long earns ~+11.21
+    // pips/day, short pays ~-24.24 pips/day. modelenv works in price units
+    // (1 pip = 0.01), so multiply the pip figures by 0.01.
+    HashMap::from([("USDJPY".to_string(), (0.1121, -0.2424))])
+}
+
+/// The built-in (long, short) Training-mode swap default for `symbol`, or
+/// (0.0, 0.0) if the symbol has no entry in [`default_daily_swap_rates`].
+pub fn default_swap_rate_for(symbol: &str) -> (f64, f64) {
+    default_daily_swap_rates()
+        .get(symbol)
+        .copied()
+        .unwrap_or((0.0, 0.0))
+}
+
 impl Environment {
     /// Create a new environment instance
     pub fn new(mode: Mode, symbol: String, s3_prefix: String) -> Self {
+        // Seed the built-in swap-rate table only in Training/backtest mode; Live
+        // mode pulls real swap from the broker, so it starts empty.
+        let daily_swap_rates = if matches!(mode, Mode::Training) {
+            default_daily_swap_rates()
+        } else {
+            HashMap::new()
+        };
         Environment {
             mode,
             symbol,
@@ -224,7 +253,7 @@ impl Environment {
             recent_fills: Vec::new(),
             last_action: None,
             transaction_cost: 0.0, // Default no transaction cost
-            daily_swap_rates: HashMap::new(),
+            daily_swap_rates,
             last_swap_accrual_timestamp: 0, // Will be set on reset
             broker_gateway: None,
             reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
@@ -1759,21 +1788,36 @@ mod tests {
     }
 
     #[test]
-    fn swap_rates_default_and_configured_by_symbol() {
-        // Unconfigured: no overnight financing.
+    fn training_mode_seeds_builtin_swap_defaults() {
+        // Training mode: USDJPY gets the built-in Pepperstone default table value.
         let env =
             Environment::new(Mode::Training, "USDJPY".to_string(), "s3://x".to_string());
-        assert_eq!(env.get_swap_rates(), (0.0, 0.0));
+        assert_eq!(env.get_swap_rates(), (0.1121, -0.2424));
 
-        // Configured (long, short) for the active symbol.
-        let env = env.with_daily_swap_rate("USDJPY".to_string(), -0.5, 0.25);
-        assert_eq!(env.get_swap_rates(), (-0.5, 0.25));
-
-        // Rates set for a different symbol don't apply to the active one.
+        // A symbol with no table entry falls back to no financing.
         let other =
-            Environment::new(Mode::Training, "EURUSD".to_string(), "s3://x".to_string())
-                .with_daily_swap_rate("USDJPY".to_string(), -0.5, 0.25);
+            Environment::new(Mode::Training, "EURUSD".to_string(), "s3://x".to_string());
         assert_eq!(other.get_swap_rates(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn live_mode_does_not_seed_builtin_swap_defaults() {
+        // Live mode: table is empty; real swap comes from the broker.
+        let env = Environment::new(Mode::Live, "USDJPY".to_string(), "s3://x".to_string());
+        assert_eq!(env.get_swap_rates(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn with_daily_swap_rate_overrides_builtin_default() {
+        let env = Environment::new(Mode::Training, "USDJPY".to_string(), "s3://x".to_string())
+            .with_daily_swap_rate("USDJPY".to_string(), -0.5, 0.25);
+        assert_eq!(env.get_swap_rates(), (-0.5, 0.25));
+    }
+
+    #[test]
+    fn default_swap_rate_for_known_and_unknown_symbol() {
+        assert_eq!(default_swap_rate_for("USDJPY"), (0.1121, -0.2424));
+        assert_eq!(default_swap_rate_for("EURUSD"), (0.0, 0.0));
     }
 
     #[test]
