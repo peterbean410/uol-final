@@ -16,12 +16,28 @@ Requirements: DQN-R11, DQN-R12
 """
 
 import json
+import os
 from typing import NamedTuple
 
 from kfp import dsl, kubernetes
 from kfp.dsl import Input, Metrics, Model, Output
 
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
+
+# Compile-time GPU toggle for the training step.
+#
+# Training requests one GPU (``nvidia.com/gpu: 1``) by default, which pins the
+# pod to a GPU-enabled node. GPU allocation is baked into the pipeline IR when
+# the pipeline is *compiled*, so it cannot be driven by a runtime pipeline
+# parameter; it is resolved here, at compile time. Defaults to enabled; set
+# ``DQN_GPU_ENABLED=false`` (or 0/no/off) when compiling to emit a CPU-only
+# training pipeline. This is the switch behind the ``gpu_enabled`` config field.
+GPU_ENABLED: bool = os.getenv("DQN_GPU_ENABLED", "true").strip().lower() not in (
+    "false",
+    "0",
+    "no",
+    "off",
+)
 
 # ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
@@ -685,7 +701,8 @@ def dqn_pipeline(
         resolve_dqn_config → dqn_training → dqn_backtest
 
     Resource allocation:
-    - Training: 1 GPU (nvidia.com/gpu: 1), 16Gi memory, modelenv sidecar
+    - Training: 1 GPU (nvidia.com/gpu: 1) when GPU_ENABLED (default), else
+      CPU-only; 16Gi memory, modelenv sidecar
     - Backtest: CPU-only, 4Gi memory, modelenv sidecar
 
     Args:
@@ -746,7 +763,8 @@ def dqn_pipeline(
     training_task.set_caching_options(enable_caching=False)
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
-    training_task.set_gpu_limit(1)
+    if GPU_ENABLED:
+        training_task.set_gpu_limit(1)
     kubernetes.mount_pvc(
         training_task,
         pvc_name=MODELENV_CACHE_PVC,

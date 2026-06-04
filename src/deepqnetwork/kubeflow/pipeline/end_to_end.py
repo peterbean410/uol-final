@@ -26,6 +26,7 @@ from kfp.dsl import Input, Metrics, Model, Output
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 from deepqnetwork.kubeflow.pipeline.dqn_pipeline import (
     ECR_BASE,
+    GPU_ENABLED,
     dqn_backtest,
     dqn_training,
     resolve_dqn_config,
@@ -521,7 +522,8 @@ def dqn_pipeline_e2e(
         - Bootstrap: auto-promote first model when no production exists
 
     Resource allocation:
-    - Training: 1 GPU (nvidia.com/gpu: 1), 16Gi memory, modelenv sidecar
+    - Training: 1 GPU (nvidia.com/gpu: 1) when GPU_ENABLED (default), else
+      CPU-only; 16Gi memory, modelenv sidecar
     - Backtest: CPU-only, 4Gi memory, modelenv sidecar
     - Registration: lightweight Python component (256Mi memory)
 
@@ -588,7 +590,8 @@ def dqn_pipeline_e2e(
     training_task.set_retry(num_retries=2)
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
-    training_task.set_gpu_limit(1)
+    if GPU_ENABLED:
+        training_task.set_gpu_limit(1)
 
     # -----------------------------------------------------------------------
     # Step 3: DQN Backtest (CPU-only, 4Gi memory)
