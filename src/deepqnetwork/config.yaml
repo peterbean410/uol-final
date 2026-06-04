@@ -36,7 +36,8 @@ num_episodes_per_range: 3000
 max_steps_per_episode: 30000
 checkpoint_interval: 50
 checkpoint_dir: "deepqnetwork/checkpoints/"
-log_interval: 10
+log_interval: 10                # episodes between episode-summary logs
+progress_log_interval: 1000     # steps between intra-episode progress logs (0 disables)
 
 # Mode
 mode: "train"

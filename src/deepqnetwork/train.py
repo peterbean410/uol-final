@@ -220,6 +220,7 @@ def train(config: DQNConfig) -> None:
             state = preprocessor.process(obs)
             episode_reward = 0.0
             episode_losses: list[float] = []
+            last_loss: float | None = None
 
             for step in range(config.max_steps_per_episode):
                 # Select action (epsilon-greedy)
@@ -245,6 +246,7 @@ def train(config: DQNConfig) -> None:
                     loss = agent.update()
                     if loss is not None:
                         episode_losses.append(loss)
+                        last_loss = loss
 
                 # Epsilon decay
                 agent.step_epsilon()
@@ -257,6 +259,30 @@ def train(config: DQNConfig) -> None:
                 # Advance state
                 state = next_state
                 episode_reward += reward
+
+                # Intra-episode progress logging. Episodes can be tens of
+                # thousands of gRPC steps, so without this nothing is logged
+                # between the episode-start and episode-end lines.
+                if (
+                    config.progress_log_interval
+                    and step > 0
+                    and step % config.progress_log_interval == 0
+                ):
+                    elapsed = time.time() - episode_start_time
+                    steps_per_sec = step / elapsed if elapsed > 0 else 0.0
+                    logger.info(
+                        "  [progress] ep=%d step=%d/%d global_step=%d epsilon=%.3f "
+                        "buffer=%d reward=%.4f last_loss=%s %.1f steps/s",
+                        overall_episode,
+                        step,
+                        config.max_steps_per_episode,
+                        step_count,
+                        agent.epsilon,
+                        len(agent.replay_buffer),
+                        episode_reward,
+                        f"{last_loss:.6f}" if last_loss is not None else "n/a",
+                        steps_per_sec,
+                    )
 
                 if done:
                     break

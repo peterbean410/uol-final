@@ -61,6 +61,7 @@ class DQNConfig:
     checkpoint_interval: int = 50
     checkpoint_dir: str = "deepqnetwork/checkpoints/"
     log_interval: int = 10
+    progress_log_interval: int = 1000  # steps between intra-episode progress logs (0 disables)
 
     # Mode
     mode: str = "train"
@@ -147,6 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-interval", type=int, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--log-interval", type=int, default=None)
+    parser.add_argument("--progress-log-interval", type=int, default=None, help="Steps between intra-episode progress logs (0 disables)")
     parser.add_argument("--loss-function", type=str, choices=["huber", "mse"], default=None)
 
     return parser
@@ -187,6 +189,7 @@ _CLI_TO_CONFIG = {
     "checkpoint_interval": "checkpoint_interval",
     "checkpoint_dir": "checkpoint_dir",
     "log_interval": "log_interval",
+    "progress_log_interval": "progress_log_interval",
     "loss_function": "loss_function",
     "use_double": "use_double",
 }
