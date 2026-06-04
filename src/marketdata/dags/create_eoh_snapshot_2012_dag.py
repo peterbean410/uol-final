@@ -19,8 +19,8 @@ from kubernetes.client import models as k8s
 
 default_args = {
     "owner": "fintech",
-    "retries": 1,
-    "retry_delay": timedelta(minutes=5),
+    "retries": 7,
+    "retry_delay": timedelta(minutes=10),
     "depends_on_past": True,
 }
 
