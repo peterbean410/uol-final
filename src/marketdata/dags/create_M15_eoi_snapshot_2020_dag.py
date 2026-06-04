@@ -34,6 +34,11 @@ _INTERVALS = ["M1", "M5", "M15"]
 # Python weekday(): Mon=0…Sun=6. Skip the wait on Sat and Sun.
 _NO_UPSTREAM_WEEKDAYS = {5, 6}
 
+# Per-interval pod memory limit. M1 processes the most bars per window and needs
+# more headroom than M5/M15, so it gets a larger limit.
+_DEFAULT_MEM_LIMIT = "512Mi"
+_MEM_LIMIT_OVERRIDE = {"M1": "8Gi"}
+
 
 def _make_branch(wait_task_id: str, skip_task_id: str):
     def _branch(data_interval_end, **_):
@@ -98,7 +103,10 @@ with DAG(
             ],
             container_resources=k8s.V1ResourceRequirements(
                 requests={"cpu": "100m", "memory": "256Mi"},
-                limits={"cpu": "500m", "memory": "512Mi"},
+                limits={
+                    "cpu": "500m",
+                    "memory": _MEM_LIMIT_OVERRIDE.get(interval, _DEFAULT_MEM_LIMIT),
+                },
             ),
             is_delete_operator_pod=True,
             get_logs=True,
