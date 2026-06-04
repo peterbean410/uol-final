@@ -40,7 +40,7 @@ WORKDIR /app
 # Copy and install pinned Python dependencies
 COPY requirements-dqn-base.txt /app/requirements-dqn-base.txt
 RUN pip install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
     -r /app/requirements-dqn-base.txt
 
 # Copy compiled modelenv gRPC Python stubs

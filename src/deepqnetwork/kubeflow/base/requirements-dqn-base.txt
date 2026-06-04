@@ -4,7 +4,11 @@
 # grpcio-tools is intentionally not pinned here: it bundles its own protobuf
 # version constraint. Nothing at runtime imports grpc_tools; the *.pb2.py stubs
 # are pre-generated and committed, so the runtime image only needs grpcio + protobuf.
-torch==2.3.1+cpu
+# CUDA 12.1 build so training uses the GPU (resolve_device auto-detects CUDA).
+# Pulled from the cu121 index (see --extra-index-url in Dockerfile.dqn-base).
+# Requires NVIDIA driver >= 525 on the GPU node (CUDA 12.x compat). If the
+# driver is older, fall back to torch==2.3.1+cu118.
+torch==2.3.1+cu121
 numpy==1.26.4
 grpcio==1.80.0
 protobuf==6.33.6
