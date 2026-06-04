@@ -68,10 +68,11 @@ def test_replay_buffer_fifo_order_when_over_capacity(
     # The oldest remaining transition should be at index (num_pushes - capacity)
     start_index = num_pushes - capacity
 
+    ordered_states = buf._ordered_states()
     for buf_idx in range(capacity):
         original_idx = start_index + buf_idx
         expected_state = np.full(state_dim, float(original_idx), dtype=np.float32)
-        actual_state = buf._buffer[buf_idx].state
+        actual_state = ordered_states[buf_idx]
 
         assert np.array_equal(actual_state, expected_state), (
             f"At buffer position {buf_idx}, expected state with value "

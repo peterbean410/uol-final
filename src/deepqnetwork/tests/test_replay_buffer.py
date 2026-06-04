@@ -42,9 +42,8 @@ class TestReplayBufferPush:
         buf = ReplayBuffer(capacity=10)
         state = np.array([1.0, 2.0, 3.0], dtype=np.float64)
         buf.push(state, 1, 0.5, state, True)
-        stored = buf._buffer[0]
-        assert stored.state.dtype == np.float32
-        assert stored.next_state.dtype == np.float32
+        assert buf._states.dtype == np.float32
+        assert buf._next_states.dtype == np.float32
 
     def test_fifo_overwrite_at_capacity(self):
         buf = ReplayBuffer(capacity=3)
@@ -53,21 +52,21 @@ class TestReplayBufferPush:
             buf.push(state, 0, 0.0, state, False)
         # Buffer should contain items 2, 3, 4 (oldest 0, 1 overwritten)
         assert len(buf) == 3
-        assert buf._buffer[0].state[0] == 2.0
-        assert buf._buffer[1].state[0] == 3.0
-        assert buf._buffer[2].state[0] == 4.0
+        ordered = buf._ordered_states()
+        assert ordered[0][0] == 2.0
+        assert ordered[1][0] == 3.0
+        assert ordered[2][0] == 4.0
 
     def test_push_preserves_values(self):
         buf = ReplayBuffer(capacity=10)
         state = np.array([1.5, -2.3, 0.0], dtype=np.float32)
         next_state = np.array([3.1, 4.2, -1.0], dtype=np.float32)
         buf.push(state, 2, -0.5, next_state, True)
-        t = buf._buffer[0]
-        np.testing.assert_array_almost_equal(t.state, state)
-        assert t.action == 2
-        assert t.reward == -0.5
-        np.testing.assert_array_almost_equal(t.next_state, next_state)
-        assert t.done is True
+        np.testing.assert_array_almost_equal(buf._states[0], state)
+        assert buf._actions[0] == 2
+        assert buf._rewards[0] == -0.5
+        np.testing.assert_array_almost_equal(buf._next_states[0], next_state)
+        assert buf._dones[0] == 1.0
 
 
 class TestReplayBufferSample:
