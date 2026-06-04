@@ -9,16 +9,26 @@ FROM python:3.11-slim
 LABEL maintainer="ml-platform"
 LABEL description="Shared base image for DQN pipeline components with modelenv sidecar"
 
+# Architecture of the image being built. buildx injects this automatically
+# (amd64 / arm64) for each --platform target; defaults to amd64 for plain builds.
+ARG TARGETARCH=amd64
+
 # Install system dependencies required for PyTorch and gRPC, plus the AWS
 # CLI v2. The modelenv Rust sidecar shells out to `aws s3 cp` /
 # `aws s3api head-object` via std::process::Command (see
 # modelenv/core/src/data_loader.rs), so the binary must be on PATH or
 # preload fails with `No such file or directory (os error 2)`.
+# Select the AWS CLI build matching the target arch (x86_64 vs aarch64).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
         unzip \
-        && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+        && case "${TARGETARCH}" in \
+             amd64) AWSCLI_ARCH=x86_64 ;; \
+             arm64) AWSCLI_ARCH=aarch64 ;; \
+             *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+           esac \
+        && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o /tmp/awscliv2.zip \
         && unzip -q /tmp/awscliv2.zip -d /tmp \
         && /tmp/aws/install \
         && rm -rf /tmp/awscliv2.zip /tmp/aws \

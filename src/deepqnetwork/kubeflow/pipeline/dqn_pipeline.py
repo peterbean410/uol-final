@@ -764,7 +764,13 @@ def dqn_pipeline(
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
     if GPU_ENABLED:
-        training_task.set_gpu_limit(1)
+        # KFP v2 needs BOTH the count and the accelerator *type*: set_gpu_limit/
+        # set_accelerator_limit alone emits an accelerator count with no resource
+        # name, which the driver silently drops; the pod then never gets an
+        # nvidia.com/gpu limit and trains on CPU. set_accelerator_type supplies
+        # the resource name so the limit actually reaches the pod.
+        training_task.set_accelerator_limit(1)
+        training_task.set_accelerator_type("nvidia.com/gpu")
     kubernetes.mount_pvc(
         training_task,
         pvc_name=MODELENV_CACHE_PVC,

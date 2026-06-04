@@ -132,6 +132,15 @@ def train(config: DQNConfig) -> None:
     Args:
         config: Fully resolved DQN configuration.
     """
+    # Ensure logs are visible even when train() is called directly (e.g. from
+    # the Kubeflow dqn_training component) instead of via main(). Without a
+    # configured handler the root logger drops every INFO record (including the
+    # episode and [progress] lines) so only the modelenv subprocess output
+    # shows. setup_logging() is idempotent, so this no-ops when main() already
+    # configured logging.
+    if not logging.getLogger().handlers:
+        setup_logging(level="INFO", csv_path=f"{config.checkpoint_dir}/training.log")
+
     # Resolve device
     device = resolve_device(config.device)
     logger.info("Device selected: %s", device)

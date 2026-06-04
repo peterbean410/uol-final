@@ -591,7 +591,11 @@ def dqn_pipeline_e2e(
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
     if GPU_ENABLED:
-        training_task.set_gpu_limit(1)
+        # See dqn_pipeline.py: count alone (set_gpu_limit) is dropped by the KFP
+        # v2 driver; the accelerator *type* is required for the nvidia.com/gpu
+        # limit to actually reach the pod.
+        training_task.set_accelerator_limit(1)
+        training_task.set_accelerator_type("nvidia.com/gpu")
 
     # -----------------------------------------------------------------------
     # Step 3: DQN Backtest (CPU-only, 4Gi memory)
