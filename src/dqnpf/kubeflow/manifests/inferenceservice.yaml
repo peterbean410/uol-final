@@ -94,7 +94,7 @@ spec:
         # Platform/fluxcd app/base/DqnpfIntraday.yaml rewrites the setter marker
         # below to the newest CI build tag (resolved by the flux-system:modelenv
         # ImagePolicy in app/base/ModelEnv.yaml). See fluxcd/README.md.
-        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:202606031919 # {"$imagepolicy": "flux-system:modelenv"}
+        image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:202606041544 # {"$imagepolicy": "flux-system:modelenv"}
         # No containerPort: knative/KServe serverless allows only ONE port
         # across all containers in the pod (that's the kserve-container's 8080).
         # The predictor reaches modelenv over localhost:50051 (same pod via
