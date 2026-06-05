@@ -20,13 +20,16 @@ Requirements: DQN-R11, DQN-R12, DQN-R19, DQN-R20
 import json
 from typing import NamedTuple
 
-from kfp import dsl
+from kfp import dsl, kubernetes
 from kfp.dsl import Input, Metrics, Model, Output
 
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 from deepqnetwork.kubeflow.pipeline.dqn_pipeline import (
-    ECR_BASE,
     GPU_ENABLED,
+    MODELENV_CACHE_MOUNT,
+    MODELENV_CACHE_PVC,
+    _mount_minio_creds,
+    _pin_to_spark,
     dqn_backtest,
     dqn_training,
     resolve_dqn_config,
@@ -149,9 +152,11 @@ def register_and_promote(
     """
     import json
     import logging
+    import os
     import sys
     import uuid
     from datetime import datetime, timezone
+    from urllib.parse import urlparse
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
@@ -174,16 +179,44 @@ def register_and_promote(
         print(json.dumps(entry), file=sys.stdout)
 
     # Step 1: Read backtest metrics from S3 ----------------------------------
-    _log("Reading backtest metrics", extra={"s3_uri": backtest_metrics.uri})
+    _log("Reading backtest metrics", extra={"uri": backtest_metrics.uri})
 
     import boto3
 
-    s3 = boto3.client("s3")
-    bucket = "prod-fintech-forex-sg-731833471586"
+    def _get_object_bytes(uri: str) -> bytes:
+        """URI-aware read: minio://b/k → MinIO; s3://b/k → AWS S3; bare key → AWS S3.
+
+        The KFP driver writes ``backtest_metrics.uri`` with whatever scheme the
+        artifact store uses (``minio://...`` in-cluster, ``s3://...`` on AWS).
+        Treating the full URI as a bare S3 key (the previous behaviour) made
+        every read fail, so the candidate metrics always fell back to 0.0.
+        """
+        parsed = urlparse(uri)
+        scheme = (parsed.scheme or "").lower()
+        if scheme == "minio":
+            client = boto3.client(
+                "s3",
+                endpoint_url="http://minio-service.kubeflow:9000",
+                aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+                aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+                region_name="us-east-1",
+            )
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+        elif scheme == "s3":
+            client = boto3.client("s3")
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+        else:
+            client = boto3.client("s3")
+            bucket = "prod-fintech-forex-sg-731833471586"
+            key = uri.lstrip("/")
+        return client.get_object(Bucket=bucket, Key=key)["Body"].read()
 
     try:
-        obj = s3.get_object(Bucket=bucket, Key=backtest_metrics.uri)
-        backtest_data = json.loads(obj["Body"].read().decode("utf-8"))
+        backtest_data = json.loads(
+            _get_object_bytes(backtest_metrics.uri).decode("utf-8")
+        )
     except Exception as e:
         _log(
             "Failed to read backtest metrics; skipping registration",
@@ -191,11 +224,15 @@ def register_and_promote(
         )
         return
 
-    # Extract candidate metrics
-    candidate_sharpe = float(backtest_data.get("sharpe_ratio", 0.0))
-    candidate_pnl = float(backtest_data.get("cumulative_pnl", 0.0))
-    max_drawdown = float(backtest_data.get("max_drawdown", 0.0))
-    win_rate = float(backtest_data.get("win_rate", 0.0))
+    # Extract candidate metrics. The backtest component nests the scalars under
+    # a "backtest_metrics" object (alongside "degradation_gate",
+    # "episode_details", etc.); reading them from the top level always yielded
+    # 0.0 and silently failed the gate.
+    metrics_block = backtest_data.get("backtest_metrics", {})
+    candidate_sharpe = float(metrics_block.get("sharpe_ratio", 0.0))
+    candidate_pnl = float(metrics_block.get("cumulative_pnl", 0.0))
+    max_drawdown = float(metrics_block.get("max_drawdown", 0.0))
+    win_rate = float(metrics_block.get("win_rate", 0.0))
 
     _log(
         "Candidate model metrics",
@@ -335,8 +372,10 @@ def register_and_promote(
     custom_properties = {
         "version_id": version_id,
         "symbol": symbol,
-        "episode_start_ts": str(config.get("episode_start_ts", "")),
-        "episode_end_ts": str(config.get("episode_end_ts", "")),
+        "date_start": str(config.get("date_start", "")),
+        "date_end": str(config.get("date_end", "")),
+        "hour_of_day_start": str(config.get("hour_of_day_start", "")),
+        "hour_of_day_end": str(config.get("hour_of_day_end", "")),
         "step_size_seconds": str(config.get("step_size_seconds", "")),
         "cumulative_pnl": str(candidate_pnl),
         "sharpe_ratio": str(candidate_sharpe),
@@ -485,14 +524,16 @@ def register_and_promote(
 )
 def dqn_pipeline_e2e(
     symbol: str = "USDJPY",
-    episode_start_ts: int = 0,
-    episode_end_ts: int = 0,
     step_size_seconds: int = 5,
     num_episodes_per_range: int = 3000,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
     checkpoint: str = "",
+    date_start: str = "",
+    date_end: str = "",
+    hour_of_day_start: int = 0,
+    hour_of_day_end: int = 23,
     katib_enabled: bool = False,
     katib_best_params_json: str = "",
     model_registry_url: str = MODEL_REGISTRY_URL,
@@ -529,8 +570,6 @@ def dqn_pipeline_e2e(
 
     Args:
         symbol: Currency pair (USDJPY or AUDJPY).
-        episode_start_ts: Episode start timestamp for training.
-        episode_end_ts: Episode end timestamp for training.
         step_size_seconds: Step size in seconds for the environment.
         num_episodes_per_range: Number of training episodes (overridden in finetune mode).
         batch_size: Training batch size.
@@ -538,19 +577,17 @@ def dqn_pipeline_e2e(
         training_mode: "scratch" for full training or "finetune" for
             incremental training on production model weights.
         checkpoint: S3 key path for production checkpoint (required for finetune).
+        date_start: Inclusive ISO date (YYYY-MM-DD) bounding the training/eval
+            window; empty means the modelenv default range.
+        date_end: Exclusive ISO date (YYYY-MM-DD) bounding the window.
+        hour_of_day_start: Inclusive UTC hour-of-day filter (0-23).
+        hour_of_day_end: Exclusive UTC hour-of-day filter.
         katib_enabled: Whether Katib-optimized params should be applied.
         katib_best_params_json: JSON string of Katib best hyperparameters.
             Expected keys: learning_rate, hidden_dims, epsilon_decay_steps,
             gamma, batch_size, target_update_freq, dropout.
         model_registry_url: URL of the Kubeflow Model Registry server.
     """
-    # -----------------------------------------------------------------------
-    # Step 0: Apply Katib best params if enabled
-    # -----------------------------------------------------------------------
-    effective_learning_rate = learning_rate
-    effective_batch_size = batch_size
-    effective_num_episodes_per_range = num_episodes_per_range
-
     # Note: Katib parameter injection is handled at submission time via
     # build_dqn_pipeline_e2e_config(). The katib_best_params_json is also
     # passed to resolve_dqn_config for in-cluster validation. The pipeline
@@ -560,25 +597,36 @@ def dqn_pipeline_e2e(
     # -----------------------------------------------------------------------
     # Step 1: Config resolution and validation (lightweight Python component)
     # -----------------------------------------------------------------------
+    # The components moved to a date-window interface (date_start/date_end/
+    # hour-of-day) and dropped the legacy episode_start_ts/episode_end_ts
+    # params; resolve_dqn_config validates and re-emits the window so the
+    # downstream container components receive identical values.
     config_task = resolve_dqn_config(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
         checkpoint=checkpoint,
+        date_start=date_start,
+        date_end=date_end,
+        hour_of_day_start=hour_of_day_start,
+        hour_of_day_end=hour_of_day_end,
     )
+    # Disable caching across the DAG. Training/backtest produce versioned
+    # artifacts whose KFP cache key didn't change between image rebuilds;
+    # the cache served stale outputs and broke registration. Same posture as
+    # dqn_pipeline.
+    config_task.set_caching_options(enable_caching=False)
 
     # -----------------------------------------------------------------------
     # Step 2: DQN Training (with modelenv sidecar, 1 GPU, 16Gi memory)
     # -----------------------------------------------------------------------
     training_task = dqn_training(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
+        episode_start_ts=0,
+        episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
@@ -586,8 +634,13 @@ def dqn_pipeline_e2e(
         training_mode=training_mode,
         checkpoint=checkpoint,
         config_json=config_task.outputs["config_json"],
+        date_start=config_task.outputs["date_start"],
+        date_end=config_task.outputs["date_end"],
+        hour_of_day_start=config_task.outputs["hour_of_day_start"],
+        hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     training_task.set_retry(num_retries=2)
+    training_task.set_caching_options(enable_caching=False)
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
     if GPU_ENABLED:
@@ -596,6 +649,15 @@ def dqn_pipeline_e2e(
         # limit to actually reach the pod.
         training_task.set_accelerator_limit(1)
         training_task.set_accelerator_type("nvidia.com/gpu")
+    # Warm-cache the modelenv market-data PVC and mount MinIO creds so the
+    # checkpoint's minio:// URI can be written (mirrors dqn_pipeline).
+    kubernetes.mount_pvc(
+        training_task,
+        pvc_name=MODELENV_CACHE_PVC,
+        mount_path=MODELENV_CACHE_MOUNT,
+    )
+    _mount_minio_creds(training_task)
+    _pin_to_spark(training_task)
 
     # -----------------------------------------------------------------------
     # Step 3: DQN Backtest (CPU-only, 4Gi memory)
@@ -603,14 +665,25 @@ def dqn_pipeline_e2e(
     backtest_task = dqn_backtest(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
+        episode_start_ts=0,
+        episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
+        date_start=config_task.outputs["date_start"],
+        date_end=config_task.outputs["date_end"],
+        hour_of_day_start=config_task.outputs["hour_of_day_start"],
+        hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     backtest_task.set_retry(num_retries=1)
+    backtest_task.set_caching_options(enable_caching=False)
     backtest_task.set_memory_request("4Gi")
     backtest_task.set_memory_limit("4Gi")
+    kubernetes.mount_pvc(
+        backtest_task,
+        pvc_name=MODELENV_CACHE_PVC,
+        mount_path=MODELENV_CACHE_MOUNT,
+    )
+    _mount_minio_creds(backtest_task)
 
     # -----------------------------------------------------------------------
     # Step 4: Model Registry Registration and Promotion
@@ -623,8 +696,12 @@ def dqn_pipeline_e2e(
         symbol=symbol,
         config_json=config_task.outputs["config_json"],
     )
+    reg_task.set_caching_options(enable_caching=False)
     reg_task.set_memory_request("256Mi")
     reg_task.set_memory_limit("512Mi")
+    # register_and_promote reads the backtest_metrics artifact via boto3; it
+    # needs MinIO creds to fetch the minio:// URI the KFP driver advertises.
+    _mount_minio_creds(reg_task)
 
 
 # ---------------------------------------------------------------------------
@@ -634,14 +711,16 @@ def dqn_pipeline_e2e(
 
 def build_dqn_pipeline_e2e_config(
     symbol: str = "USDJPY",
-    episode_start_ts: int = 0,
-    episode_end_ts: int = 0,
     step_size_seconds: int = 5,
     num_episodes_per_range: int = 3000,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
     checkpoint: str = "",
+    date_start: str = "",
+    date_end: str = "",
+    hour_of_day_start: int = 0,
+    hour_of_day_end: int = 23,
     katib_enabled: bool = False,
     katib_best_params_json: str = "",
 ) -> dict:
@@ -656,14 +735,16 @@ def build_dqn_pipeline_e2e_config(
 
     Args:
         symbol: Currency pair (USDJPY or AUDJPY).
-        episode_start_ts: Episode start timestamp.
-        episode_end_ts: Episode end timestamp.
         step_size_seconds: Step size in seconds for the environment.
         num_episodes_per_range: Number of training episodes.
         batch_size: Training batch size.
         learning_rate: Learning rate.
         training_mode: "scratch" or "finetune".
         checkpoint: S3 key path for production checkpoint (required for finetune).
+        date_start: Inclusive ISO date (YYYY-MM-DD) bounding the window.
+        date_end: Exclusive ISO date (YYYY-MM-DD) bounding the window.
+        hour_of_day_start: Inclusive UTC hour-of-day filter (0-23).
+        hour_of_day_end: Exclusive UTC hour-of-day filter.
         katib_enabled: Whether to apply Katib-optimized parameters.
         katib_best_params_json: JSON string of Katib best hyperparameters.
 
@@ -688,13 +769,15 @@ def build_dqn_pipeline_e2e_config(
     config = DQNPipelineConfig()
     config = config.override(
         symbol=symbol,
-        episode_start_ts=episode_start_ts,
-        episode_end_ts=episode_end_ts,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
         batch_size=effective_batch_size,
         learning_rate=effective_lr,
         training_mode=training_mode,
+        date_start=date_start,
+        date_end=date_end,
+        hour_of_day_start=hour_of_day_start,
+        hour_of_day_end=hour_of_day_end,
         katib_enabled=katib_enabled,
     )
 
@@ -717,14 +800,16 @@ def build_dqn_pipeline_e2e_config(
 
     return {
         "symbol": symbol,
-        "episode_start_ts": episode_start_ts,
-        "episode_end_ts": episode_end_ts,
         "step_size_seconds": step_size_seconds,
         "num_episodes_per_range": num_episodes_per_range if training_mode != "finetune" else config.finetune_num_episodes_per_range,
         "batch_size": effective_batch_size,
         "learning_rate": effective_lr,
         "training_mode": training_mode,
         "checkpoint": checkpoint,
+        "date_start": date_start,
+        "date_end": date_end,
+        "hour_of_day_start": hour_of_day_start,
+        "hour_of_day_end": hour_of_day_end,
         "katib_enabled": katib_enabled,
         "katib_best_params_json": katib_best_params_json,
         "model_registry_url": MODEL_REGISTRY_URL,

@@ -306,8 +306,13 @@ class DqnpfIntradayPredictor(kserve.Model):
             latest_ts = self._resolve_latest_bar_ts(payload, symbol)
             mu, sigma = cache.get_or_compute(latest_ts, bridge.compute_signal)
 
-            # Screen the action through the integration layer
-            screened = self._layers[symbol].screen(dqn_result, mu, sigma)
+            # Screen the action through the integration layer. Pass the latest
+            # bar timestamp so the risk budget resets per UTC day in production
+            # (without it the budget accumulates for the pod lifetime); the same
+            # timestamp already keys the signal cache above.
+            screened = self._layers[symbol].screen(
+                dqn_result, mu, sigma, timestamp_ns=latest_ts
+            )
 
         # Build response
         response = asdict(screened)
@@ -412,11 +417,16 @@ class DqnpfIntradayPredictor(kserve.Model):
 
                 new_layer = IntegrationLayer(new_dqn, new_bridge, cache, cfg)
 
-                # Preserve budget state from the old layer
+                # Preserve budget state from the old layer. _current_day must be
+                # carried over alongside the counters: the layer resets the
+                # budget on each UTC day boundary, so a fresh (None) day on the
+                # new layer would zero the just-preserved counters on the very
+                # next screen, defeating the preservation.
                 old_layer = self._layers.get(symbol)
                 if old_layer is not None:
                     new_layer._risk_long_units = old_layer._risk_long_units
                     new_layer._risk_short_units = old_layer._risk_short_units
+                    new_layer._current_day = old_layer._current_day
 
                 new_layers[symbol] = new_layer
                 new_bridges[symbol] = new_bridge

@@ -176,12 +176,12 @@ class TestBuildPipelineConfig:
         """Builds valid config with default parameters."""
         params = build_dqn_pipeline_e2e_config(
             symbol="USDJPY",
-            episode_start_ts=1000000,
-            episode_end_ts=2000000,
+            date_start="2024-01-01",
+            date_end="2024-02-01",
         )
         assert params["symbol"] == "USDJPY"
-        assert params["episode_start_ts"] == 1000000
-        assert params["episode_end_ts"] == 2000000
+        assert params["date_start"] == "2024-01-01"
+        assert params["date_end"] == "2024-02-01"
         assert params["training_mode"] == "scratch"
         assert params["model_registry_url"] == MODEL_REGISTRY_URL
 
@@ -190,8 +190,8 @@ class TestBuildPipelineConfig:
         katib_params = json.dumps({"learning_rate": 0.005, "batch_size": 128})
         params = build_dqn_pipeline_e2e_config(
             symbol="USDJPY",
-            episode_start_ts=1000000,
-            episode_end_ts=2000000,
+            date_start="2024-01-01",
+            date_end="2024-02-01",
             learning_rate=1e-4,
             batch_size=64,
             katib_enabled=True,
@@ -205,8 +205,8 @@ class TestBuildPipelineConfig:
         katib_params = json.dumps({"learning_rate": 0.005})
         params = build_dqn_pipeline_e2e_config(
             symbol="USDJPY",
-            episode_start_ts=1000000,
-            episode_end_ts=2000000,
+            date_start="2024-01-01",
+            date_end="2024-02-01",
             learning_rate=1e-4,
             katib_enabled=False,
             katib_best_params_json=katib_params,
@@ -217,8 +217,8 @@ class TestBuildPipelineConfig:
         """Finetune mode uses reduced LR and fewer episodes."""
         params = build_dqn_pipeline_e2e_config(
             symbol="USDJPY",
-            episode_start_ts=1000000,
-            episode_end_ts=2000000,
+            date_start="2024-01-01",
+            date_end="2024-02-01",
             learning_rate=1e-4,
             num_episodes_per_range=3000,
             training_mode="finetune",
@@ -233,8 +233,8 @@ class TestBuildPipelineConfig:
         with pytest.raises(ValueError, match="checkpoint"):
             build_dqn_pipeline_e2e_config(
                 symbol="USDJPY",
-                episode_start_ts=1000000,
-                episode_end_ts=2000000,
+                date_start="2024-01-01",
+                date_end="2024-02-01",
                 training_mode="finetune",
                 checkpoint="",
             )
@@ -244,8 +244,8 @@ class TestBuildPipelineConfig:
         with pytest.raises(ValueError, match="Invalid symbol"):
             build_dqn_pipeline_e2e_config(
                 symbol="EURUSD",
-                episode_start_ts=1000000,
-                episode_end_ts=2000000,
+                date_start="2024-01-01",
+                date_end="2024-02-01",
             )
 
     def test_invalid_learning_rate_raises(self):
@@ -253,8 +253,8 @@ class TestBuildPipelineConfig:
         with pytest.raises(ValueError, match="learning_rate"):
             build_dqn_pipeline_e2e_config(
                 symbol="USDJPY",
-                episode_start_ts=1000000,
-                episode_end_ts=2000000,
+                date_start="2024-01-01",
+                date_end="2024-02-01",
                 learning_rate=0.1,  # Too high
             )
 
@@ -266,8 +266,8 @@ class TestBuildPipelineConfig:
         })
         params = build_dqn_pipeline_e2e_config(
             symbol="AUDJPY",
-            episode_start_ts=1000000,
-            episode_end_ts=2000000,
+            date_start="2024-01-01",
+            date_end="2024-02-01",
             katib_enabled=True,
             katib_best_params_json=katib_params,
         )

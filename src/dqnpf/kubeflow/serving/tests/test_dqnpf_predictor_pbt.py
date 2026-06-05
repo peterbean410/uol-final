@@ -80,6 +80,25 @@ _positive_sigma = st.floats(
 )
 _observation_dim = 53  # modelenv state vector dimension
 
+# The predictor now passes the latest bar timestamp into IntegrationLayer.screen,
+# which resets the per-symbol risk budget on each UTC day boundary. Budget
+# accumulation tests must therefore keep all requests within a single UTC day,
+# otherwise a day rollover would zero the counters mid-test. _DAY_BASE is the
+# UTC midnight of the reference timestamp used throughout this module.
+_NANOS_PER_DAY = 86_400_000_000_000
+_M5_NS = 300_000_000_000  # 5 minutes in nanoseconds
+_REF_TS_NS = 1_700_000_000_000_000_000
+_DAY_BASE = (_REF_TS_NS // _NANOS_PER_DAY) * _NANOS_PER_DAY
+
+
+def _intraday_m5_bars(count: int = 40) -> list[dict]:
+    """Build ``count`` M5 bars that all fall within a single UTC day.
+
+    Keeps the latest-bar timestamp (and thus the screen budget-reset day) fixed
+    so sequential requests accumulate budget rather than tripping a day reset.
+    """
+    return [{"timestamp_ns": _DAY_BASE + j * _M5_NS} for j in range(count)]
+
 
 def _observation_strategy():
     """Generate a random 1-D float32 observation vector."""
@@ -351,13 +370,12 @@ def test_budget_state_persists_across_requests(
         for cache in predictor._caches.values():
             cache.invalidate()
 
+        # Keep every request within the same UTC day so the budget accumulates
+        # across requests instead of resetting on a day boundary.
         payload = {
             "symbol": "USDJPY",
             "observation": observation,
-            "recent_bars_m5": [
-                {"timestamp_ns": 1_700_000_000_000_000_000 + (i * 40 + j) * 300_000_000_000}
-                for j in range(40)
-            ],
+            "recent_bars_m5": _intraday_m5_bars(40),
         }
 
         response = predictor.predict(payload)
@@ -422,9 +440,13 @@ def test_hot_reload_atomicity(
     for bridge in predictor._bridges.values():
         bridge.compute_signal = MagicMock(return_value=(0.5, 10.0))
 
-    # Set up initial budget state to verify preservation
+    # Set up initial budget state to verify preservation. Pin _current_day to
+    # the request day so the first timestamped screen does not treat the seeded
+    # budget as a stale prior-day balance and zero it out (the predictor now
+    # resets the budget on UTC day boundaries).
     predictor._layers["USDJPY"]._risk_long_units = 2
     predictor._layers["USDJPY"]._risk_short_units = 1
+    predictor._layers["USDJPY"]._current_day = _DAY_BASE // _NANOS_PER_DAY
 
     initial_risk_long = 2
     initial_risk_short = 1
@@ -461,19 +483,12 @@ def test_hot_reload_atomicity(
                 for cache in predictor._caches.values():
                     cache.invalidate()
 
+                # All requests stay within one UTC day so the swap preserves the
+                # seeded budget instead of a day boundary resetting it.
                 payload = {
                     "symbol": "USDJPY",
                     "observation": observation,
-                    "recent_bars_m5": [
-                        {
-                            "timestamp_ns": (
-                                1_700_000_000_000_000_000
-                                + (thread_id * 100 + req_idx * 40 + j)
-                                * 300_000_000_000
-                            )
-                        }
-                        for j in range(40)
-                    ],
+                    "recent_bars_m5": _intraday_m5_bars(40),
                 }
 
                 response = predictor.predict(payload)
