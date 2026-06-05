@@ -2,7 +2,11 @@
 # Extends the shared DQN base image with backtest-specific dependencies
 # Requirements: DQN-R9, DQN-R10
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base:latest
+# Base image is parametrised so the CI image chain can build against the
+# arch-specific dqn/base tag it just pushed (e.g. dqn/base:<sha>-arm64) during a
+# split per-arch build, instead of a stale multi-arch :latest.
+ARG DQN_BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base:latest
+FROM ${DQN_BASE_IMAGE}
 
 LABEL component="dqn_backtest"
 LABEL description="Backtest DQN agent on unseen date ranges via modelenv sidecar, compute metrics and degradation gate"
