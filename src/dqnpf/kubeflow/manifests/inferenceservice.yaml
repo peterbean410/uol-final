@@ -21,7 +21,7 @@ metadata:
     # serving.kserve.io/autoscalerClass annotation is NOT set: it only accepts
     # hpa/external (RawDeployment mode), and the KServe validator rejects the
     # knative class string here.
-    # Prometheus metrics scraping (request latency, error rate,
+    # Prometheus metrics scraping, request latency, error rate,
     # suppression rate by reason, per-symbol budget utilisation
     prometheus.io/scrape: "true"
     prometheus.io/port: "8080"
@@ -38,18 +38,39 @@ spec:
       autoscaling.knative.dev/metric: concurrency
       autoscaling.knative.dev/target: "5"
       autoscaling.knative.dev/scale-to-zero-pod-retention-period: "5m"
+    # Tolerate the arm64 spark GPU nodes' taints so the (now multi-arch)
+    # predictor MAY be scheduled there. spark-4214/spark-5790 carry both
+    # workload=ml:NoExecute and arch=arm64:NoExecute, so both are tolerated.
+    # The predictor is DEVICE=cpu and requests no GPU; it just uses CPU on the
+    # node. Scheduling stays permitted on the amd64 nodes too.
+    tolerations:
+      - key: arch
+        operator: Equal
+        value: arm64
+        effect: NoExecute
+      - key: workload
+        operator: Equal
+        value: ml
+        effect: NoExecute
     affinity:
       nodeAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
           nodeSelectorTerms:
             - matchExpressions:
+                # Exclude the control-plane (rpivn) and the beanpi Pis: among
+                # arm64 nodes only the spark GPU nodes are wanted. beanpi01/02
+                # have only the arch taint (now tolerated) so they would
+                # otherwise become eligible; beanpi03 hosts the gitea arm64
+                # runner. amd64 nodes remain eligible.
                 - key: kubernetes.io/hostname
                   operator: NotIn
                   values:
                     - rpivn
+                    - beanpi01
+                    - beanpi02
                     - beanpi03
     containers:
-      # Primary predictor container) combined DQN + Forecaster integration layer
+      # Primary predictor container, combined DQN + Forecaster integration layer
       - name: kserve-container
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:latest
         ports:
