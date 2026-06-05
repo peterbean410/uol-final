@@ -4,6 +4,18 @@
 #
 # Rebuild marker: ddf03ea-swap-defaults (re-pull modelenv:latest with swap-default table)
 
+# Full registry ref of the modelenv image to pull the sidecar binary from.
+# This must be a *global* ARG (declared before any FROM) so it can name a build
+# stage below. BuildKit forbids variable expansion directly in `COPY --from=$VAR`
+# ("variable expansion is not supported for --from"); the supported pattern is
+# `FROM $VAR AS <stage>` followed by `COPY --from=<stage>`. Pulling the binary
+# from a named stage (rather than a host-side `docker cp`) lets buildx resolve it
+# for the matching --platform target, arm64 image gets the arm64 binary, etc.
+ARG MODELENV_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:latest
+
+# Stage carrying only the modelenv sidecar binary, resolved per target platform.
+FROM ${MODELENV_IMAGE} AS modelenv_src
+
 FROM python:3.11-slim
 
 LABEL maintainer="ml-platform"
@@ -12,12 +24,6 @@ LABEL description="Shared base image for DQN pipeline components with modelenv s
 # Architecture of the image being built. buildx injects this automatically
 # (amd64 / arm64) for each --platform target; defaults to amd64 for plain builds.
 ARG TARGETARCH=amd64
-
-# Full registry ref of the modelenv image to pull the sidecar binary from.
-# Using `COPY --from=<image>` (instead of a host-side `docker cp`) lets buildx
-# resolve the binary for the *matching* target arch on a multi-platform build,
-# so the arm64 image gets the arm64 modelenv-server and amd64 gets amd64.
-ARG MODELENV_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:latest
 
 # torch wheel selection is arch-specific (see the RUN below):
 #  - amd64: CUDA 12.1 wheels (existing GPU path on dualxeonpc).
@@ -71,8 +77,8 @@ COPY stubs/environment_pb2_grpc.py /app/stubs/environment_pb2_grpc.py
 ENV PYTHONPATH="/app/stubs:${PYTHONPATH}"
 
 # Bundle the pre-built modelenv Rust binary for the sidecar, pulled per-arch
-# straight from the modelenv image (buildx resolves the matching platform).
-COPY --from=${MODELENV_IMAGE} /usr/local/bin/modelenv-server /usr/local/bin/modelenv-server
+# from the modelenv_src stage (buildx resolves the matching platform).
+COPY --from=modelenv_src /usr/local/bin/modelenv-server /usr/local/bin/modelenv-server
 RUN chmod +x /usr/local/bin/modelenv-server
 
 # Set Python to run unbuffered for proper log streaming
