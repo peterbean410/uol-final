@@ -39,8 +39,9 @@ GPU_ENABLED: bool = os.getenv("DQN_GPU_ENABLED", "true").strip().lower() not in 
     "off",
 )
 
-# Compile-time toggle to pin training + backtest onto the arm64 Grace-Blackwell
-# "spark" GPU nodes (spark-4214 / spark-5790).
+# Compile-time toggle to pin the GPU training step onto the arm64 Grace-Blackwell
+# "spark" GPU nodes (spark-4214 / spark-5790). Backtest is intentionally left
+# unpinned (CPU-only inference, see where it's wired below).
 #
 # Those nodes carry two NoExecute taints (`workload=ml`, `arch=arm64`) and are
 # the only arm64 + GPU nodes in the cluster, so pinning means: tolerate both
@@ -864,8 +865,11 @@ def dqn_pipeline(
     # Backtest reads the checkpoint URI from training and writes its own
     # metrics URI; both now URI-route via deepqnetwork.artifact_io.
     _mount_minio_creds(backtest_task)
-    # Optionally pin onto the arm64 spark GPU nodes (no-op unless DQN_SPARK_NODE).
-    _pin_to_spark(backtest_task)
+    # Backtest is deliberately NOT pinned to spark: it's batch-1 greedy inference
+    # on a small Q-network gated by per-step gRPC round-trips to modelenv, so it
+    # gains nothing from a GPU. Leaving it unpinned lets it run on any CPU node
+    # (the multi-arch image covers amd64/arm64) and keeps the scarce spark GPUs
+    # free for training. See T-12.1-10.
 
     # -----------------------------------------------------------------------
     # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)
