@@ -39,6 +39,32 @@ GPU_ENABLED: bool = os.getenv("DQN_GPU_ENABLED", "true").strip().lower() not in 
     "off",
 )
 
+# Compile-time toggle to pin training + backtest onto the arm64 Grace-Blackwell
+# "spark" GPU nodes (spark-4214 / spark-5790).
+#
+# Those nodes carry two NoExecute taints (`workload=ml`, `arch=arm64`) and are
+# the only arm64 + GPU nodes in the cluster, so pinning means: tolerate both
+# taints AND nodeSelect arch=arm64 ∩ nvidia.com/gpu.present=true. Off by default
+#; it requires the multi-arch (arm64) dqn images from images-chain.yml; flip it
+# on at compile time with ``DQN_SPARK_NODE=true`` once those images exist.
+SPARK_NODE_ENABLED: bool = os.getenv("DQN_SPARK_NODE", "false").strip().lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
+
+# Taints on the spark nodes that workloads must tolerate to land there, and the
+# label set that uniquely identifies them (arch=arm64 ∩ GPU present).
+SPARK_TAINTS = (
+    ("workload", "ml"),
+    ("arch", "arm64"),
+)
+SPARK_NODE_SELECTOR = (
+    ("kubernetes.io/arch", "arm64"),
+    ("nvidia.com/gpu.present", "true"),
+)
+
 # ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
 
@@ -67,6 +93,35 @@ def _mount_minio_creds(task) -> None:
             "secretkey": "MINIO_SECRET_KEY",
         },
     )
+
+
+def _pin_to_spark(task) -> None:
+    """Pin a task onto the arm64 Grace-Blackwell spark GPU nodes.
+
+    No-op unless ``SPARK_NODE_ENABLED`` (``DQN_SPARK_NODE=true`` at compile time).
+    Adds a toleration for each spark NoExecute taint and a nodeSelector entry for
+    each identifying label; the selector labels AND together, so the pod is
+    eligible only on nodes matching the full set (the two spark nodes).
+
+    Requires the multi-arch (arm64) dqn images; an amd64-only image will fail to
+    exec on these nodes regardless of scheduling.
+    """
+    if not SPARK_NODE_ENABLED:
+        return
+    for key, value in SPARK_TAINTS:
+        kubernetes.add_toleration(
+            task,
+            key=key,
+            operator="Equal",
+            value=value,
+            effect="NoExecute",
+        )
+    for label_key, label_value in SPARK_NODE_SELECTOR:
+        kubernetes.add_node_selector(
+            task,
+            label_key=label_key,
+            label_value=label_value,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -779,6 +834,8 @@ def dqn_pipeline(
     # Checkpoint upload now URI-routes via deepqnetwork.artifact_io; mount
     # MinIO creds so the minio:// URI KFP advertises can actually be written.
     _mount_minio_creds(training_task)
+    # Optionally pin onto the arm64 spark GPU nodes (no-op unless DQN_SPARK_NODE).
+    _pin_to_spark(training_task)
 
     # -----------------------------------------------------------------------
     # Step 2: DQN Backtest (CPU-only, 4Gi memory)
@@ -807,6 +864,8 @@ def dqn_pipeline(
     # Backtest reads the checkpoint URI from training and writes its own
     # metrics URI; both now URI-route via deepqnetwork.artifact_io.
     _mount_minio_creds(backtest_task)
+    # Optionally pin onto the arm64 spark GPU nodes (no-op unless DQN_SPARK_NODE).
+    _pin_to_spark(backtest_task)
 
     # -----------------------------------------------------------------------
     # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)

@@ -13,6 +13,22 @@ LABEL description="Shared base image for DQN pipeline components with modelenv s
 # (amd64 / arm64) for each --platform target; defaults to amd64 for plain builds.
 ARG TARGETARCH=amd64
 
+# Full registry ref of the modelenv image to pull the sidecar binary from.
+# Using `COPY --from=<image>` (instead of a host-side `docker cp`) lets buildx
+# resolve the binary for the *matching* target arch on a multi-platform build,
+# so the arm64 image gets the arm64 modelenv-server and amd64 gets amd64.
+ARG MODELENV_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:latest
+
+# torch wheel selection is arch-specific (see the RUN below):
+#  - amd64: CUDA 12.1 wheels (existing GPU path on dualxeonpc).
+#  - arm64: SBSA CUDA wheels for the Grace-Blackwell (GB10) spark GPU nodes.
+#    The cu121 index has NO aarch64 build; GB10 (sm_121) needs CUDA 12.8+ /
+#    torch >= 2.7. Pin TORCH_ARM64_SPEC once verified on the node (DQN-R4).
+ARG TORCH_AMD64_INDEX=https://download.pytorch.org/whl/cu121
+ARG TORCH_AMD64_SPEC=torch==2.3.1+cu121
+ARG TORCH_ARM64_INDEX=https://download.pytorch.org/whl/cu128
+ARG TORCH_ARM64_SPEC=torch
+
 # Install system dependencies required for PyTorch and gRPC, plus the AWS
 # CLI v2. The modelenv Rust sidecar shells out to `aws s3 cp` /
 # `aws s3api head-object` via std::process::Command (see
@@ -37,20 +53,26 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy and install pinned Python dependencies
+# Copy and install pinned Python dependencies.
+# torch is installed first from the arch-matching CUDA index (resolve_device
+# auto-detects CUDA at runtime), then the remaining pinned deps.
 COPY requirements-dqn-base.txt /app/requirements-dqn-base.txt
-RUN pip install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/cu121 \
-    -r /app/requirements-dqn-base.txt
+RUN case "${TARGETARCH}" in \
+        amd64) TORCH_INDEX="${TORCH_AMD64_INDEX}"; TORCH_SPEC="${TORCH_AMD64_SPEC}" ;; \
+        arm64) TORCH_INDEX="${TORCH_ARM64_INDEX}"; TORCH_SPEC="${TORCH_ARM64_SPEC}" ;; \
+        *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+      esac \
+    && pip install --no-cache-dir --extra-index-url "${TORCH_INDEX}" "${TORCH_SPEC}" \
+    && pip install --no-cache-dir -r /app/requirements-dqn-base.txt
 
 # Copy compiled modelenv gRPC Python stubs
 COPY stubs/environment_pb2.py /app/stubs/environment_pb2.py
 COPY stubs/environment_pb2_grpc.py /app/stubs/environment_pb2_grpc.py
 ENV PYTHONPATH="/app/stubs:${PYTHONPATH}"
 
-# Bundle the pre-built modelenv Rust binary for the sidecar
-# Built from modelenv/target/release/modelenv-server at image build time
-COPY modelenv-server /usr/local/bin/modelenv-server
+# Bundle the pre-built modelenv Rust binary for the sidecar, pulled per-arch
+# straight from the modelenv image (buildx resolves the matching platform).
+COPY --from=${MODELENV_IMAGE} /usr/local/bin/modelenv-server /usr/local/bin/modelenv-server
 RUN chmod +x /usr/local/bin/modelenv-server
 
 # Set Python to run unbuffered for proper log streaming
