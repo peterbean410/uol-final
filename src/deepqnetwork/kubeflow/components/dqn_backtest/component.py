@@ -83,7 +83,6 @@ class ModelenvSidecar:
 
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
-        self._stderr_lines: list[str] = []
 
     def start(self) -> None:
         """Start the modelenv-server subprocess.
@@ -98,10 +97,18 @@ class ModelenvSidecar:
         )
 
         try:
+            # Inherit the parent's stdout/stderr (do NOT use subprocess.PIPE).
+            # modelenv logs continuously to stderr; the parent does not drain
+            # those pipes during the run (it only read them on stop), so once
+            # ~64 KB accumulated the kernel pipe buffer filled and modelenv's
+            # next log write blocked forever, deadlocking the server mid-Reset
+            # and hanging the whole backtest at 0 CPU. Inheriting the parent fds
+            # streams modelenv's logs straight to the pod console (visible in
+            # `kubectl logs`) and removes the deadlock entirely.
             self._process = subprocess.Popen(
                 [MODELENV_BINARY],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=None,
+                stderr=None,
                 env={**os.environ, "MODELENV_PORT": str(MODELENV_PORT)},
             )
         except FileNotFoundError:
@@ -141,10 +148,9 @@ class ModelenvSidecar:
         while time.time() < deadline:
             # Check if process has exited prematurely
             if self._process is not None and self._process.poll() is not None:
-                stderr_output = self._capture_stderr()
                 raise RuntimeError(
                     f"modelenv sidecar exited prematurely with code "
-                    f"{self._process.returncode}. stderr: {stderr_output}"
+                    f"{self._process.returncode}. See pod logs for modelenv output."
                 )
 
             # Try TCP connection to the gRPC port
@@ -166,10 +172,9 @@ class ModelenvSidecar:
             time.sleep(MODELENV_HEALTH_CHECK_INTERVAL)
 
         # Timeout reached
-        stderr_output = self._capture_stderr()
         raise RuntimeError(
             f"modelenv sidecar did not become ready within "
-            f"{MODELENV_HEALTH_CHECK_TIMEOUT}s. stderr: {stderr_output}"
+            f"{MODELENV_HEALTH_CHECK_TIMEOUT}s. See pod logs for modelenv output."
         )
 
     def stop(self) -> None:
@@ -214,29 +219,8 @@ class ModelenvSidecar:
             except (OSError, subprocess.TimeoutExpired):
                 pass
 
-        # Capture stderr for debugging
-        stderr_output = self._capture_stderr()
-        if stderr_output:
-            logger.info(
-                "modelenv sidecar stderr output",
-                extra={"stderr": stderr_output},
-            )
-
-    def _capture_stderr(self) -> str:
-        """Read and return any available stderr from the subprocess."""
-        if self._process is None or self._process.stderr is None:
-            return ""
-
-        try:
-            stderr_data = self._process.stderr.read()
-            if stderr_data:
-                output = stderr_data.decode("utf-8", errors="replace").strip()
-                self._stderr_lines.append(output)
-                return output
-        except (OSError, ValueError):
-            pass
-
-        return "\n".join(self._stderr_lines)
+        # modelenv's own stdout/stderr stream directly to the pod console
+        # (it inherits the parent fds), so there is nothing to capture here.
 
 
 @dataclass
