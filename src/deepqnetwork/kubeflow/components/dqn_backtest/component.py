@@ -59,6 +59,11 @@ MODELENV_HEALTH_CHECK_TIMEOUT = 60  # seconds
 MODELENV_HEALTH_CHECK_INTERVAL = 1  # seconds
 MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
 
+# Emit the per-step progress/diagnostic logs only every Nth step to bound log
+# volume. A hang is still localised to the [k*N, (k+1)*N) step window, and the
+# in-flight operation is named by whichever marker (advisor vs Step) fired last.
+STEP_LOG_INTERVAL = 500  # steps
+
 # Degradation gate thresholds (from DQNPipelineConfig / thesis)
 DEFAULT_SHARPE_DEGRADATION_THRESHOLD = 0.1
 DEFAULT_SHARPE_ABSOLUTE_THRESHOLD = 1.0  # Must beat buy & hold baseline
@@ -293,7 +298,29 @@ def run_evaluation_episode(
         seed=episode_seed,
         step_size_seconds=step_size_seconds,
     )
+    # Log before/after every blocking gRPC call so that, if the component
+    # hangs, the last emitted log line deterministically identifies which
+    # operation is stuck (Reset vs Step vs ReferenceData) and at which step.
+    logger.info(
+        "Reset: calling env_stub.Reset",
+        extra={
+            "seed": episode_seed,
+            "symbol": symbol,
+            "episode_start_ts": episode_start_ts,
+            "episode_end_ts": episode_end_ts,
+            "step_size_seconds": step_size_seconds,
+        },
+    )
+    _reset_t0 = time.monotonic()
     observation = env_stub.Reset(reset_request)
+    logger.info(
+        "Reset: env_stub.Reset returned",
+        extra={
+            "seed": episode_seed,
+            "done": observation.done,
+            "elapsed_ms": round((time.monotonic() - _reset_t0) * 1000, 1),
+        },
+    )
 
     total_reward = 0.0
     num_steps = 0
@@ -305,6 +332,15 @@ def run_evaluation_episode(
     state = np.array(observation.state_data[0].values, dtype=np.float32)
 
     while not observation.done and num_steps < max_steps:
+        # Throttle the per-step diagnostic logs to every Nth step.
+        log_step = num_steps % STEP_LOG_INTERVAL == 0
+        # Marker before advisor inference: a hang here points at the model,
+        # a hang at the next marker points at the Step RPC / modelenv.
+        if log_step:
+            logger.info(
+                "Step: advisor.recommend_action",
+                extra={"seed": episode_seed, "step": num_steps},
+            )
         # Get greedy action from advisor
         result = advisor.recommend_action(state)
         action_idx = result.action
@@ -319,7 +355,22 @@ def run_evaluation_episode(
             action=action_type,
             client_order_id=f"backtest_{episode_seed}_{num_steps}",
         )
+        if log_step:
+            logger.info(
+                "Step: calling env_stub.Step",
+                extra={"seed": episode_seed, "step": num_steps, "action": action_idx},
+            )
+        _step_t0 = time.monotonic()
         step_response = env_stub.Step(action_msg)
+        if log_step:
+            logger.info(
+                "Step: env_stub.Step returned",
+                extra={
+                    "seed": episode_seed,
+                    "step": num_steps,
+                    "elapsed_ms": round((time.monotonic() - _step_t0) * 1000, 1),
+                },
+            )
         observation_data = step_response.data
 
         # Accumulate reward
@@ -346,7 +397,15 @@ def run_evaluation_episode(
     # Get final reference data for realised P&L
     try:
         ref_request = environment_pb2.ObserveRequest(symbol=symbol)
+        logger.info(
+            "ReferenceData: calling env_stub.ReferenceData",
+            extra={"seed": episode_seed, "symbol": symbol, "steps": num_steps},
+        )
         reference = env_stub.ReferenceData(ref_request)
+        logger.info(
+            "ReferenceData: env_stub.ReferenceData returned",
+            extra={"seed": episode_seed},
+        )
         cumulative_pnl = reference.realised_pnl_12m
     except Exception:
         # Fall back to using total reward as P&L proxy
@@ -805,6 +864,11 @@ def main() -> None:
 
         for episode_idx in range(args.num_eval_episodes):
             episode_seed = 42 + episode_idx  # Deterministic seeds for reproducibility
+
+            logger.info(
+                f"Episode {episode_idx + 1}/{args.num_eval_episodes} starting",
+                extra={"episode": episode_idx + 1, "seed": episode_seed},
+            )
 
             result = run_evaluation_episode(
                 advisor=advisor,
