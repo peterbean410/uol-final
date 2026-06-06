@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tokio::time::{sleep, Duration as TokioDuration};
+use tokio::time::{sleep, timeout, Duration as TokioDuration};
 
 use modelenv_proto::{Bar, News, Tick};
 
@@ -89,6 +89,11 @@ const EOD_NEWS_SNAPSHOT_BRANCH: &str = "marketdata/eod-news-snapshot";
 const SOURCE_SELECTION_LOOKBACK_NS: i64 = 31 * 24 * 60 * 60 * 1_000_000_000;
 const CACHE_DOWNLOAD_LOCK_STALE_SECS: u64 = 5 * 60;
 const CACHE_DOWNLOAD_LOCK_POLL_MS: u64 = 250;
+// Wall-clock ceiling for a single `aws s3 cp` of one parquet partition. Without
+// it a stalled S3 connection makes the download hang forever, which blocks the
+// Reset RPC and (with no client deadline) the whole backtest, see T-14.1-07.
+// Partitions are small (MBs); 5 min is a generous ceiling that still fails fast.
+const CACHE_DOWNLOAD_TIMEOUT_SECS: u64 = 5 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartitionTier {
@@ -2165,14 +2170,34 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
         partition,
         local_path.display()
     );
-    let output = Command::new("aws")
-        .arg("s3")
+    // kill_on_drop ensures a child that exceeds the timeout is reaped (the
+    // timed-out `output()` future drops the Child, which kills the process)
+    // rather than leaking an orphaned `aws` process.
+    let mut cmd = Command::new("aws");
+    cmd.arg("s3")
         .arg("cp")
         .arg(source_uri)
         .arg(&temp_path)
-        .output()
-        .await
-        .map_err(|e| anyhow!("Failed to invoke aws CLI for {}: {}", source_uri, e))?;
+        .kill_on_drop(true);
+    let output = match timeout(
+        TokioDuration::from_secs(CACHE_DOWNLOAD_TIMEOUT_SECS),
+        cmd.output(),
+    )
+    .await
+    {
+        Ok(result) => {
+            result.map_err(|e| anyhow!("Failed to invoke aws CLI for {}: {}", source_uri, e))?
+        }
+        Err(_elapsed) => {
+            remove_file_if_exists(&temp_path).await?;
+            return Err(anyhow!(
+                "aws s3 cp for {} ({}) timed out after {}s",
+                source_uri,
+                partition,
+                CACHE_DOWNLOAD_TIMEOUT_SECS
+            ));
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
