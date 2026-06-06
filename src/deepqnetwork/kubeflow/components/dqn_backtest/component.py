@@ -64,6 +64,17 @@ MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
 # in-flight operation is named by whichever marker (advisor vs Step) fired last.
 STEP_LOG_INTERVAL = 500  # steps
 
+# Per-RPC deadlines (seconds) on the modelenv gRPC calls. Defense-in-depth: a
+# call with no deadline blocks forever if the server stalls (this is what turned
+# a transient modelenv hiccup into a 29h hang, see T-14.1-07). With a deadline
+# the call fails fast with DeadlineExceeded, which fails the component and lets
+# KFP retry it. Reset is generous because the first episode does an S3/parquet
+# load that can be slow on a cold cache; Step/ReferenceData are sub-second in
+# practice so their ceilings are loose.
+GRPC_RESET_TIMEOUT_S = 600
+GRPC_STEP_TIMEOUT_S = 120
+GRPC_REFERENCE_TIMEOUT_S = 120
+
 # Degradation gate thresholds (from DQNPipelineConfig / thesis)
 DEFAULT_SHARPE_DEGRADATION_THRESHOLD = 0.1
 DEFAULT_SHARPE_ABSOLUTE_THRESHOLD = 1.0  # Must beat buy & hold baseline
@@ -296,7 +307,7 @@ def run_evaluation_episode(
         },
     )
     _reset_t0 = time.monotonic()
-    observation = env_stub.Reset(reset_request)
+    observation = env_stub.Reset(reset_request, timeout=GRPC_RESET_TIMEOUT_S)
     logger.info(
         "Reset: env_stub.Reset returned",
         extra={
@@ -345,7 +356,7 @@ def run_evaluation_episode(
                 extra={"seed": episode_seed, "step": num_steps, "action": action_idx},
             )
         _step_t0 = time.monotonic()
-        step_response = env_stub.Step(action_msg)
+        step_response = env_stub.Step(action_msg, timeout=GRPC_STEP_TIMEOUT_S)
         if log_step:
             logger.info(
                 "Step: env_stub.Step returned",
@@ -385,7 +396,7 @@ def run_evaluation_episode(
             "ReferenceData: calling env_stub.ReferenceData",
             extra={"seed": episode_seed, "symbol": symbol, "steps": num_steps},
         )
-        reference = env_stub.ReferenceData(ref_request)
+        reference = env_stub.ReferenceData(ref_request, timeout=GRPC_REFERENCE_TIMEOUT_S)
         logger.info(
             "ReferenceData: env_stub.ReferenceData returned",
             extra={"seed": episode_seed},
