@@ -66,6 +66,19 @@ SPARK_NODE_SELECTOR = (
     ("nvidia.com/gpu.present", "true"),
 )
 
+# Compile-time pin for the backtest step's node, to avoid the cold image-pull
+# tax. The backtest image is ~3 GB; left unpinned the pod lands on whichever
+# untainted amd64 node the scheduler picks, and any node that has never pulled
+# the image (or only has an older base) does a full multi-GB cold pull (~40 min
+# on this cluster's uplink to ECR). Pinning to one stable node keeps its layers
+# warm across runs/retries, so later pulls fetch only the changed app layer.
+# Defaults to dualxeonpc; the amd64 GPU node where (non-spark) training runs,
+# so backtest reuses the dqn/base layers training just pulled (dqn/training and
+# dqn/backtest share that base). Backtest requests no GPU, so co-locating does
+# not reserve the accelerator, and it runs after training so they don't contend.
+# Set ``DQN_BACKTEST_NODE=""`` to disable pinning, or to another hostname.
+BACKTEST_NODE_HOSTNAME: str = os.getenv("DQN_BACKTEST_NODE", "dualxeonpc").strip()
+
 # ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
 
@@ -123,6 +136,23 @@ def _pin_to_spark(task) -> None:
             label_key=label_key,
             label_value=label_value,
         )
+
+
+def _pin_backtest_node(task) -> None:
+    """Pin a task onto a single stable amd64 node to keep its (~3 GB) image
+    layers warm across runs, avoiding the cold image-pull tax.
+
+    No-op when ``BACKTEST_NODE_HOSTNAME`` is empty (``DQN_BACKTEST_NODE=""``).
+    The target node is untainted, so a hostname nodeSelector alone suffices; the
+    node's own arch picks the matching manifest from the multi-arch image.
+    """
+    if not BACKTEST_NODE_HOSTNAME:
+        return
+    kubernetes.add_node_selector(
+        task,
+        label_key="kubernetes.io/hostname",
+        label_value=BACKTEST_NODE_HOSTNAME,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -865,11 +895,15 @@ def dqn_pipeline(
     # Backtest reads the checkpoint URI from training and writes its own
     # metrics URI; both now URI-route via deepqnetwork.artifact_io.
     _mount_minio_creds(backtest_task)
-    # Backtest is deliberately NOT pinned to spark: it's batch-1 greedy inference
-    # on a small Q-network gated by per-step gRPC round-trips to modelenv, so it
-    # gains nothing from a GPU. Leaving it unpinned lets it run on any CPU node
-    # (the multi-arch image covers amd64/arm64) and keeps the scarce spark GPUs
-    # free for training. See T-12.1-10.
+    # Backtest is batch-1 greedy inference on a small Q-network gated by per-step
+    # gRPC round-trips to modelenv, so it gains nothing from a GPU and is NOT
+    # pinned to spark; that keeps the scarce spark GPUs free for training (the
+    # multi-arch image would run on arm64, but the spark taints exclude it). See
+    # T-12.1-10. It IS pinned to a single stable amd64 node, however, to avoid the
+    # cold ~3 GB image-pull tax that hit when the scheduler bounced it onto a node
+    # that had never pulled the image (full multi-GB pull, ~40 min). See T-12.1-11;
+    # disable with DQN_BACKTEST_NODE="".
+    _pin_backtest_node(backtest_task)
 
     # -----------------------------------------------------------------------
     # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)
