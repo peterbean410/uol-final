@@ -55,6 +55,35 @@ pub struct Episode {
     pub done: bool,
 }
 
+/// Check if the trading-session end hour was crossed between two timestamps.
+///
+/// The session closes daily at `session_end_hour` (UTC, taken modulo 24).
+/// Returns true when a session-end instant lies in
+/// `(from_timestamp_ns, to_timestamp_ns]`, i.e. the step just advanced past
+/// the close of a session. Used to trigger end-of-session liquidation. Pure
+/// (no episode state), so it's a free function for easy testing.
+pub fn has_session_end_crossed(
+    from_timestamp_ns: i64,
+    to_timestamp_ns: i64,
+    session_end_hour: u32,
+) -> bool {
+    if to_timestamp_ns <= from_timestamp_ns {
+        return false;
+    }
+    let nanos_per_hour = NANOS_PER_DAY / 24;
+    let target = (session_end_hour as i64 % 24) * nanos_per_hour;
+    // The session-end instant recurs daily; a single step is far smaller than a
+    // day, so checking the from-day and the next covers the crossing.
+    let from_day = from_timestamp_ns.div_euclid(NANOS_PER_DAY);
+    for day in [from_day, from_day + 1] {
+        let boundary = day * NANOS_PER_DAY + target;
+        if from_timestamp_ns < boundary && boundary <= to_timestamp_ns {
+            return true;
+        }
+    }
+    false
+}
+
 impl Episode {
     /// Create a new episode with the given bars for each time interval
     pub fn new(

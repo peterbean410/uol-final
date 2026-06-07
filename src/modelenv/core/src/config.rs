@@ -191,6 +191,18 @@ pub struct Config {
     /// passing `--swap-rate-* 0` (which reads as "override to zero" but is easy
     /// to conflate with "unset"). Off (false) by default.
     pub disable_swap: bool,
+    /// Trading-session hours (UTC), matching the episode's hour_start/hour_end.
+    /// When `trading_session_hour_end` is set, modelenv liquidates at each
+    /// session end (Training/backtest only): **all short positions and all
+    /// losing long positions (net of accrued swap) are closed**, and only
+    /// winning/break-even long positions carry into the next session.
+    /// `hour_start` defines the session window (informational today; it does
+    /// not gate trading; the liquidation triggers on `hour_end`). Both are UTC
+    /// hours; `hour_end` may exceed 23 to denote a session that closes on a
+    /// later calendar day (e.g. 39 = 15:00 next day) and is taken modulo 24.
+    /// `None` (default) disables session liquidation.
+    pub trading_session_hour_start: Option<u32>,
+    pub trading_session_hour_end: Option<u32>,
 }
 
 impl Default for Config {
@@ -216,6 +228,8 @@ impl Default for Config {
             swap_rate_long: None,
             swap_rate_short: None,
             disable_swap: false,
+            trading_session_hour_start: None,
+            trading_session_hour_end: None,
         }
     }
 }
@@ -458,6 +472,26 @@ impl Config {
                     self.disable_swap = true;
                     i += 1;
                 }
+                "--trading-session-hour-start" => {
+                    if i + 1 < args.len() {
+                        self.trading_session_hour_start = Some(args[i + 1].parse()?);
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "--trading-session-hour-start requires a value"
+                        ));
+                    }
+                }
+                "--trading-session-hour-end" => {
+                    if i + 1 < args.len() {
+                        self.trading_session_hour_end = Some(args[i + 1].parse()?);
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "--trading-session-hour-end requires a value"
+                        ));
+                    }
+                }
                 "--help" => {
                     print_help();
                     std::process::exit(0);
@@ -630,6 +664,16 @@ impl Config {
                 value.trim().to_lowercase().as_str(),
                 "1" | "true" | "yes" | "on"
             );
+        }
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRADING_SESSION_HOUR_START") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.trading_session_hour_start = Some(parsed);
+            }
+        }
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRADING_SESSION_HOUR_END") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.trading_session_hour_end = Some(parsed);
+            }
         }
     }
 
@@ -812,8 +856,17 @@ impl Config {
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Disable Hedging: {}", self.disable_hedging);
         info!("Leverage: {}:1", self.leverage);
+        match (self.trading_session_hour_start, self.trading_session_hour_end) {
+            (_, Some(end)) => info!(
+                "Trading session liquidation: ON (start={:?}, end={}h UTC) (\
+                 at session end close all shorts + losing longs (net of swap), \
+                 keep winning/break-even longs",
+                self.trading_session_hour_start, end
+            ),
+            _ => info!("Trading session liquidation: OFF"),
+        }
         if self.disable_swap {
-            info!("Daily Swap Rates: DISABLED (--no-swap), forced to 0.0/0.0");
+            info!("Daily Swap Rates: DISABLED (--no-swap)) forced to 0.0/0.0");
         } else {
             match (self.swap_rate_long, self.swap_rate_short) {
                 (None, None) => info!(
@@ -910,6 +963,8 @@ fn print_help() {
     println!("  --swap-rate-long <RATE>       Override daily swap per unit volume for BUY positions (default: built-in per-symbol table in Training, broker in Live)");
     println!("  --swap-rate-short <RATE>      Override daily swap per unit volume for SELL positions (default: built-in per-symbol table in Training, broker in Live)");
     println!("  --no-swap                     Disable overnight swap entirely (force 0.0/0.0), overriding the built-in table and any --swap-rate-* values");
+    println!("  --trading-session-hour-start <H> Session start hour (UTC). Defines the session window; matches the episode hour_start (informational; does not gate trading)");
+    println!("  --trading-session-hour-end <H>   Session end hour (UTC, may exceed 23, taken mod 24). At each session end, close all shorts + losing longs (net of swap), keep winning/break-even longs (Training/backtest only)");
     println!("  --help                     Display this help and exit");
     println!();
     println!("Environment Variables:");
@@ -934,6 +989,8 @@ fn print_help() {
     println!("  MODELENV_SWAP_RATE_LONG       Same as --swap-rate-long");
     println!("  MODELENV_SWAP_RATE_SHORT      Same as --swap-rate-short");
     println!("  MODELENV_NO_SWAP              Same as --no-swap (1/true/yes/on)");
+    println!("  MODELENV_TRADING_SESSION_HOUR_START Same as --trading-session-hour-start");
+    println!("  MODELENV_TRADING_SESSION_HOUR_END   Same as --trading-session-hour-end");
 }
 
 #[cfg(test)]

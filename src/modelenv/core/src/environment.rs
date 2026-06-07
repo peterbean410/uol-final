@@ -153,6 +153,10 @@ pub struct Environment {
     daily_swap_rates: HashMap<String, (f64, f64)>,
     // Track the last timestamp when swap was accrued for day boundary detection
     last_swap_accrual_timestamp: i64,
+    // Trading-session end hour (UTC, mod 24). When set, Training/backtest
+    // liquidates at each session end: close all shorts + losing longs (net of
+    // swap), keep winning/break-even longs. None disables session liquidation.
+    trading_session_end_hour: Option<u32>,
     // Broker gateway for Production Mode (Arc for cloneability)
     broker_gateway: Option<Arc<dyn BrokerGateway + Send + Sync>>,
     // Reward function configuration
@@ -255,6 +259,7 @@ impl Environment {
             transaction_cost: 0.0, // Default no transaction cost
             daily_swap_rates,
             last_swap_accrual_timestamp: 0, // Will be set on reset
+            trading_session_end_hour: None,
             broker_gateway: None,
             reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
             reward_action_penalty: 0.001, // Default action penalty (scaled to USD/JPY spread)
@@ -291,6 +296,17 @@ impl Environment {
     /// credit. Leaving this unset (the default) means no overnight financing.
     pub fn with_daily_swap_rate(mut self, symbol: String, long_rate: f64, short_rate: f64) -> Self {
         self.daily_swap_rates.insert(symbol, (long_rate, short_rate));
+        self
+    }
+
+    /// Enable end-of-session liquidation at `session_end_hour` (UTC, mod 24).
+    ///
+    /// When set, each time a step crosses the session-end instant (Training /
+    /// backtest only), all short positions and all losing long positions (net
+    /// of accrued swap) are closed, and winning/break-even long positions carry
+    /// into the next session. `None` disables it.
+    pub fn with_trading_session_end_hour(mut self, session_end_hour: Option<u32>) -> Self {
+        self.trading_session_end_hour = session_end_hour;
         self
     }
 
@@ -760,6 +776,24 @@ impl Environment {
                 }
 
                 self.mark_positions_to_market()?;
+
+                // End-of-session liquidation: if this step crossed the configured
+                // trading-session end hour, close all shorts + losing longs (net
+                // of swap) and keep winning/break-even longs, before the new
+                // action is applied. mark_positions_to_market above keeps
+                // unrealised_pnl current for the win/lose decision.
+                if let Some(end_hour) = self.trading_session_end_hour {
+                    if !self.positions.is_empty()
+                        && crate::episode::has_session_end_crossed(
+                            prev_timestamp,
+                            current_timestamp,
+                            end_hour,
+                        )
+                    {
+                        self.close_session_positions()?;
+                    }
+                }
+
                 self.apply_action(&action)?;
 
                 self.update_max_total_margin();
@@ -1338,6 +1372,38 @@ impl Environment {
             },
         );
 
+        Ok(())
+    }
+
+    /// End-of-session liquidation.
+    ///
+    /// Close all short positions and all *losing* long positions, where a long
+    /// is "losing" when its net P&L (mark-to-market `unrealised_pnl` + accrued
+    /// `swap`) is strictly negative. Winning and break-even long positions
+    /// (net P&L >= 0) are kept and carry into the next session. Callers must
+    /// mark positions to market first so `unrealised_pnl` is current. Closing
+    /// reuses `close_position`, so realised P&L, the closed-position window, the
+    /// trade log, and fills are all recorded normally.
+    fn close_session_positions(&mut self) -> Result<()> {
+        let to_close: Vec<String> = self
+            .positions
+            .iter()
+            .filter(|p| matches!(p.side, Side::Sell) || (p.unrealised_pnl + p.swap) < 0.0)
+            .map(|p| p.position_id.clone())
+            .collect();
+        if to_close.is_empty() {
+            return Ok(());
+        }
+        let kept = self.positions.len() - to_close.len();
+        for id in &to_close {
+            self.close_position(id)?;
+        }
+        log::info!(
+            "session-end liquidation: symbol={} closed={} (shorts + losing longs), kept={} winning longs",
+            self.symbol,
+            to_close.len(),
+            kept,
+        );
         Ok(())
     }
 
