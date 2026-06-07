@@ -90,6 +90,11 @@ class DQNAdvisor:
         if config is not None:
             ckpt_config.update(config)
 
+        # Persisted training config (full asdict(DQNConfig) saved at train time).
+        # Exposes the training window so evaluators (e.g. the DQNPF backtest) can
+        # replay the policy on the same hour-bound sessions it trained on.
+        self._config = dict(ckpt_config)
+
         # Extract network architecture parameters
         hidden_dims = ckpt_config.get("hidden_dims", [256, 256, 128])
         activation = ckpt_config.get("activation", "relu")
@@ -148,6 +153,49 @@ class DQNAdvisor:
             A ready-to-use DQNAdvisor instance.
         """
         return cls(checkpoint_path=checkpoint_path, **kwargs)
+
+    @property
+    def training_window(self) -> dict[str, object]:
+        """The hour-of-day / date window this model was trained on.
+
+        Read from the persisted ``DQNConfig`` in the checkpoint, with the same
+        defaults as ``DQNConfig`` for older checkpoints that predate a field.
+        Returns ``date_start``/``date_end`` (ISO strings, ``""`` = unset) and
+        ``hour_of_day_start``/``hour_of_day_end`` (ints; ``hour_end >= 24`` means
+        the session rolls into the next day). Used by the DQNPF backtest to align
+        its evaluation episodes with the trained sessions.
+        """
+        return self._training_window_from_config(self._config)
+
+    @staticmethod
+    def _training_window_from_config(config: dict) -> dict[str, object]:
+        """Project a persisted ``DQNConfig`` dict onto the training-window fields.
+
+        Applies the same defaults as ``DQNConfig`` so checkpoints predating a
+        field still resolve. Shared by :attr:`training_window` and
+        :meth:`read_training_window`.
+        """
+        return {
+            "date_start": config.get("date_start", ""),
+            "date_end": config.get("date_end", ""),
+            "hour_of_day_start": int(config.get("hour_of_day_start", 0)),
+            "hour_of_day_end": int(config.get("hour_of_day_end", 23)),
+        }
+
+    @classmethod
+    def read_training_window(cls, checkpoint_path: str) -> dict[str, object]:
+        """Read only the training window from a checkpoint (no network build).
+
+        Loads just the persisted ``config`` (CPU map) and returns the same dict
+        as :attr:`training_window`. Lets callers that need the trained session
+        window, e.g. the DQNPF backtest component, to configure modelenv's
+        session liquidation before the sidecar starts, avoid the cost of
+        constructing a full advisor and Q-network.
+        """
+        checkpoint = torch.load(
+            checkpoint_path, map_location="cpu", weights_only=False
+        )
+        return cls._training_window_from_config(checkpoint.get("config", {}))
 
     def recommend_action(self, state: np.ndarray | list[float]) -> ActionResult:
         """Recommend the best action for the given state.
