@@ -40,6 +40,7 @@ sys.path.insert(0, "/app")
 
 from deepqnetwork.advisor import DQNAdvisor
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
+from deepqnetwork.swap_rates import resolve_swap_rates
 from probabilisticforecaster.kubeflow.monitoring.metrics import get_logger
 
 # Import gRPC stubs (available via PYTHONPATH from base image)
@@ -980,6 +981,11 @@ def main() -> None:
         "num_eval_episodes": args.num_eval_episodes,
         "max_steps_per_episode": args.max_steps_per_episode,
         "checkpoint_path": args.checkpoint_path,
+        # Overnight financing the modelenv sidecar applied this backtest. The
+        # sidecar runs in Training mode without swap CLI flags, so these are the
+        # built-in default-table rates unless overridden via MODELENV_SWAP_* /
+        # MODELENV_NO_SWAP env. See deepqnetwork/swap_rates.py.
+        "swap_rates": resolve_swap_rates(args.symbol),
         "backtest_metrics": {
             "cumulative_pnl": metrics.cumulative_pnl,
             "sharpe_ratio": metrics.sharpe_ratio,
@@ -1033,6 +1039,7 @@ def main() -> None:
                 "cumulative_pnl": round(metrics.cumulative_pnl, 6),
                 "win_rate": round(metrics.win_rate, 4),
                 "max_drawdown": round(metrics.max_drawdown, 4),
+                "swap_rates": output["swap_rates"],
             },
         )
 

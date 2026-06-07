@@ -38,6 +38,7 @@ sys.path.insert(0, "/app")
 from deepqnetwork.config import DQNConfig
 from deepqnetwork.train import train
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
+from deepqnetwork.swap_rates import resolve_swap_rates
 from probabilisticforecaster.kubeflow.monitoring.metrics import get_logger
 
 logger = get_logger(__name__, component="dqn_training")
@@ -705,6 +706,11 @@ def main() -> None:
             "symbol": dqn_config.symbol,
             "num_episodes_per_range": dqn_config.num_episodes_per_range,
             "learning_rate": dqn_config.learning_rate,
+            # Overnight financing the modelenv sidecar applied during training.
+            # Sidecar runs in Training mode without swap CLI flags, so these are
+            # the built-in default-table rates unless overridden via
+            # MODELENV_SWAP_* / MODELENV_NO_SWAP env. See deepqnetwork/swap_rates.py.
+            "swap_rates": resolve_swap_rates(dqn_config.symbol),
             "completed_at": timestamp,
         },
     )
