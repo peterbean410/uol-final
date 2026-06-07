@@ -55,14 +55,34 @@ def _passing_comparison() -> BacktestComparison:
         quarterly_pnl_combined={"2024-Q1": 0.3, "2024-Q2": 0.4, "2024-Q3": 0.3},
         quarterly_pnl_baseline={"2024-Q1": 0.2, "2024-Q2": 0.2, "2024-Q3": 0.1},
         high_sigma_time_fraction=0.3,
+        # Money-PnL counterparts: validate_thresholds evaluates Req 14.1/14.3 on
+        # these (raw_pnl_delta), not the reward-based *_sharpe / *_proportion.
+        combined_sharpe_pnl=0.8,
+        baseline_sharpe_pnl=0.4,
+        high_sigma_negative_raw_pnl_proportion_combined=0.2,
+        high_sigma_negative_raw_pnl_proportion_baseline=0.5,
     )
 
 
 def _failing_comparison() -> BacktestComparison:
     cmp = _passing_comparison()
-    cmp.combined_sharpe = 0.0  # fails Req 14.1
+    cmp.combined_sharpe_pnl = 0.0  # fails Req 14.1 (money-PnL Sharpe)
     cmp.trades_combined = 100  # fails Req 14.2
     return cmp
+
+
+def _stub_materialize_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the real S3/MinIO checkpoint download in unit tests.
+
+    ``run_dqnpf_backtest`` calls ``_materialize_checkpoint`` to download the
+    resolved URI to a local file for ``torch.load``. With an injected
+    ``run_backtest_fn`` the checkpoint is never opened, so stub it to a no-op
+    pass-through; the assertions expect the resolved URI to flow through to
+    ``IntegrationConfig`` unchanged.
+    """
+    monkeypatch.setattr(
+        component, "_materialize_checkpoint", lambda uri, dest_dir, name: uri
+    )
 
 
 def _write_pipeline_yaml(tmp_path: Path, **overrides) -> Path:
@@ -134,7 +154,10 @@ def test_serialise_result_contains_required_sections() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_dqnpf_backtest_writes_artifact_on_passing_run(tmp_path: Path) -> None:
+def test_run_dqnpf_backtest_writes_artifact_on_passing_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_materialize_checkpoint(monkeypatch)
     yaml_path = _write_pipeline_yaml(tmp_path)
     output_path = tmp_path / "report.json"
 
@@ -185,7 +208,10 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(tmp_path: Path) -> No
     }
 
 
-def test_run_dqnpf_backtest_records_failing_thresholds(tmp_path: Path) -> None:
+def test_run_dqnpf_backtest_records_failing_thresholds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_materialize_checkpoint(monkeypatch)
     yaml_path = _write_pipeline_yaml(tmp_path)
     output_path = tmp_path / "report.json"
 
@@ -205,7 +231,10 @@ def test_run_dqnpf_backtest_records_failing_thresholds(tmp_path: Path) -> None:
     assert any("14.1" in f for f in report["failures"])
 
 
-def test_run_dqnpf_backtest_uses_pipeline_stages(tmp_path: Path) -> None:
+def test_run_dqnpf_backtest_uses_pipeline_stages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_materialize_checkpoint(monkeypatch)
     yaml_path = _write_pipeline_yaml(
         tmp_path,
         dqn_lifecycle_stage="staging",
@@ -417,8 +446,11 @@ def test_export_trade_log_writes_empty_when_no_trades(tmp_path: Path) -> None:
 
 
 def test_run_dqnpf_backtest_emits_summary_log(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_materialize_checkpoint(monkeypatch)
     yaml_path = _write_pipeline_yaml(tmp_path)
     output_path = tmp_path / "report.json"
 
