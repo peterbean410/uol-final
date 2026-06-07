@@ -115,6 +115,20 @@ def _start_modelenv_sidecar(
     non-zero they are passed through as ``--swap-rate-long`` / ``--swap-rate-short``
     so the backtest's PnL and trade log reflect overnight swap costs.
     """
+    # Coerce to float before the truthiness guards below. A string like "0.0"
+    # (e.g. a KFP str pipeline param) is truthy, which would forward
+    # `--swap-rate-long 0.0` and wrongly OVERRIDE modelenv's built-in default
+    # table with zero swap. After coercion only a genuinely non-zero rate is
+    # forwarded; 0.0 (float) is falsy and leaves the built-in table in place.
+    def _as_rate(value: object) -> float:
+        try:
+            return float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0
+
+    swap_rate_long = _as_rate(swap_rate_long)
+    swap_rate_short = _as_rate(swap_rate_short)
+
     logger.info(
         json.dumps(
             {
