@@ -185,6 +185,12 @@ pub struct Config {
     /// uses broker-synced swap. Set either to override that symbol's rate.
     pub swap_rate_long: Option<f64>,
     pub swap_rate_short: Option<f64>,
+    /// Explicitly disable overnight swap: force (0.0, 0.0) for the configured
+    /// symbol, overriding both the built-in Training default table and any
+    /// `swap_rate_long`/`swap_rate_short` values. Cleaner and unambiguous vs.
+    /// passing `--swap-rate-* 0` (which reads as "override to zero" but is easy
+    /// to conflate with "unset"). Off (false) by default.
+    pub disable_swap: bool,
 }
 
 impl Default for Config {
@@ -209,6 +215,7 @@ impl Default for Config {
             trade_log_path: None,
             swap_rate_long: None,
             swap_rate_short: None,
+            disable_swap: false,
         }
     }
 }
@@ -447,6 +454,10 @@ impl Config {
                         return Err(anyhow::anyhow!("--swap-rate-short requires a value"));
                     }
                 }
+                "--no-swap" => {
+                    self.disable_swap = true;
+                    i += 1;
+                }
                 "--help" => {
                     print_help();
                     std::process::exit(0);
@@ -613,6 +624,12 @@ impl Config {
             if let Ok(parsed) = value.parse::<f64>() {
                 self.swap_rate_short = Some(parsed);
             }
+        }
+        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_NO_SWAP") {
+            self.disable_swap = matches!(
+                value.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
         }
     }
 
@@ -795,14 +812,18 @@ impl Config {
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Disable Hedging: {}", self.disable_hedging);
         info!("Leverage: {}:1", self.leverage);
-        match (self.swap_rate_long, self.swap_rate_short) {
-            (None, None) => info!(
-                "Daily Swap Rates: built-in defaults (Training/backtest) / broker-synced (Live)"
-            ),
-            (long, short) => info!(
-                "Daily Swap Rate overrides (per unit volume): long={:?}, short={:?}",
-                long, short
-            ),
+        if self.disable_swap {
+            info!("Daily Swap Rates: DISABLED (--no-swap), forced to 0.0/0.0");
+        } else {
+            match (self.swap_rate_long, self.swap_rate_short) {
+                (None, None) => info!(
+                    "Daily Swap Rates: built-in defaults (Training/backtest) / broker-synced (Live)"
+                ),
+                (long, short) => info!(
+                    "Daily Swap Rate overrides (per unit volume): long={:?}, short={:?}",
+                    long, short
+                ),
+            }
         }
         match self.trade_log_path.as_deref() {
             Some(path) => info!("Trade Log: {}", path),
@@ -888,6 +909,7 @@ fn print_help() {
     println!("  --trade-log <PATH>            Append fills and position closes to a JSONL file for review/debugging (default: disabled)");
     println!("  --swap-rate-long <RATE>       Override daily swap per unit volume for BUY positions (default: built-in per-symbol table in Training, broker in Live)");
     println!("  --swap-rate-short <RATE>      Override daily swap per unit volume for SELL positions (default: built-in per-symbol table in Training, broker in Live)");
+    println!("  --no-swap                     Disable overnight swap entirely (force 0.0/0.0), overriding the built-in table and any --swap-rate-* values");
     println!("  --help                     Display this help and exit");
     println!();
     println!("Environment Variables:");
@@ -911,6 +933,7 @@ fn print_help() {
     println!("  MODELENV_TRADE_LOG            Same as --trade-log");
     println!("  MODELENV_SWAP_RATE_LONG       Same as --swap-rate-long");
     println!("  MODELENV_SWAP_RATE_SHORT      Same as --swap-rate-short");
+    println!("  MODELENV_NO_SWAP              Same as --no-swap (1/true/yes/on)");
 }
 
 #[cfg(test)]
@@ -936,6 +959,24 @@ mod tests {
         let config = load_test_config(&["modelenv-server"], &[]).unwrap();
         assert_eq!(config.swap_rate_long, None);
         assert_eq!(config.swap_rate_short, None);
+        assert!(!config.disable_swap);
+    }
+
+    #[test]
+    fn no_swap_flag_parsed_from_cli() {
+        let config = load_test_config(&["modelenv-server", "--no-swap"], &[]).unwrap();
+        assert!(config.disable_swap);
+    }
+
+    #[test]
+    fn no_swap_loaded_from_env() {
+        for val in ["1", "true", "yes", "on", "TRUE"] {
+            let config =
+                load_test_config(&["modelenv-server"], &[("MODELENV_NO_SWAP", val)]).unwrap();
+            assert!(config.disable_swap, "MODELENV_NO_SWAP={val} should enable");
+        }
+        let config = load_test_config(&["modelenv-server"], &[("MODELENV_NO_SWAP", "0")]).unwrap();
+        assert!(!config.disable_swap);
     }
 
     #[test]
