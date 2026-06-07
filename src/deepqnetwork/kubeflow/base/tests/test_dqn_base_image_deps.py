@@ -199,10 +199,12 @@ class TestDQNBaseImageDependencyConsistency:
             )
 
     def test_requirements_covers_all_required_modules(self) -> None:
-        """The requirements file covers all modules that the DQN code imports.
+        """The requirements file covers the pip-installed required modules.
 
-        The required modules (torch, grpc, numpy, boto3) must each have a
-        corresponding package in requirements-dqn-base.txt. environment_pb2
+        grpc, numpy, and boto3 must each have a corresponding package in
+        requirements-dqn-base.txt. torch is intentionally NOT pinned there;
+        its wheel is arch-specific and installed separately by
+        Dockerfile.dqn-base (see test_dockerfile_installs_torch). environment_pb2
         is provided via compiled stubs, not pip.
 
         **Validates: Requirements DQN-R4**
@@ -210,9 +212,10 @@ class TestDQNBaseImageDependencyConsistency:
         packages = _parse_requirements(REQUIREMENTS_FILE)
         package_names = {pkg.lower() for pkg, _ in packages}
 
-        # Map required modules to their pip package names
+        # Map required modules to their pip package names. torch is excluded;
+        # the Dockerfile installs it from the arch-matching CUDA index, not the
+        # shared (arch-agnostic) requirements file.
         module_to_package = {
-            "torch": "torch",
             "grpc": "grpcio",
             "numpy": "numpy",
             "boto3": "boto3",
@@ -223,6 +226,20 @@ class TestDQNBaseImageDependencyConsistency:
                 f"Required module '{module}' (pip package '{expected_package}') "
                 f"is not listed in requirements-dqn-base.txt"
             )
+
+    def test_dockerfile_installs_torch(self) -> None:
+        """torch is installed by Dockerfile.dqn-base (arch-specific CUDA wheel),
+        not pinned in requirements-dqn-base.txt.
+
+        **Validates: Requirements DQN-R4**
+        """
+        dockerfile = (
+            REPO_ROOT / "deepqnetwork" / "kubeflow" / "base" / "Dockerfile.dqn-base"
+        )
+        content = dockerfile.read_text()
+        assert "torch" in content, (
+            "Dockerfile.dqn-base does not install torch (arch-specific CUDA wheel)"
+        )
 
     def test_dockerfile_references_requirements_file(self) -> None:
         """The Dockerfile.dqn-base references requirements-dqn-base.txt.
