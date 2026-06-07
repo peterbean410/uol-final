@@ -5,6 +5,9 @@
 #    dqn_model_registry_name: str [Default: 'deepqnetwork-usdjpy']
 #    forecaster_model_registry_name: str [Default: 'probabilistic-transformer-usdjpy-h1']
 #    integration_config_yaml: str [Default: '/etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml']
+#    no_swap: str [Default: 'false']
+#    swap_rate_long: str [Default: '0.0']
+#    swap_rate_short: str [Default: '0.0']
 components:
   comp-dqnpf-backtest:
     executorLabel: exec-dqnpf-backtest
@@ -16,9 +19,25 @@ components:
           parameterType: STRING
         integration_config_yaml:
           parameterType: STRING
+        no_swap:
+          defaultValue: 'false'
+          isOptional: true
+          parameterType: STRING
+        swap_rate_long:
+          defaultValue: '0.0'
+          isOptional: true
+          parameterType: STRING
+        swap_rate_short:
+          defaultValue: '0.0'
+          isOptional: true
+          parameterType: STRING
     outputDefinitions:
       artifacts:
         backtest_report:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        trade_log:
           artifactType:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
@@ -35,6 +54,14 @@ deploymentSpec:
         - '{{$.inputs.parameters[''forecaster_model_registry_name'']}}'
         - --output-artifact-path
         - '{{$.outputs.artifacts[''backtest_report''].uri}}'
+        - --trade-log-output-path
+        - '{{$.outputs.artifacts[''trade_log''].uri}}'
+        - --no-swap
+        - '{{$.inputs.parameters[''no_swap'']}}'
+        - --swap-rate-long
+        - '{{$.inputs.parameters[''swap_rate_long'']}}'
+        - --swap-rate-short
+        - '{{$.inputs.parameters[''swap_rate_short'']}}'
         command:
         - python
         - -m
@@ -60,6 +87,12 @@ root:
               componentInputParameter: forecaster_model_registry_name
             integration_config_yaml:
               componentInputParameter: integration_config_yaml
+            no_swap:
+              componentInputParameter: no_swap
+            swap_rate_long:
+              componentInputParameter: swap_rate_long
+            swap_rate_short:
+              componentInputParameter: swap_rate_short
         retryPolicy:
           backoffDuration: 0s
           backoffFactor: 2.0
@@ -81,5 +114,40 @@ root:
         defaultValue: /etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml
         isOptional: true
         parameterType: STRING
+      no_swap:
+        defaultValue: 'false'
+        isOptional: true
+        parameterType: STRING
+      swap_rate_long:
+        defaultValue: '0.0'
+        isOptional: true
+        parameterType: STRING
+      swap_rate_short:
+        defaultValue: '0.0'
+        isOptional: true
+        parameterType: STRING
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.16.1
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-dqnpf-backtest:
+          pvcMount:
+          - constant: modelenv-cache
+            mountPath: /tmp/modelenv-cache
+            pvcNameParameter:
+              runtimeValue:
+                constant: modelenv-cache
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: MINIO_ACCESS_KEY
+              secretKey: accesskey
+            - envVar: MINIO_SECRET_KEY
+              secretKey: secretkey
+            optional: false
+            secretName: mlpipeline-minio-artifact
+            secretNameParameter:
+              runtimeValue:
+                constant: mlpipeline-minio-artifact

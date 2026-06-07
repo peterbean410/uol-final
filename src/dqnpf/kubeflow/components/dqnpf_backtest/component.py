@@ -102,6 +102,8 @@ def _start_modelenv_sidecar(
     swap_rate_long: float = 0.0,
     swap_rate_short: float = 0.0,
     no_swap: bool = False,
+    trading_session_hour_start: int | None = None,
+    trading_session_hour_end: int | None = None,
 ) -> subprocess.Popen:
     """Launch modelenv as a subprocess and wait for the port to open.
 
@@ -110,16 +112,27 @@ def _start_modelenv_sidecar(
     for offline review. The trade log is a pure side-channel; it does not
     affect observations, rewards, or the backtest result.
 
-    ``no_swap`` (default False here, but **True** from ``run_dqnpf_backtest``)
-    starts modelenv with ``--no-swap``, forcing zero overnight financing and
-    overriding both modelenv's built-in default table and any swap-rate values;
-    the clean way to run a swap-free backtest.
+    ``no_swap`` (default False, matching ``run_dqnpf_backtest``) starts modelenv
+    with ``--no-swap`` only when explicitly requested, forcing zero overnight
+    financing and overriding both modelenv's built-in default table and any
+    swap-rate values; the clean way to run a swap-free comparison backtest. By
+    default it is left unset so modelenv applies its built-in default table and
+    the backtest's PnL reflects the same swap regime the DQN trained under.
 
     ``swap_rate_long`` / ``swap_rate_short`` are the daily overnight-financing
     rates (per unit volume) charged to BUY / SELL positions held across a day
     boundary; they only apply when ``no_swap`` is False, and only a genuinely
     non-zero rate is forwarded as ``--swap-rate-long`` / ``--swap-rate-short`` so
     the backtest's PnL and trade log reflect overnight swap costs.
+
+    ``trading_session_hour_start`` / ``trading_session_hour_end`` enable
+    modelenv's end-of-session liquidation (Training/backtest only): at each
+    session end modelenv closes all shorts + losing longs (net of swap) and
+    keeps winning/break-even longs. They are forwarded as
+    ``--trading-session-hour-start`` / ``--trading-session-hour-end`` only when
+    set (date-range backtests), so the liquidation boundary matches the
+    hour-bound episode windows the backtest runs. ``None`` (legacy fixed-window
+    mode) leaves session liquidation off.
     """
     # Coerce to float before the truthiness guards below. A string like "0.0"
     # (e.g. a KFP str pipeline param) is truthy, which would forward
@@ -146,6 +159,8 @@ def _start_modelenv_sidecar(
                 "no_swap": no_swap,
                 "swap_rate_long": swap_rate_long,
                 "swap_rate_short": swap_rate_short,
+                "trading_session_hour_start": trading_session_hour_start,
+                "trading_session_hour_end": trading_session_hour_end,
             }
         )
     )
@@ -166,6 +181,12 @@ def _start_modelenv_sidecar(
             cmd += ["--swap-rate-long", str(swap_rate_long)]
         if swap_rate_short:
             cmd += ["--swap-rate-short", str(swap_rate_short)]
+    # End-of-session liquidation: forward the session-hour window so modelenv
+    # liquidates at the same boundary the date-range episodes are sliced on.
+    if trading_session_hour_start is not None:
+        cmd += ["--trading-session-hour-start", str(trading_session_hour_start)]
+    if trading_session_hour_end is not None:
+        cmd += ["--trading-session-hour-end", str(trading_session_hour_end)]
     proc = subprocess.Popen(cmd)
     _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S, proc)
     logger.info(json.dumps({"event": "modelenv.ready", "port": port}))
@@ -387,7 +408,7 @@ def run_dqnpf_backtest(
     run_backtest_fn: Callable[[IntegrationConfig], BacktestComparison] | None = None,
     start_sidecar: bool = True,
     trade_log_output_path: str | None = None,
-    no_swap: bool = True,
+    no_swap: bool = False,
     swap_rate_long: float = 0.0,
     swap_rate_short: float = 0.0,
 ) -> dict:
@@ -416,12 +437,17 @@ def run_dqnpf_backtest(
             here (a KFP outputPath, or a ``minio://`` / ``s3://`` URI). Only
             takes effect when the sidecar is started by this component. The
             trade log is a side-channel and does not affect the backtest result.
+        no_swap: If True, start modelenv with ``--no-swap`` for a swap-free
+            comparison run. Default False, modelenv applies its built-in
+            default financing table so the backtest's PnL reflects the same swap
+            regime the DQN trained under.
         swap_rate_long: Daily overnight-financing rate (per unit volume) charged
-            to BUY positions held across a day boundary. Default 0.0 (no
-            financing). Passed to the modelenv sidecar as ``--swap-rate-long``.
+            to BUY positions held across a day boundary. Default 0.0 = leave
+            modelenv's built-in default table in place; a non-zero value is
+            forwarded as ``--swap-rate-long``.
         swap_rate_short: Same as ``swap_rate_long`` for SELL positions, passed as
             ``--swap-rate-short``. Both only take effect when this component
-            starts the sidecar.
+            starts the sidecar and ``no_swap`` is False.
 
     Returns:
         The payload dict that was written to ``output_artifact_path``.
@@ -467,6 +493,22 @@ def run_dqnpf_backtest(
         else None
     )
 
+    # In date-range mode, align modelenv's end-of-session liquidation with the
+    # hour-bound episode windows the backtest runs. The session hours default to
+    # the window the DQN was trained on (read straight from the checkpoint,
+    # without building a full advisor) unless the config overrides them; legacy
+    # fixed-window mode resolves to None and leaves liquidation off.
+    session_hour_start: int | None = None
+    session_hour_end: int | None = None
+    if start_sidecar and integration_cfg.date_start:
+        from deepqnetwork.advisor import DQNAdvisor
+
+        session_hours = backtest._resolve_session_hours(
+            integration_cfg, DQNAdvisor.read_training_window(dqn_local)
+        )
+        if session_hours is not None:
+            session_hour_start, session_hour_end = session_hours
+
     sidecar = (
         _start_modelenv_sidecar(
             integration_cfg.symbol,
@@ -474,6 +516,8 @@ def run_dqnpf_backtest(
             no_swap=no_swap,
             swap_rate_long=swap_rate_long,
             swap_rate_short=swap_rate_short,
+            trading_session_hour_start=session_hour_start,
+            trading_session_hour_end=session_hour_end,
         )
         if start_sidecar
         else None

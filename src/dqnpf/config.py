@@ -36,9 +36,24 @@ class IntegrationConfig:
         forecaster_checkpoint_path: Path to forecaster checkpoint.
         device: Device specifier ("auto", "cpu", "cuda", "mps", ...).
         grpc_address: modelenv gRPC endpoint.
-        num_episodes: Number of episodes for training or backtesting.
-        episode_start_ts: Unix-seconds start of each episode window.
-        episode_end_ts: Unix-seconds end of each episode window.
+        num_episodes: Number of episodes for training or backtesting. Used only
+            in legacy fixed-window mode (when ``date_start``/``date_end`` are
+            unset); in date-range mode the episode count is one per calendar date.
+        episode_start_ts: Unix-seconds start of each episode window (legacy
+            fixed-window mode).
+        episode_end_ts: Unix-seconds end of each episode window (legacy
+            fixed-window mode).
+        date_start: ISO date (e.g. "2012-02-01") for the first backtest episode.
+            When set with ``date_end``, the backtest runs one hour-bound episode
+            per calendar date (mirroring DQN training) instead of the legacy
+            fixed window. Default "" (unset → legacy mode).
+        date_end: ISO date for the last backtest episode (inclusive).
+        hour_of_day_start: Hour (0-23) each episode begins. Default None =
+            inherit the value the DQN model was trained with (read from the
+            checkpoint), so evaluation aligns with the trained session.
+        hour_of_day_end: Hour each episode ends; ``>= 24`` rolls into the next
+            day (e.g. 47 = 23:00 next day → a 24 h session from hour 23). Default
+            None = inherit from the DQN checkpoint.
         seed: Seed forwarded to modelenv Reset() for reproducibility.
         pip_size: Price increment of one pip for ``symbol``, used to convert
             the environment's raw monetary PnL into pips for reporting.
@@ -61,6 +76,10 @@ class IntegrationConfig:
     num_episodes: int = 1
     episode_start_ts: int = 0
     episode_end_ts: int = 0
+    date_start: str = ""
+    date_end: str = ""
+    hour_of_day_start: int | None = None
+    hour_of_day_end: int | None = None
     seed: int = 0
     pip_size: float = 0.01
 
@@ -82,6 +101,15 @@ class IntegrationConfig:
             )
         if self.num_episodes < 1:
             raise ValueError("num_episodes must be >= 1")
+        if bool(self.date_start) != bool(self.date_end):
+            raise ValueError(
+                "date_start and date_end must be set together (date-range mode) "
+                "or both empty (legacy fixed-window mode)"
+            )
+        if self.hour_of_day_start is not None and not 0 <= self.hour_of_day_start <= 23:
+            raise ValueError("hour_of_day_start must be in [0, 23]")
+        if self.hour_of_day_end is not None and not 0 <= self.hour_of_day_end <= 47:
+            raise ValueError("hour_of_day_end must be in [0, 47] (>=24 = next-day)")
 
 
 def _load_yaml(path: str) -> dict:
@@ -181,6 +209,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--episode-end-ts", dest="episode_end_ts", type=int, default=None
+    )
+    parser.add_argument("--date-start", dest="date_start", type=str, default=None)
+    parser.add_argument("--date-end", dest="date_end", type=str, default=None)
+    parser.add_argument(
+        "--hour-start",
+        "--hour-of-day-start",
+        dest="hour_of_day_start",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--hour-end",
+        "--hour-of-day-end",
+        dest="hour_of_day_end",
+        type=int,
+        default=None,
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--pip-size", dest="pip_size", type=float, default=None)

@@ -6,11 +6,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from tradingmodel.intraday.dqnpf.config import IntegrationConfig
 from tradingmodel.intraday.dqnpf.backtest import (
     BacktestComparison,
     StepRecord,
     ThresholdReport,
     _distribution,
+    _resolve_episode_windows,
+    _resolve_session_hours,
     compare_results,
     compute_sharpe,
     conditional_pnl,
@@ -471,3 +474,74 @@ def test_compare_results_max_total_margin() -> None:
     cmp = compare_results(combined, baseline)
     assert cmp.max_total_margin_combined == 3.0
     assert cmp.max_total_margin_baseline == 5.0
+
+
+# Training window the DQN model was trained on (read from the checkpoint).
+# 15:00 UTC start through 15:00 next day (hour_end=39 -> 24h session).
+_TRAINING_WINDOW = {
+    "date_start": "",
+    "date_end": "",
+    "hour_of_day_start": 15,
+    "hour_of_day_end": 39,
+}
+
+
+def test_resolve_episode_windows_legacy_fixed_window() -> None:
+    """Dates unset -> num_episodes repeats of the explicit fixed window."""
+    config = IntegrationConfig(
+        episode_start_ts=1000, episode_end_ts=2000, num_episodes=3
+    )
+    assert _resolve_episode_windows(config, _TRAINING_WINDOW) == [
+        (1000, 2000),
+        (1000, 2000),
+        (1000, 2000),
+    ]
+
+
+def test_resolve_episode_windows_date_range_inherits_trained_hours() -> None:
+    """Date-range mode with no hour override inherits the DQN's trained session."""
+    config = IntegrationConfig(date_start="2012-01-01", date_end="2012-01-03")
+    windows = _resolve_episode_windows(config, _TRAINING_WINDOW)
+    # One episode per calendar date in [date_start, date_end].
+    assert len(windows) == 3
+    # First episode: 2012-01-01 15:00 UTC -> 2012-01-02 15:00 UTC (24h session).
+    start = datetime(2012, 1, 1, 15, tzinfo=timezone.utc)
+    end = datetime(2012, 1, 2, 15, tzinfo=timezone.utc)
+    assert windows[0] == (int(start.timestamp()), int(end.timestamp()))
+
+
+def test_resolve_episode_windows_explicit_hours_override_training_window() -> None:
+    """Explicit hour_of_day_* on the config override the trained session."""
+    config = IntegrationConfig(
+        date_start="2012-01-01",
+        date_end="2012-01-01",
+        hour_of_day_start=0,
+        hour_of_day_end=23,
+    )
+    windows = _resolve_episode_windows(config, _TRAINING_WINDOW)
+    start = datetime(2012, 1, 1, 0, tzinfo=timezone.utc)
+    end = datetime(2012, 1, 1, 23, tzinfo=timezone.utc)
+    assert windows == [(int(start.timestamp()), int(end.timestamp()))]
+
+
+def test_resolve_session_hours_legacy_returns_none() -> None:
+    """Legacy fixed-window mode has no session window (liquidation stays off)."""
+    config = IntegrationConfig(episode_start_ts=1000, episode_end_ts=2000)
+    assert _resolve_session_hours(config, _TRAINING_WINDOW) is None
+
+
+def test_resolve_session_hours_inherits_training_window() -> None:
+    """Date-range mode with no override inherits the DQN's trained session."""
+    config = IntegrationConfig(date_start="2012-01-01", date_end="2012-01-03")
+    assert _resolve_session_hours(config, _TRAINING_WINDOW) == (15, 39)
+
+
+def test_resolve_session_hours_config_overrides_training_window() -> None:
+    """Explicit config hours win over the trained session."""
+    config = IntegrationConfig(
+        date_start="2012-01-01",
+        date_end="2012-01-01",
+        hour_of_day_start=0,
+        hour_of_day_end=23,
+    )
+    assert _resolve_session_hours(config, _TRAINING_WINDOW) == (0, 23)

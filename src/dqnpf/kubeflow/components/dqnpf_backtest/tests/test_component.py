@@ -260,6 +260,30 @@ def test_sidecar_passes_trade_log_when_set(monkeypatch: pytest.MonkeyPatch) -> N
     assert cmd[cmd.index("--trade-log") + 1] == "/mnt/cache/trades.jsonl"
 
 
+def test_sidecar_omits_session_hours_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar("USDJPY")
+    # Legacy fixed-window mode: no session liquidation configured.
+    assert "--trading-session-hour-start" not in captured[0]
+    assert "--trading-session-hour-end" not in captured[0]
+
+
+def test_sidecar_passes_session_hours_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar(
+        "USDJPY",
+        trading_session_hour_start=15,
+        trading_session_hour_end=39,
+    )
+    cmd = captured[0]
+    assert cmd[cmd.index("--trading-session-hour-start") + 1] == "15"
+    assert cmd[cmd.index("--trading-session-hour-end") + 1] == "39"
+
+
 def test_cli_trade_log_output_path_defaults_to_none() -> None:
     args = _build_parser().parse_args(
         [
@@ -288,6 +312,9 @@ def test_cli_trade_log_output_path_parsed() -> None:
 def test_sidecar_omits_swap_rates_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = _patch_sidecar_capture(monkeypatch)
     _start_modelenv_sidecar("USDJPY")
+    # By default the sidecar applies modelenv's built-in swap table: no
+    # --no-swap and no per-side rate overrides.
+    assert "--no-swap" not in captured[0]
     assert "--swap-rate-long" not in captured[0]
     assert "--swap-rate-short" not in captured[0]
 
@@ -345,29 +372,30 @@ def test_cli_swap_rates_parsed_as_float() -> None:
     assert args.swap_rate_short == 0.25
 
 
-def test_cli_no_swap_defaults_true() -> None:
+def test_cli_no_swap_defaults_false() -> None:
     args = _build_parser().parse_args(
         [
             "--integration-config-yaml=cfg.yaml",
             "--dqn-model-registry-name=dqn",
             "--forecaster-model-registry-name=fc",
             "--output-artifact-path=out.json",
+        ]
+    )
+    # Default: swap ON (built-in table), matching DQN training/backtest.
+    assert args.no_swap is False
+
+
+def test_cli_no_swap_parsed_true() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+            "--no-swap=true",
         ]
     )
     assert args.no_swap is True
-
-
-def test_cli_no_swap_parsed_false() -> None:
-    args = _build_parser().parse_args(
-        [
-            "--integration-config-yaml=cfg.yaml",
-            "--dqn-model-registry-name=dqn",
-            "--forecaster-model-registry-name=fc",
-            "--output-artifact-path=out.json",
-            "--no-swap=false",
-        ]
-    )
-    assert args.no_swap is False
 
 
 def test_export_trade_log_copies_contents(tmp_path: Path) -> None:

@@ -27,16 +27,17 @@ inputs:
     description: |
       Run swap-free: start the modelenv sidecar with --no-swap, forcing zero
       overnight financing and overriding both modelenv's built-in table and the
-      swap_rate_* values. Default "true" (swap off). Set to "false" to use the
-      built-in financing table (or the swap_rate_* overrides).
-    default: "true"
+      swap_rate_* values. Default "false"; the backtest uses modelenv's
+      built-in financing table so PnL reflects the same swap regime the DQN
+      trained under. Set to "true" for a swap-free comparison run.
+    default: "false"
   - name: swap_rate_long
     type: String
     description: |
       Daily overnight-financing rate (per unit volume) charged to BUY positions
       held across a day boundary, passed to the modelenv sidecar. Default "0.0"
-      (no financing). Set to your broker's USDJPY long swap to reflect carry.
-      Ignored when no_swap is "true".
+      = leave modelenv's built-in default table in place; set to your broker's
+      USDJPY long swap to override it. Ignored when no_swap is "true".
     default: "0.0"
   - name: swap_rate_short
     type: String

@@ -42,18 +42,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-swap",
         type=_str2bool,
-        default=True,
+        default=False,
         help="Disable overnight swap in the modelenv sidecar (swap-free backtest) "
-        "via modelenv's --no-swap. Default true. Pass 'false' to use modelenv's "
-        "built-in financing table (or the --swap-rate-* overrides).",
+        "via modelenv's --no-swap. Default false; the backtest uses modelenv's "
+        "built-in financing table so PnL matches the swap regime the DQN trained "
+        "under. Pass 'true' for a swap-free comparison run.",
     )
     parser.add_argument(
         "--swap-rate-long",
         type=float,
         default=0.0,
         help="Daily overnight-financing rate (per unit volume) charged to BUY "
-        "positions held across a day boundary. Default 0.0 (no financing). "
-        "Ignored when --no-swap is true.",
+        "positions held across a day boundary. Default 0.0 = use modelenv's "
+        "built-in default table. Ignored when --no-swap is true.",
     )
     parser.add_argument(
         "--swap-rate-short",

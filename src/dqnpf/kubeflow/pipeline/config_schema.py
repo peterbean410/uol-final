@@ -49,6 +49,10 @@ class DqnpfPipelineConfig:
     num_episodes: int = 1
     episode_start_ts: int = 0
     episode_end_ts: int = 0
+    date_start: str = ""
+    date_end: str = ""
+    hour_of_day_start: int | None = None
+    hour_of_day_end: int | None = None
     seed: int = 0
     pip_size: float = 0.01
 

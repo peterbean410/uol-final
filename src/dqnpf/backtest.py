@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
+from deepqnetwork.episode_windows import iter_date_episodes
 from tradingmodel.intraday.dqnpf.config import IntegrationConfig
 from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
 from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
@@ -417,8 +418,10 @@ def _latest_bar_ts(env_client: Any, symbol: str) -> int:
     return int(series[-1].timestamp_ns) if series else 0
 
 
-def _step_timestamp_ns(config: IntegrationConfig, step_idx: int) -> int:
-    return (config.episode_start_ts + step_idx * config.step_size_seconds) * 1_000_000_000
+def _step_timestamp_ns(
+    episode_start_ts: int, step_size_seconds: int, step_idx: int
+) -> int:
+    return (episode_start_ts + step_idx * step_size_seconds) * 1_000_000_000
 
 
 def _run_episode(
@@ -430,13 +433,25 @@ def _run_episode(
     cache: SignalCache,
     integration: IntegrationLayer | None,
     config: IntegrationConfig,
+    episode_start_ts: int | None = None,
+    episode_end_ts: int | None = None,
 ) -> list[StepRecord]:
-    """Single-episode loop. Pass ``integration=None`` for the DQN-only baseline."""
+    """Single-episode loop over ``[episode_start_ts, episode_end_ts]``.
+
+    Pass ``integration=None`` for the DQN-only baseline. The window may be
+    passed explicitly (so the caller can iterate one hour-bound episode per
+    calendar date); when left as ``None`` it falls back to the legacy
+    ``config.episode_start_ts`` / ``config.episode_end_ts`` fixed window.
+    """
+    if episode_start_ts is None:
+        episode_start_ts = config.episode_start_ts
+    if episode_end_ts is None:
+        episode_end_ts = config.episode_end_ts
     cache.invalidate()
     obs = env_client.reset(
         symbol=config.symbol,
-        episode_start_ts=config.episode_start_ts,
-        episode_end_ts=config.episode_end_ts,
+        episode_start_ts=episode_start_ts,
+        episode_end_ts=episode_end_ts,
         step_size_seconds=config.step_size_seconds,
     )
     records: list[StepRecord] = []
@@ -481,7 +496,12 @@ def _run_episode(
 
         if integration is not None and forecaster_ready:
             screened = integration.screen(
-                dqn_result, mu, sigma, timestamp_ns=_step_timestamp_ns(config, step_idx)
+                dqn_result,
+                mu,
+                sigma,
+                timestamp_ns=_step_timestamp_ns(
+                    episode_start_ts, config.step_size_seconds, step_idx
+                ),
             )
             final_action = screened.action
             reason = screened.reason
@@ -495,7 +515,9 @@ def _run_episode(
 
         records.append(
             StepRecord(
-                timestamp_ns=_step_timestamp_ns(config, step_idx),
+                timestamp_ns=_step_timestamp_ns(
+                    episode_start_ts, config.step_size_seconds, step_idx
+                ),
                 dqn_action=int(dqn_result.action),
                 final_action=int(final_action),
                 reason=reason,
@@ -510,6 +532,61 @@ def _run_episode(
         step_idx += 1
 
     return records
+
+
+def _resolve_session_hours(
+    config: IntegrationConfig, training_window: dict[str, object]
+) -> tuple[int, int] | None:
+    """Resolve the ``(hour_start, hour_end)`` session window, or ``None``.
+
+    Returns ``None`` in legacy fixed-window mode (``config.date_start`` unset).
+    In date-range mode the hours default to the session the DQN was trained on
+    (``training_window``, read from the checkpoint) and can be overridden per
+    run via ``config.hour_of_day_start`` / ``hour_of_day_end``.
+
+    This is the single source of truth for the session window, shared by
+    :func:`_resolve_episode_windows` (which slices it into per-date episodes)
+    and the backtest component (which forwards it to modelenv's session
+    liquidation), so the episodes and the liquidation boundary always agree.
+    """
+    if not config.date_start:
+        return None
+    hour_start = (
+        config.hour_of_day_start
+        if config.hour_of_day_start is not None
+        else int(training_window["hour_of_day_start"])
+    )
+    hour_end = (
+        config.hour_of_day_end
+        if config.hour_of_day_end is not None
+        else int(training_window["hour_of_day_end"])
+    )
+    return hour_start, hour_end
+
+
+def _resolve_episode_windows(
+    config: IntegrationConfig, training_window: dict[str, object]
+) -> list[tuple[int, int]]:
+    """Resolve the list of ``(episode_start_ts, episode_end_ts)`` windows to run.
+
+    Date-range mode (``config.date_start`` / ``date_end`` set): one hour-bound
+    episode per calendar date, mirroring DQN training so the policy is evaluated
+    on the same sessions it trained on. The hour-of-day window is resolved by
+    :func:`_resolve_session_hours`.
+
+    Legacy fixed-window mode (dates unset): ``config.num_episodes`` repeats of
+    the explicit ``[episode_start_ts, episode_end_ts]`` window.
+    """
+    hours = _resolve_session_hours(config, training_window)
+    if hours is None:
+        return [
+            (config.episode_start_ts, config.episode_end_ts)
+        ] * config.num_episodes
+
+    hour_start, hour_end = hours
+    return iter_date_episodes(
+        config.date_start, config.date_end, hour_start, hour_end
+    )
 
 
 def run_backtest(config: IntegrationConfig) -> BacktestComparison:
@@ -546,10 +623,21 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
     cache = SignalCache()
     integration = IntegrationLayer(dqn, bridge, cache, config)
 
+    episode_windows = _resolve_episode_windows(config, dqn.training_window)
+    total = len(episode_windows)
+    logger.info(
+        "backtest running %d episode(s) in %s",
+        total,
+        "date-range mode" if config.date_start else "fixed-window mode",
+    )
+
     combined_records: list[StepRecord] = []
     baseline_records: list[StepRecord] = []
-    for episode in range(config.num_episodes):
-        logger.info("backtest episode %d/%d (combined)", episode + 1, config.num_episodes)
+    for idx, (episode_start_ts, episode_end_ts) in enumerate(episode_windows):
+        logger.info(
+            "backtest episode %d/%d (combined) [%d, %d]",
+            idx + 1, total, episode_start_ts, episode_end_ts,
+        )
         combined_records.extend(
             _run_episode(
                 env_client=env_client,
@@ -559,9 +647,14 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
                 cache=cache,
                 integration=integration,
                 config=config,
+                episode_start_ts=episode_start_ts,
+                episode_end_ts=episode_end_ts,
             )
         )
-        logger.info("backtest episode %d/%d (baseline)", episode + 1, config.num_episodes)
+        logger.info(
+            "backtest episode %d/%d (baseline) [%d, %d]",
+            idx + 1, total, episode_start_ts, episode_end_ts,
+        )
         baseline_records.extend(
             _run_episode(
                 env_client=env_client,
@@ -571,6 +664,8 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
                 cache=cache,
                 integration=None,
                 config=config,
+                episode_start_ts=episode_start_ts,
+                episode_end_ts=episode_end_ts,
             )
         )
 
