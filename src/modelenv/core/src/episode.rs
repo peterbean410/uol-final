@@ -1230,6 +1230,55 @@ mod tests {
         assert!(is_archive_gap_error(&wrapped));
     }
 
+    // --- has_session_end_crossed (end-of-session liquidation trigger) ---------
+
+    /// Build a UTC timestamp (ns) at `day`/`hour`/`min` relative to the epoch.
+    fn at(day: i64, hour: i64, min: i64) -> i64 {
+        let nph = NANOS_PER_DAY / 24;
+        day * NANOS_PER_DAY + hour * nph + min * (nph / 60)
+    }
+
+    #[test]
+    fn test_session_end_crossed_true_when_boundary_inside_step() {
+        // Step 14:30 -> 15:30 crosses the 15:00 session end.
+        assert!(has_session_end_crossed(at(0, 14, 30), at(0, 15, 30), 15));
+    }
+
+    #[test]
+    fn test_session_end_not_crossed_before_or_after_boundary() {
+        // Entirely before the 15:00 boundary.
+        assert!(!has_session_end_crossed(at(0, 14, 0), at(0, 14, 30), 15));
+        // Entirely after the 15:00 boundary.
+        assert!(!has_session_end_crossed(at(0, 15, 30), at(0, 16, 0), 15));
+    }
+
+    #[test]
+    fn test_session_end_boundary_is_half_open_interval() {
+        // Boundary == `to` is INCLUDED (the step just reached the close).
+        assert!(has_session_end_crossed(at(0, 14, 0), at(0, 15, 0), 15));
+        // Boundary == `from` is EXCLUDED (already past it last step), and the
+        // next day's boundary is far beyond `to`, so no crossing.
+        assert!(!has_session_end_crossed(at(0, 15, 0), at(0, 16, 0), 15));
+    }
+
+    #[test]
+    fn test_session_end_zero_or_negative_step_is_false() {
+        assert!(!has_session_end_crossed(at(0, 15, 0), at(0, 15, 0), 15));
+        assert!(!has_session_end_crossed(at(0, 16, 0), at(0, 14, 0), 15));
+    }
+
+    #[test]
+    fn test_session_end_hour_taken_modulo_24() {
+        // hour_end 39 == 15:00 (next-day notation); same crossing as 15.
+        assert!(has_session_end_crossed(at(0, 14, 30), at(0, 15, 30), 39));
+    }
+
+    #[test]
+    fn test_session_end_crossed_across_calendar_day_for_midnight_close() {
+        // Session ends at 00:00; step 23:30 day0 -> 00:30 day1 crosses the
+        // day1 midnight boundary (exercises the from_day + 1 branch).
+        assert!(has_session_end_crossed(at(0, 23, 30), at(1, 0, 30), 0));
+    }
 }
 
 /// True when an `anyhow::Error` from the data loader indicates the parquet

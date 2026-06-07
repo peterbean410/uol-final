@@ -2891,4 +2891,69 @@ mod tests {
             assert!(ids.contains(&"buy_mid"));
         }
     }
+
+    #[tokio::test]
+    async fn test_session_liquidation_closes_shorts_and_losing_longs_keeps_winners() {
+        use crate::position::Side;
+
+        // Minimal episode so close_position -> fill_price can price the close.
+        let bars = vec![Bar {
+            timestamp_ns: 0,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.5,
+            volume: 1000.0,
+        }];
+        let episode = Episode::new(
+            "USDJPY".to_string(),
+            [("M1".to_string(), bars)].into_iter().collect(),
+            0,
+            1_000_000_000,
+        );
+        let mut env = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        );
+        env.episode = Some(episode);
+
+        // Net P&L = unrealised_pnl + swap. The caller marks to market first; we
+        // set the fields directly to exercise the selection predicate.
+        let mut win_long = Position::new("win_long".to_string(), 100.0, 0.0, 1.0, Side::Buy, 0);
+        win_long.unrealised_pnl = 5.0; // net +5 -> kept
+        let mut even_long = Position::new("even_long".to_string(), 100.0, 0.0, 1.0, Side::Buy, 0);
+        even_long.unrealised_pnl = 1.0;
+        even_long.swap = -1.0; // net 0 (break-even) -> kept
+        let mut lose_long = Position::new("lose_long".to_string(), 100.0, 0.0, 1.0, Side::Buy, 0);
+        lose_long.unrealised_pnl = 0.5;
+        lose_long.swap = -2.0; // net -1.5 -> closed
+        let mut short_win = Position::new("short_win".to_string(), 100.0, 0.0, 1.0, Side::Sell, 0);
+        short_win.unrealised_pnl = 10.0; // profitable short is still closed
+
+        env.positions.push(win_long);
+        env.positions.push(even_long);
+        env.positions.push(lose_long);
+        env.positions.push(short_win);
+
+        env.close_session_positions().unwrap();
+
+        let ids: Vec<&str> = env.positions.iter().map(|p| p.position_id.as_str()).collect();
+        assert_eq!(env.positions.len(), 2, "kept positions: {:?}", ids);
+        assert!(ids.contains(&"win_long"));
+        assert!(ids.contains(&"even_long"));
+        assert!(!ids.contains(&"lose_long"));
+        assert!(!ids.contains(&"short_win"));
+    }
+
+    #[tokio::test]
+    async fn test_session_liquidation_no_positions_is_noop() {
+        let mut env = Environment::new(
+            Mode::Training,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        );
+        env.close_session_positions().unwrap();
+        assert!(env.positions.is_empty());
+    }
 }
