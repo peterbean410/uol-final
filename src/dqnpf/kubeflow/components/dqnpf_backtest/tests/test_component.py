@@ -300,6 +300,23 @@ def test_sidecar_passes_swap_rates_when_set(monkeypatch: pytest.MonkeyPatch) -> 
     assert cmd[cmd.index("--swap-rate-short") + 1] == "0.25"
 
 
+def test_sidecar_passes_no_swap_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar("USDJPY", no_swap=True)
+    assert "--no-swap" in captured[0]
+
+
+def test_sidecar_no_swap_overrides_swap_rates(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _patch_sidecar_capture(monkeypatch)
+    _start_modelenv_sidecar(
+        "USDJPY", no_swap=True, swap_rate_long=-0.5, swap_rate_short=0.25
+    )
+    cmd = captured[0]
+    assert "--no-swap" in cmd
+    assert "--swap-rate-long" not in cmd
+    assert "--swap-rate-short" not in cmd
+
+
 def test_cli_swap_rates_default_to_zero() -> None:
     args = _build_parser().parse_args(
         [
@@ -326,6 +343,31 @@ def test_cli_swap_rates_parsed_as_float() -> None:
     )
     assert args.swap_rate_long == -0.5
     assert args.swap_rate_short == 0.25
+
+
+def test_cli_no_swap_defaults_true() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+        ]
+    )
+    assert args.no_swap is True
+
+
+def test_cli_no_swap_parsed_false() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--integration-config-yaml=cfg.yaml",
+            "--dqn-model-registry-name=dqn",
+            "--forecaster-model-registry-name=fc",
+            "--output-artifact-path=out.json",
+            "--no-swap=false",
+        ]
+    )
+    assert args.no_swap is False
 
 
 def test_export_trade_log_copies_contents(tmp_path: Path) -> None:

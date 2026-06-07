@@ -101,6 +101,7 @@ def _start_modelenv_sidecar(
     trade_log_path: str | None = None,
     swap_rate_long: float = 0.0,
     swap_rate_short: float = 0.0,
+    no_swap: bool = False,
 ) -> subprocess.Popen:
     """Launch modelenv as a subprocess and wait for the port to open.
 
@@ -109,11 +110,16 @@ def _start_modelenv_sidecar(
     for offline review. The trade log is a pure side-channel; it does not
     affect observations, rewards, or the backtest result.
 
+    ``no_swap`` (default False here, but **True** from ``run_dqnpf_backtest``)
+    starts modelenv with ``--no-swap``, forcing zero overnight financing and
+    overriding both modelenv's built-in default table and any swap-rate values;
+    the clean way to run a swap-free backtest.
+
     ``swap_rate_long`` / ``swap_rate_short`` are the daily overnight-financing
     rates (per unit volume) charged to BUY / SELL positions held across a day
-    boundary. They default to 0.0 (no financing, modelenv's default); when
-    non-zero they are passed through as ``--swap-rate-long`` / ``--swap-rate-short``
-    so the backtest's PnL and trade log reflect overnight swap costs.
+    boundary; they only apply when ``no_swap`` is False, and only a genuinely
+    non-zero rate is forwarded as ``--swap-rate-long`` / ``--swap-rate-short`` so
+    the backtest's PnL and trade log reflect overnight swap costs.
     """
     # Coerce to float before the truthiness guards below. A string like "0.0"
     # (e.g. a KFP str pipeline param) is truthy, which would forward
@@ -137,6 +143,7 @@ def _start_modelenv_sidecar(
                 "port": port,
                 "binary": _MODELENV_BINARY,
                 "trade_log_path": trade_log_path,
+                "no_swap": no_swap,
                 "swap_rate_long": swap_rate_long,
                 "swap_rate_short": swap_rate_short,
             }
@@ -150,10 +157,15 @@ def _start_modelenv_sidecar(
     cmd = [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol]
     if trade_log_path:
         cmd += ["--trade-log", trade_log_path]
-    if swap_rate_long:
-        cmd += ["--swap-rate-long", str(swap_rate_long)]
-    if swap_rate_short:
-        cmd += ["--swap-rate-short", str(swap_rate_short)]
+    if no_swap:
+        # Swap-free run: --no-swap forces 0/0 in modelenv and takes precedence
+        # over any swap-rate values, so don't bother forwarding the rates.
+        cmd += ["--no-swap"]
+    else:
+        if swap_rate_long:
+            cmd += ["--swap-rate-long", str(swap_rate_long)]
+        if swap_rate_short:
+            cmd += ["--swap-rate-short", str(swap_rate_short)]
     proc = subprocess.Popen(cmd)
     _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S, proc)
     logger.info(json.dumps({"event": "modelenv.ready", "port": port}))
@@ -375,6 +387,7 @@ def run_dqnpf_backtest(
     run_backtest_fn: Callable[[IntegrationConfig], BacktestComparison] | None = None,
     start_sidecar: bool = True,
     trade_log_output_path: str | None = None,
+    no_swap: bool = True,
     swap_rate_long: float = 0.0,
     swap_rate_short: float = 0.0,
 ) -> dict:
@@ -458,6 +471,7 @@ def run_dqnpf_backtest(
         _start_modelenv_sidecar(
             integration_cfg.symbol,
             trade_log_path=local_trade_log,
+            no_swap=no_swap,
             swap_rate_long=swap_rate_long,
             swap_rate_short=swap_rate_short,
         )

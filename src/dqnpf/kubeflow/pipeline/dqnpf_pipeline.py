@@ -56,6 +56,8 @@ def dqnpf_backtest(
     trade_log: Output[Dataset],
     # Strings (not floats) so they pass straight into the container args; the
     # __main__ CLI parses them with argparse type=float. "0.0" = no financing.
+    # no_swap defaults "true": backtests are swap-free unless explicitly enabled.
+    no_swap: str = "true",
     swap_rate_long: str = "0.0",
     swap_rate_short: str = "0.0",
 ):
@@ -83,6 +85,8 @@ def dqnpf_backtest(
             backtest_report.uri,
             "--trade-log-output-path",
             trade_log.uri,
+            "--no-swap",
+            no_swap,
             "--swap-rate-long",
             swap_rate_long,
             "--swap-rate-short",
@@ -103,6 +107,7 @@ def dqnpf_intraday_pipeline(
     ),
     dqn_model_registry_name: str = "deepqnetwork-usdjpy",
     forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1",
+    no_swap: str = "true",
     swap_rate_long: str = "0.0",
     swap_rate_short: str = "0.0",
 ):
@@ -116,6 +121,7 @@ def dqnpf_intraday_pipeline(
         integration_config_yaml=integration_config_yaml,
         dqn_model_registry_name=dqn_model_registry_name,
         forecaster_model_registry_name=forecaster_model_registry_name,
+        no_swap=no_swap,
         swap_rate_long=swap_rate_long,
         swap_rate_short=swap_rate_short,
     )

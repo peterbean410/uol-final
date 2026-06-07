@@ -22,12 +22,21 @@ inputs:
     type: String
     description: Model Registry entry name for the Forecaster parent checkpoint.
     default: probabilistic-transformer-usdjpy-h1
+  - name: no_swap
+    type: String
+    description: |
+      Run swap-free: start the modelenv sidecar with --no-swap, forcing zero
+      overnight financing and overriding both modelenv's built-in table and the
+      swap_rate_* values. Default "true" (swap off). Set to "false" to use the
+      built-in financing table (or the swap_rate_* overrides).
+    default: "true"
   - name: swap_rate_long
     type: String
     description: |
       Daily overnight-financing rate (per unit volume) charged to BUY positions
       held across a day boundary, passed to the modelenv sidecar. Default "0.0"
       (no financing). Set to your broker's USDJPY long swap to reflect carry.
+      Ignored when no_swap is "true".
     default: "0.0"
   - name: swap_rate_short
     type: String
@@ -70,6 +79,8 @@ implementation:
       - { outputPath: backtest_report }
       - --trade-log-output-path
       - { outputPath: trade_log }
+      - --no-swap
+      - { inputValue: no_swap }
       - --swap-rate-long
       - { inputValue: swap_rate_long }
       - --swap-rate-short

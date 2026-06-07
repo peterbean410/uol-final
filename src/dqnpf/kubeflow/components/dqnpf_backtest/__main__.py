@@ -15,6 +15,11 @@ from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.component im
 )
 
 
+def _str2bool(value: str) -> bool:
+    """Parse a KFP string param into a bool ('true/1/yes/on' → True)."""
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="dqnpf-intraday backtest component")
     parser.add_argument("--integration-config-yaml", required=True)
@@ -35,11 +40,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "Accepts a local path or a minio:// / s3:// URI.",
     )
     parser.add_argument(
+        "--no-swap",
+        type=_str2bool,
+        default=True,
+        help="Disable overnight swap in the modelenv sidecar (swap-free backtest) "
+        "via modelenv's --no-swap. Default true. Pass 'false' to use modelenv's "
+        "built-in financing table (or the --swap-rate-* overrides).",
+    )
+    parser.add_argument(
         "--swap-rate-long",
         type=float,
         default=0.0,
         help="Daily overnight-financing rate (per unit volume) charged to BUY "
-        "positions held across a day boundary. Default 0.0 (no financing).",
+        "positions held across a day boundary. Default 0.0 (no financing). "
+        "Ignored when --no-swap is true.",
     )
     parser.add_argument(
         "--swap-rate-short",
@@ -61,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         output_artifact_path=args.output_artifact_path,
         start_sidecar=not args.no_sidecar,
         trade_log_output_path=args.trade_log_output_path,
+        no_swap=args.no_swap,
         swap_rate_long=args.swap_rate_long,
         swap_rate_short=args.swap_rate_short,
     )
