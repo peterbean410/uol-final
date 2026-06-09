@@ -526,6 +526,7 @@ def dqn_pipeline_e2e(
     symbol: str = "USDJPY",
     step_size_seconds: int = 5,
     num_episodes_per_range: int = 3000,
+    repeats_per_date: int = 3,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -629,6 +630,7 @@ def dqn_pipeline_e2e(
         episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
+        repeats_per_date=repeats_per_date,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -713,6 +715,7 @@ def build_dqn_pipeline_e2e_config(
     symbol: str = "USDJPY",
     step_size_seconds: int = 5,
     num_episodes_per_range: int = 3000,
+    repeats_per_date: int = 3,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -770,7 +773,6 @@ def build_dqn_pipeline_e2e_config(
     config = config.override(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
-        num_episodes_per_range=num_episodes_per_range,
         batch_size=effective_batch_size,
         learning_rate=effective_lr,
         training_mode=training_mode,
@@ -781,13 +783,22 @@ def build_dqn_pipeline_e2e_config(
         katib_enabled=katib_enabled,
     )
 
-    # Apply training mode adjustments
+    # Reduced LR for finetune (mode-independent).
     if training_mode == "finetune":
-        config = config.override(
-            num_episodes_per_range=config.finetune_num_episodes_per_range,
-            learning_rate=config.finetune_learning_rate,
-        )
+        config = config.override(learning_rate=config.finetune_learning_rate)
         effective_lr = config.finetune_learning_rate
+
+    # The episode-count knob is mode-specific; set only the applicable one so
+    # validate() doesn't reject a cross-mode knob.
+    if date_start and date_end:
+        config = config.override(repeats_per_date=repeats_per_date)
+    else:
+        episodes = (
+            config.finetune_num_episodes_per_range
+            if training_mode == "finetune"
+            else num_episodes_per_range
+        )
+        config = config.override(num_episodes_per_range=episodes)
 
     # Validate
     errors = config.validate()
@@ -802,6 +813,7 @@ def build_dqn_pipeline_e2e_config(
         "symbol": symbol,
         "step_size_seconds": step_size_seconds,
         "num_episodes_per_range": num_episodes_per_range if training_mode != "finetune" else config.finetune_num_episodes_per_range,
+        "repeats_per_date": repeats_per_date,
         "batch_size": effective_batch_size,
         "learning_rate": effective_lr,
         "training_mode": training_mode,

@@ -167,6 +167,7 @@ def dqn_training(
     episode_end_ts: int,
     step_size_seconds: int,
     num_episodes_per_range: int,
+    repeats_per_date: int,
     batch_size: int,
     learning_rate: float,
     training_mode: str,
@@ -195,7 +196,8 @@ def dqn_training(
             "--episode-start-ts", str(episode_start_ts),
             "--episode-end-ts", str(episode_end_ts),
             "--step-size-seconds", str(step_size_seconds),
-            "--num-episodes", str(num_episodes_per_range),
+            "--num-episodes-per-range", str(num_episodes_per_range),
+            "--repeats-per-date", str(repeats_per_date),
             "--batch-size", str(batch_size),
             "--learning-rate", str(learning_rate),
             "--training-mode", training_mode,
@@ -419,6 +421,7 @@ def build_dqn_pipeline_config(
     symbol: str = "USDJPY",
     step_size_seconds: int = 5,
     num_episodes_per_range: int = 3000,
+    repeats_per_date: int = 3,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -458,7 +461,6 @@ def build_dqn_pipeline_config(
     config = config.override(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
-        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         date_start=date_start,
@@ -468,12 +470,21 @@ def build_dqn_pipeline_config(
         training_mode=training_mode,
     )
 
-    # Apply training mode adjustments
+    # Reduced LR for finetune (mode-independent).
     if training_mode == "finetune":
-        config = config.override(
-            num_episodes_per_range=config.finetune_num_episodes_per_range,
-            learning_rate=config.finetune_learning_rate,
+        config = config.override(learning_rate=config.finetune_learning_rate)
+
+    # The episode-count knob is mode-specific; set only the applicable one so
+    # validate() doesn't reject a cross-mode knob.
+    if date_start and date_end:
+        config = config.override(repeats_per_date=repeats_per_date)
+    else:
+        episodes = (
+            config.finetune_num_episodes_per_range
+            if training_mode == "finetune"
+            else num_episodes_per_range
         )
+        config = config.override(num_episodes_per_range=episodes)
 
     # Validate configuration
     errors = config.validate()
@@ -762,6 +773,7 @@ def dqn_pipeline(
     symbol: str = "USDJPY",
     step_size_seconds: int = 5,
     num_episodes_per_range: int = 3000,
+    repeats_per_date: int = 3,
     batch_size: int = 64,
     learning_rate: float = 1e-4,
     training_mode: str = "scratch",
@@ -835,6 +847,7 @@ def dqn_pipeline(
         episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
+        repeats_per_date=repeats_per_date,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,

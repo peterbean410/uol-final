@@ -507,7 +507,13 @@ def parse_args() -> argparse.Namespace:
         "--num-episodes-per-range",
         type=int,
         default=None,
-        help="Number of training episodes per date range override",
+        help="Fixed-window mode: number of training episodes override",
+    )
+    parser.add_argument(
+        "--repeats-per-date",
+        type=int,
+        default=None,
+        help="Date-range mode: times each date window is replayed",
     )
     parser.add_argument(
         "--learning-rate",
@@ -608,6 +614,9 @@ def main() -> None:
     eff_date_end = overrides.get("date_end", pipeline_config.date_end)
     if args.num_episodes_per_range is not None and not (eff_date_start and eff_date_end):
         overrides["num_episodes_per_range"] = args.num_episodes_per_range
+    # Mirror image: repeats_per_date applies only in date-range mode.
+    if args.repeats_per_date is not None and (eff_date_start and eff_date_end):
+        overrides["repeats_per_date"] = args.repeats_per_date
     if args.learning_rate is not None:
         overrides["learning_rate"] = args.learning_rate
     if args.batch_size is not None:
