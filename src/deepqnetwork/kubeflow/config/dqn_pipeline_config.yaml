@@ -34,7 +34,8 @@ grad_clip_norm: 10.0
 loss_function: "huber"       # huber, mse
 
 # Training schedule
-num_episodes_per_range: 3000
+num_episodes_per_range: 3000    # fixed-window mode only; ignored in date-range mode
+repeats_per_date: 3             # date-range mode: times each date window is replayed
 max_steps_per_episode: 30000
 checkpoint_interval: 50
 

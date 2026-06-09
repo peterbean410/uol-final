@@ -65,6 +65,7 @@ class DQNPipelineConfig:
 
     # Training schedule
     num_episodes_per_range: int = 3000
+    repeats_per_date: int = 3
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
 
@@ -240,6 +241,8 @@ class DQNPipelineConfig:
         # Training
         if self.num_episodes_per_range <= 0:
             errors.append(f"num_episodes_per_range must be positive: {self.num_episodes_per_range}")
+        if self.repeats_per_date <= 0:
+            errors.append(f"repeats_per_date must be positive: {self.repeats_per_date}")
         if self.max_steps_per_episode <= 0:
             errors.append(
                 f"max_steps_per_episode must be positive: {self.max_steps_per_episode}"

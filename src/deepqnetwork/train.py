@@ -157,9 +157,22 @@ def train(config: DQNConfig) -> None:
         config.target_update_freq,
     )
 
-    repeats_per_date = 3 if mode == "date-range" else 1
+    repeats_per_date = config.repeats_per_date if mode == "date-range" else 1
     overall_episode = start_episode
     total_episodes = len(episode_windows) * repeats_per_date
+
+    if mode == "date-range":
+        # Episode count is driven by the date range and repeats_per_date, not
+        # num_episodes_per_range (which only governs fixed-window mode). Log the
+        # actual total so the ignored knob doesn't mislead.
+        logger.info(
+            "date-range mode: %d date windows x %d repeats_per_date = %d episodes "
+            "(num_episodes_per_range=%d is ignored in this mode)",
+            len(episode_windows),
+            repeats_per_date,
+            total_episodes,
+            config.num_episodes_per_range,
+        )
 
     # Anneal epsilon over the whole run, not a fixed prefix. When
     # epsilon_decay_steps is left unset (<= 0), derive it from the total step

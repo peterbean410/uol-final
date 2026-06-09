@@ -57,6 +57,7 @@ class DQNConfig:
 
     # Training
     num_episodes_per_range: int = 3000
+    repeats_per_date: int = 3       # date-range mode: times each date window is replayed (fixed mode ignores this)
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
     checkpoint_dir: str = "deepqnetwork/checkpoints/"
@@ -144,6 +145,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dueling", action="store_true", default=None)
     parser.add_argument("--use-double", action="store_true", default=None, dest="use_double")
     parser.add_argument("--num-episodes-per-range", dest="num_episodes_per_range", type=int, default=None)
+    parser.add_argument("--repeats-per-date", dest="repeats_per_date", type=int, default=None)
     parser.add_argument("--max-steps-per-episode", type=int, default=None)
     parser.add_argument("--checkpoint-interval", type=int, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default=None)
@@ -185,6 +187,7 @@ _CLI_TO_CONFIG = {
     "dropout": "dropout",
     "dueling": "dueling",
     "num_episodes_per_range": "num_episodes_per_range",
+    "repeats_per_date": "repeats_per_date",
     "max_steps_per_episode": "max_steps_per_episode",
     "checkpoint_interval": "checkpoint_interval",
     "checkpoint_dir": "checkpoint_dir",

@@ -343,6 +343,7 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         loss_function=pipeline_config.loss_function,
         # Training
         num_episodes_per_range=effective_episodes,
+        repeats_per_date=pipeline_config.repeats_per_date,
         max_steps_per_episode=pipeline_config.max_steps_per_episode,
         checkpoint_interval=pipeline_config.checkpoint_interval,
         checkpoint_dir="/tmp/dqn_checkpoints",
