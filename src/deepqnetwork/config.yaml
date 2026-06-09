@@ -10,8 +10,8 @@ step_size_seconds: 5
 # Agent
 gamma: 0.99
 epsilon_start: 1.0
-epsilon_end: 0.01
-epsilon_decay_steps: 50000
+epsilon_end: 0.05               # sustained exploration floor (~5% random actions throughout)
+epsilon_decay_steps: 0          # 0 = auto: anneal over the full step budget (total_episodes x steps/episode)
 batch_size: 64
 replay_buffer_size: 300000
 target_update_freq: 1000

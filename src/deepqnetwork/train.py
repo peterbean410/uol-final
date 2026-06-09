@@ -161,6 +161,31 @@ def train(config: DQNConfig) -> None:
     overall_episode = start_episode
     total_episodes = len(episode_windows) * repeats_per_date
 
+    # Anneal epsilon over the whole run, not a fixed prefix. When
+    # epsilon_decay_steps is left unset (<= 0), derive it from the total step
+    # budget so exploration tapers across roughly all episodes instead of
+    # collapsing to epsilon_end in the first few. Each episode terminates at its
+    # session end, so estimate per-episode steps from the window length (capped
+    # by max_steps_per_episode); fall back to the cap for fixed-window mode.
+    if config.epsilon_decay_steps <= 0:
+        budget = 0
+        for ep_start, ep_end in episode_windows:
+            window_steps = (ep_end - ep_start) // config.step_size_seconds
+            per_episode = (
+                config.max_steps_per_episode
+                if window_steps <= 0
+                else min(config.max_steps_per_episode, window_steps)
+            )
+            budget += per_episode
+        config.epsilon_decay_steps = max(1, budget * repeats_per_date)
+        logger.info(
+            "epsilon_decay_steps auto-derived from step budget: %d "
+            "(total_episodes=%d, ~%d steps/episode)",
+            config.epsilon_decay_steps,
+            total_episodes,
+            config.epsilon_decay_steps // max(1, total_episodes),
+        )
+
     for date_idx, (ep_start, ep_end) in enumerate(episode_windows):
         for repeat in range(repeats_per_date):
             if overall_episode < start_episode:
