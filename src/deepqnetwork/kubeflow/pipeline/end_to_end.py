@@ -606,6 +606,7 @@ def dqn_pipeline_e2e(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
+        repeats_per_date=repeats_per_date,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,

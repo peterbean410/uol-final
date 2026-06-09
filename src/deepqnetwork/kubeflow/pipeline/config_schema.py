@@ -202,9 +202,11 @@ class DQNPipelineConfig:
             errors.append(
                 f"epsilon_end ({self.epsilon_end}) must be <= epsilon_start ({self.epsilon_start})"
             )
-        if self.epsilon_decay_steps <= 0:
+        # 0 is the documented "auto" sentinel (train() derives the decay horizon
+        # from the total step budget); only negative values are invalid.
+        if self.epsilon_decay_steps < 0:
             errors.append(
-                f"epsilon_decay_steps must be positive: {self.epsilon_decay_steps}"
+                f"epsilon_decay_steps must be >= 0 (0 = auto): {self.epsilon_decay_steps}"
             )
         if self.batch_size <= 0:
             errors.append(f"batch_size must be positive: {self.batch_size}")

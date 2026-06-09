@@ -253,11 +253,17 @@ def dqn_backtest(
 # ---------------------------------------------------------------------------
 
 
-@dsl.component(base_image="python:3.11-slim", packages_to_install=["pyyaml"])
+# Runs on the training image (which bundles the deepqnetwork package) so it can
+# import the real DQNPipelineConfig instead of carrying a drift-prone inline copy.
+@dsl.component(
+    base_image=f"{ECR_BASE}/dqn/training:latest",
+    packages_to_install=["pyyaml"],
+)
 def resolve_dqn_config(
     symbol: str,
     step_size_seconds: int,
     num_episodes_per_range: int,
+    repeats_per_date: int,
     batch_size: int,
     learning_rate: float,
     training_mode: str,
@@ -290,55 +296,26 @@ def resolve_dqn_config(
         ValueError: If configuration validation fails.
     """
     import json
+    import sys
     from collections import namedtuple
-    from dataclasses import asdict, dataclass, field
-    from typing import Literal
+    from dataclasses import asdict
 
-    @dataclass
-    class _DQNConfig:
-        """Inline DQNPipelineConfig for the lightweight component."""
+    # The training base image bundles the repo at /app; ensure it's importable
+    # regardless of the lightweight component's runtime working directory.
+    if "/app" not in sys.path:
+        sys.path.insert(0, "/app")
+    from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 
-        grpc_address: str = "localhost:50051"
-        symbol: str = "USDJPY"
-        episode_start_ts: int = 0
-        episode_end_ts: int = 0
-        step_size_seconds: int = 5
-        gamma: float = 0.99
-        epsilon_start: float = 1.0
-        epsilon_end: float = 0.01
-        epsilon_decay_steps: int = 50_000
-        batch_size: int = 64
-        replay_buffer_size: int = 300_000
-        target_update_freq: int = 1000
-        train_freq: int = 4
-        tau: float = 1.0
-        hidden_dims: list = field(default_factory=lambda: [256, 256, 128])
-        activation: str = "relu"
-        layer_norm: bool = True
-        dropout: float = 0.0
-        dueling: bool = False
-        learning_rate: float = 1e-4
-        grad_clip_norm: float = 10.0
-        weight_decay: float = 0.0
-        loss_function: str = "huber"
-        num_episodes_per_range: int = 3000
-        max_steps_per_episode: int = 30_000
-        checkpoint_interval: int = 50
-        gpu_enabled: bool = True
-        num_workers: int = 1
-        max_wall_time_hours: int = 8
-        training_mode: str = "scratch"
-        finetune_learning_rate: float = 1e-5
-        finetune_num_episodes_per_range: int = 500
-        date_start: str = ""
-        date_end: str = ""
-        hour_of_day_start: int = 0
-        hour_of_day_end: int = 23
-
-    cfg = _DQNConfig(
+    # Load the SAME baked config the training component reads
+    # (deepqnetwork/kubeflow/components/dqn_training/component.py --config-path
+    # default), so config_json reflects the real training values (e.g. the
+    # epsilon schedule) rather than bare dataclass defaults. Single source of
+    # truth; no inline duplicate.
+    config = DQNPipelineConfig.from_yaml(
+        "/app/deepqnetwork/kubeflow/config/dqn_pipeline_config.yaml"
+    ).override(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
-        num_episodes_per_range=num_episodes_per_range,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
@@ -348,43 +325,38 @@ def resolve_dqn_config(
         hour_of_day_end=hour_of_day_end,
     )
 
-    # Apply training mode adjustments
+    # Reduced LR for finetune (mode-independent).
     if training_mode == "finetune":
-        effective_lr = cfg.finetune_learning_rate
-        effective_episodes = cfg.finetune_num_episodes_per_range
+        config = config.override(learning_rate=config.finetune_learning_rate)
+
+    # The episode-count knob is mode-specific; set only the applicable one so
+    # validate() doesn't reject a cross-mode knob.
+    if date_start and date_end:
+        config = config.override(repeats_per_date=repeats_per_date)
     else:
-        effective_lr = cfg.learning_rate
-        effective_episodes = cfg.num_episodes_per_range
+        episodes = (
+            config.finetune_num_episodes_per_range
+            if training_mode == "finetune"
+            else num_episodes_per_range
+        )
+        config = config.override(num_episodes_per_range=episodes)
 
-    # Validate
-    errors: list = []
-    if cfg.symbol not in ("USDJPY", "AUDJPY"):
-        errors.append(f"Invalid symbol: {cfg.symbol}")
-    if cfg.step_size_seconds <= 0:
-        errors.append(
-            f"step_size_seconds must be positive: {cfg.step_size_seconds}"
-        )
-    if not (1e-6 <= cfg.learning_rate <= 0.01):
-        errors.append(
-            f"learning_rate out of range [1e-6, 0.01]: {cfg.learning_rate}"
-        )
-    if cfg.batch_size <= 0:
-        errors.append(f"batch_size must be positive: {cfg.batch_size}")
-    if cfg.num_episodes_per_range <= 0:
-        errors.append(f"num_episodes_per_range must be positive: {cfg.num_episodes_per_range}")
-    if training_mode not in ("scratch", "finetune"):
-        errors.append(f"Invalid training_mode: {training_mode}")
+    errors = config.validate()
     if training_mode == "finetune" and not checkpoint:
-        errors.append(
-            "Finetune mode requires a checkpoint path"
-        )
-
+        errors.append("Finetune mode requires a checkpoint path")
     if errors:
         raise ValueError(
             f"DQN pipeline configuration validation failed: {'; '.join(errors)}"
         )
 
-    config_dict = asdict(cfg)
+    effective_lr = config.learning_rate
+    effective_episodes = (
+        config.num_episodes_per_range
+        if config.num_episodes_per_range is not None
+        else 0
+    )
+
+    config_dict = asdict(config)
     config_dict["effective_learning_rate"] = effective_lr
     config_dict["effective_num_episodes_per_range"] = effective_episodes
     config_json = json.dumps(config_dict)
@@ -822,6 +794,7 @@ def dqn_pipeline(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
         num_episodes_per_range=num_episodes_per_range,
+        repeats_per_date=repeats_per_date,
         batch_size=batch_size,
         learning_rate=learning_rate,
         training_mode=training_mode,
