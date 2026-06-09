@@ -56,8 +56,11 @@ class DQNConfig:
     use_double: bool = True         # Double DQN: use online net for action selection, target for eval
 
     # Training
-    num_episodes_per_range: int = 3000
-    repeats_per_date: int = 3       # date-range mode: times each date window is replayed (fixed mode ignores this)
+    # Episode-count knobs are mode-specific and mutually exclusive; both default
+    # to None so train() can hard-fail if the wrong one is set for the active
+    # mode (and apply the mode's effective default when its knob is unset).
+    num_episodes_per_range: int | None = None  # fixed-window mode only (effective default 3000)
+    repeats_per_date: int | None = None        # date-range mode only (effective default 3)
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
     checkpoint_dir: str = "deepqnetwork/checkpoints/"

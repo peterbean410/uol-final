@@ -32,8 +32,11 @@ grad_clip_norm: 10.0
 loss_function: "huber"
 
 # Training
-num_episodes_per_range: 3000    # fixed-window mode only; ignored in date-range mode
-repeats_per_date: 3             # date-range mode: times each date window is replayed
+# Episode-count knobs are mode-specific and mutually exclusive, set at most the
+# one matching your mode (setting the other is rejected). Left unset = effective
+# defaults (3000 fixed-window / 3 date-range).
+# num_episodes_per_range: 3000  # fixed-window mode only
+# repeats_per_date: 3           # date-range mode only (replays per date)
 max_steps_per_episode: 30000
 checkpoint_interval: 50
 checkpoint_dir: "deepqnetwork/checkpoints/"

@@ -303,10 +303,24 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
 
     if training_mode == "finetune":
         effective_lr = pipeline_config.finetune_learning_rate
-        effective_episodes = pipeline_config.finetune_num_episodes_per_range
     else:
         effective_lr = pipeline_config.learning_rate
-        effective_episodes = pipeline_config.num_episodes_per_range
+
+    # Episode-count knobs are mode-specific; route only the one that applies so
+    # the resulting DQNConfig never trips train()'s mis-set guard. The compiled
+    # KFP graph always passes --num-episodes, so in date-range mode (where
+    # repeats_per_date governs) we deliberately drop it here. num_episodes_per_range
+    # (including the finetune override) applies to fixed-window mode only.
+    if pipeline_config.date_start and pipeline_config.date_end:
+        eff_num_episodes = None
+        eff_repeats = pipeline_config.repeats_per_date
+    else:
+        eff_num_episodes = (
+            pipeline_config.finetune_num_episodes_per_range
+            if training_mode == "finetune"
+            else pipeline_config.num_episodes_per_range
+        )
+        eff_repeats = None
 
     config = DQNConfig(
         # Environment
@@ -342,8 +356,8 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         grad_clip_norm=pipeline_config.grad_clip_norm,
         loss_function=pipeline_config.loss_function,
         # Training
-        num_episodes_per_range=effective_episodes,
-        repeats_per_date=pipeline_config.repeats_per_date,
+        num_episodes_per_range=eff_num_episodes,
+        repeats_per_date=eff_repeats,
         max_steps_per_episode=pipeline_config.max_steps_per_episode,
         checkpoint_interval=pipeline_config.checkpoint_interval,
         checkpoint_dir="/tmp/dqn_checkpoints",
@@ -587,7 +601,12 @@ def main() -> None:
         overrides["hour_of_day_start"] = args.hour_of_day_start
     if args.hour_of_day_end is not None:
         overrides["hour_of_day_end"] = args.hour_of_day_end
-    if args.num_episodes_per_range is not None:
+    # The compiled KFP graph always passes --num-episodes, but it only applies to
+    # fixed-window mode. In date-range mode repeats_per_date governs, so dropping
+    # it here keeps the always-present arg from tripping the mode-mismatch guard.
+    eff_date_start = overrides.get("date_start", pipeline_config.date_start)
+    eff_date_end = overrides.get("date_end", pipeline_config.date_end)
+    if args.num_episodes_per_range is not None and not (eff_date_start and eff_date_end):
         overrides["num_episodes_per_range"] = args.num_episodes_per_range
     if args.learning_rate is not None:
         overrides["learning_rate"] = args.learning_rate

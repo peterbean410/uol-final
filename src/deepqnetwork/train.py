@@ -74,6 +74,11 @@ def _restore_checkpoint(
 # preserves the historical name used at the call site and in the spec chain.
 _iter_date_episodes = iter_date_episodes
 
+# Effective defaults applied when a mode's episode-count knob is left unset
+# (None). Each mode reads only its own knob; see the mis-set guards in train().
+DEFAULT_NUM_EPISODES_PER_RANGE = 3000  # fixed-window mode
+DEFAULT_REPEATS_PER_DATE = 3           # date-range mode
+
 
 def train(config: DQNConfig) -> None:
     """Run the DQN training loop.
@@ -133,19 +138,36 @@ def train(config: DQNConfig) -> None:
     # Resolve episode windows: date-range mode takes precedence over fixed
     # episode_start_ts/end_ts.
     if config.date_start and config.date_end:
+        mode = "date-range"
+        # repeats_per_date governs episode count here; num_episodes_per_range is
+        # a fixed-window-only knob. Fail loudly rather than silently ignore it.
+        if config.num_episodes_per_range is not None:
+            raise ValueError(
+                "num_episodes_per_range is set but has no effect in date-range "
+                "mode; use repeats_per_date to control replays per date."
+            )
         episode_windows = _iter_date_episodes(
             config.date_start,
             config.date_end,
             config.hour_of_day_start,
             config.hour_of_day_end,
         )
-        mode = "date-range"
     else:
         # Legacy fixed-timestamp mode, same window for every episode.
+        mode = "fixed"
+        if config.repeats_per_date is not None:
+            raise ValueError(
+                "repeats_per_date is set but has no effect in fixed-window mode; "
+                "use num_episodes_per_range to control the episode count."
+            )
+        num_episodes = (
+            config.num_episodes_per_range
+            if config.num_episodes_per_range is not None
+            else DEFAULT_NUM_EPISODES_PER_RANGE
+        )
         episode_windows = [
             (config.episode_start_ts, config.episode_end_ts)
-        ] * config.num_episodes_per_range
-        mode = "fixed"
+        ] * num_episodes
 
     logger.info(
         "Starting training: episodes=%d (mode=%s), max_steps=%d, "
@@ -157,21 +179,23 @@ def train(config: DQNConfig) -> None:
         config.target_update_freq,
     )
 
-    repeats_per_date = config.repeats_per_date if mode == "date-range" else 1
+    if mode == "date-range":
+        repeats_per_date = (
+            config.repeats_per_date
+            if config.repeats_per_date is not None
+            else DEFAULT_REPEATS_PER_DATE
+        )
+    else:
+        repeats_per_date = 1
     overall_episode = start_episode
     total_episodes = len(episode_windows) * repeats_per_date
 
     if mode == "date-range":
-        # Episode count is driven by the date range and repeats_per_date, not
-        # num_episodes_per_range (which only governs fixed-window mode). Log the
-        # actual total so the ignored knob doesn't mislead.
         logger.info(
-            "date-range mode: %d date windows x %d repeats_per_date = %d episodes "
-            "(num_episodes_per_range=%d is ignored in this mode)",
+            "date-range mode: %d date windows x %d repeats_per_date = %d episodes",
             len(episode_windows),
             repeats_per_date,
             total_episodes,
-            config.num_episodes_per_range,
         )
 
     # Anneal epsilon over the whole run, not a fixed prefix. When

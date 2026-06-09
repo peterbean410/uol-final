@@ -63,9 +63,10 @@ class DQNPipelineConfig:
     grad_clip_norm: float = 10.0
     loss_function: str = "huber"  # huber, mse
 
-    # Training schedule
-    num_episodes_per_range: int = 3000
-    repeats_per_date: int = 3
+    # Training schedule, episode-count knobs are mode-specific and mutually
+    # exclusive; both default to None (effective defaults: 3000 fixed / 3 date-range).
+    num_episodes_per_range: int | None = None  # fixed-window mode only
+    repeats_per_date: int | None = None        # date-range mode only
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
 
@@ -239,9 +240,22 @@ class DQNPipelineConfig:
             errors.append(f"Invalid loss_function: {self.loss_function}")
 
         # Training
-        if self.num_episodes_per_range <= 0:
+        # Episode-count knobs are mode-specific; reject the one that has no
+        # effect in the active mode rather than silently ignoring it.
+        is_date_range = bool(self.date_start and self.date_end)
+        if is_date_range and self.num_episodes_per_range is not None:
+            errors.append(
+                "num_episodes_per_range has no effect in date-range mode; "
+                "set repeats_per_date instead"
+            )
+        if not is_date_range and self.repeats_per_date is not None:
+            errors.append(
+                "repeats_per_date has no effect in fixed-window mode; "
+                "set num_episodes_per_range instead"
+            )
+        if self.num_episodes_per_range is not None and self.num_episodes_per_range <= 0:
             errors.append(f"num_episodes_per_range must be positive: {self.num_episodes_per_range}")
-        if self.repeats_per_date <= 0:
+        if self.repeats_per_date is not None and self.repeats_per_date <= 0:
             errors.append(f"repeats_per_date must be positive: {self.repeats_per_date}")
         if self.max_steps_per_episode <= 0:
             errors.append(
@@ -346,13 +360,19 @@ class DQNPipelineConfig:
         if self.dueling:
             args.append("--dueling")
 
-        # Training
-        effective_episodes = (
-            self.finetune_num_episodes_per_range
-            if self.training_mode == "finetune"
-            else self.num_episodes_per_range
-        )
-        args.extend(["--num-episodes-per-range", str(effective_episodes)])
+        # Training, emit only the knob that applies to the active mode so the
+        # downstream DQNConfig never trips train()'s mis-set guard.
+        if self.date_start and self.date_end:
+            if self.repeats_per_date is not None:
+                args.extend(["--repeats-per-date", str(self.repeats_per_date)])
+        else:
+            effective_episodes = (
+                self.finetune_num_episodes_per_range
+                if self.training_mode == "finetune"
+                else self.num_episodes_per_range
+            )
+            if effective_episodes is not None:
+                args.extend(["--num-episodes-per-range", str(effective_episodes)])
         args.extend(["--max-steps-per-episode", str(self.max_steps_per_episode)])
         args.extend(["--checkpoint-interval", str(self.checkpoint_interval)])
 
