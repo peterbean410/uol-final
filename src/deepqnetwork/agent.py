@@ -221,7 +221,10 @@ class DQNAgent:
         Decreases epsilon by (epsilon_start - epsilon_end) / epsilon_decay_steps
         per call, stopping at epsilon_end.
         """
-        if self.epsilon > self.config.epsilon_end:
+        # epsilon_decay_steps <= 0 is the unresolved "auto" sentinel (train()
+        # normally derives a positive horizon from the step budget before the
+        # loop runs). Treat it as no decay rather than dividing by zero.
+        if self.config.epsilon_decay_steps > 0 and self.epsilon > self.config.epsilon_end:
             decay = (
                 (self.config.epsilon_start - self.config.epsilon_end)
                 / self.config.epsilon_decay_steps

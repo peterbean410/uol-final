@@ -42,8 +42,8 @@ class DQNPipelineConfig:
     # Agent hyperparameters
     gamma: float = 0.99
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.01
-    epsilon_decay_steps: int = 50_000
+    epsilon_end: float = 0.05
+    epsilon_decay_steps: int = 0  # 0 = auto: train() derives the horizon from the total step budget
     batch_size: int = 64
     replay_buffer_size: int = 300_000
     target_update_freq: int = 1000
