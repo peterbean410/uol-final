@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from tradingmodel.intraday.dqnpf.live_executor import (
     LiveExecutorConfig,
+    decode_infer_response,
     parse_screened_action,
     run_live_executor,
 )
@@ -167,19 +169,74 @@ def test_parse_screened_action_rejects_actionless_payloads():
         parse_screened_action({"detail": "error"})
 
 
+def test_config_defaults_use_grpc_and_60s_interval():
+    config = LiveExecutorConfig()
+
+    assert config.predictor_grpc_address == "localhost:8081"
+    assert config.model_name == "dqnpf-intraday"
+    assert config.step_interval_seconds == 60.0
+
+
 def test_config_from_env(monkeypatch):
     monkeypatch.setenv("DQNPF_SYMBOL", "EURUSD")
-    monkeypatch.setenv("DQNPF_PREDICTOR_URL", "http://pred:8080/v1/models/x:predict")
+    monkeypatch.setenv("DQNPF_PREDICTOR_GRPC_ADDRESS", "predictor:8081")
+    monkeypatch.setenv("DQNPF_MODEL_NAME", "dqnpf-eurusd")
     monkeypatch.setenv("GRPC_ADDRESS", "modelenv:50051")
-    monkeypatch.setenv("DQNPF_STEP_INTERVAL_SECONDS", "60")
+    monkeypatch.setenv("DQNPF_STEP_INTERVAL_SECONDS", "120")
     monkeypatch.setenv("DQNPF_DRY_RUN", "true")
     monkeypatch.setenv("DQNPF_MAX_CONSECUTIVE_ERRORS", "5")
 
     config = LiveExecutorConfig.from_env()
 
     assert config.symbol == "EURUSD"
-    assert config.predictor_url == "http://pred:8080/v1/models/x:predict"
+    assert config.predictor_grpc_address == "predictor:8081"
+    assert config.model_name == "dqnpf-eurusd"
     assert config.grpc_address == "modelenv:50051"
-    assert config.step_interval_seconds == 60.0
+    assert config.step_interval_seconds == 120.0
     assert config.dry_run is True
     assert config.max_consecutive_errors == 5
+
+
+def _output_tensor(name: str, **contents) -> SimpleNamespace:
+    base: dict = dict(
+        int64_contents=[],
+        fp64_contents=[],
+        bool_contents=[],
+        bytes_contents=[],
+        fp32_contents=[],
+        int_contents=[],
+        uint_contents=[],
+        uint64_contents=[],
+    )
+    base.update(contents)
+    return SimpleNamespace(name=name, contents=SimpleNamespace(**base))
+
+
+def test_decode_infer_response_reads_typed_contents():
+    response = SimpleNamespace(
+        outputs=[
+            _output_tensor("action", int64_contents=[3]),
+            _output_tensor("action_name", bytes_contents=[b"SELL_1"]),
+            _output_tensor("screened", bool_contents=[False]),
+            _output_tensor("reason", bytes_contents=[b"pass"]),
+            _output_tensor("sigma", fp64_contents=[0.25]),
+        ]
+    )
+
+    decoded = decode_infer_response(response)
+
+    assert decoded == {
+        "action": 3,
+        "action_name": "SELL_1",
+        "screened": False,
+        "reason": "pass",
+        "sigma": 0.25,
+    }
+
+
+def test_decoded_response_feeds_parse_screened_action():
+    response = SimpleNamespace(
+        outputs=[_output_tensor("action", int64_contents=[1])]
+    )
+
+    assert parse_screened_action(decode_infer_response(response))["action"] == 1

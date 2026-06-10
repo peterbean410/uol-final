@@ -7,10 +7,11 @@ RPC. This executor closes the loop:
 
 1. ``Reset()`` once at startup, modelenv syncs the broker book, builds the
    initial observation, and seeds the session-liquidation wall-clock anchor.
-2. Every ``step_interval_seconds``: POST the symbol to the predictor's REST
-   endpoint (the predictor pulls fresh features from the same sidecar via
-   ``ReferenceData``, so the policy, hot-reload, and screening stay in one
-   place), then submit the screened action via ``Step()``.
+2. Every ``step_interval_seconds``: send the symbol to the predictor over the
+   KServe v2 (Open Inference Protocol) gRPC endpoint (the predictor pulls
+   fresh features from the same sidecar via ``ReferenceData``, so the policy,
+   hot-reload, and screening stay in one place), then submit the screened
+   action via ``Step()``.
 
 HOLD actions are still stepped: modelenv handles HOLD locally (no broker
 order) but each ``Step()`` also re-syncs/reconciles positions and runs the
@@ -25,12 +26,10 @@ double-fill a retried submission.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -45,11 +44,14 @@ class LiveExecutorConfig:
 
     Attributes:
         symbol: Trading symbol (e.g. "USDJPY").
-        predictor_url: Full URL of the predictor's predict endpoint.
+        predictor_grpc_address: Predictor's KServe v2 gRPC endpoint
+            (ModelServer serves the Open Inference Protocol on 8081 alongside
+            REST on 8080).
+        model_name: KServe model name carried in each ModelInferRequest.
         grpc_address: modelenv live sidecar gRPC address.
         step_interval_seconds: Wall-clock pause between steps. The DQN was
             trained on a fixed step size; keep this aligned with it.
-        request_timeout: Timeout (seconds) for each predictor HTTP call.
+        request_timeout: Timeout (seconds) for each predictor gRPC call.
         dry_run: When True, log the screened action but never call Step();
             no broker orders and no session liquidation are triggered.
         max_consecutive_errors: Abort the loop (non-zero exit) after this many
@@ -58,9 +60,10 @@ class LiveExecutorConfig:
     """
 
     symbol: str = "USDJPY"
-    predictor_url: str = "http://localhost:8080/v1/models/dqnpf-intraday:predict"
+    predictor_grpc_address: str = "localhost:8081"
+    model_name: str = "dqnpf-intraday"
     grpc_address: str = "localhost:50051"
-    step_interval_seconds: float = 300.0
+    step_interval_seconds: float = 60.0
     request_timeout: float = 30.0
     dry_run: bool = False
     max_consecutive_errors: int = 10
@@ -71,9 +74,10 @@ class LiveExecutorConfig:
         defaults = cls()
         return cls(
             symbol=os.environ.get("DQNPF_SYMBOL", defaults.symbol),
-            predictor_url=os.environ.get(
-                "DQNPF_PREDICTOR_URL", defaults.predictor_url
+            predictor_grpc_address=os.environ.get(
+                "DQNPF_PREDICTOR_GRPC_ADDRESS", defaults.predictor_grpc_address
             ),
+            model_name=os.environ.get("DQNPF_MODEL_NAME", defaults.model_name),
             grpc_address=os.environ.get(
                 "GRPC_ADDRESS", defaults.grpc_address
             ),
@@ -99,14 +103,74 @@ class LiveExecutorConfig:
         )
 
 
-def _post_predict(url: str, symbol: str, timeout: float) -> dict[str, Any]:
-    """POST the sidecar-pull payload form to the predictor and decode JSON."""
-    body = json.dumps({"instances": [{"symbol": symbol}]}).encode("utf-8")
-    request = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+def decode_infer_response(response: Any) -> dict[str, Any]:
+    """Decode a KServe v2 ``ModelInferResponse`` into a flat dict.
+
+    Each output tensor contributes its first element under its tensor name,
+    read from whichever typed ``contents`` field is populated; BYTES values
+    are utf-8 decoded. Duck-typed so tests can pass lightweight fakes.
+    """
+    result: dict[str, Any] = {}
+    for output in response.outputs:
+        contents = output.contents
+        for field in (
+            "int64_contents",
+            "fp64_contents",
+            "bool_contents",
+            "bytes_contents",
+            "fp32_contents",
+            "int_contents",
+            "uint_contents",
+            "uint64_contents",
+        ):
+            values = getattr(contents, field, None)
+            if values:
+                value = values[0]
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8")
+                result[output.name] = value
+                break
+    return result
+
+
+class GrpcPredictorClient:
+    """KServe v2 (Open Inference Protocol) gRPC client for the predictor.
+
+    Sends a ``ModelInferRequest`` with a single BYTES input named ``symbol``
+    and decodes the ``ModelInferResponse`` output tensors back into the
+    ScreenedAction dict the executor consumes. The channel and stub are
+    created once and reused across steps. kserve is imported lazily: it is
+    only present in the serving image, and tests inject ``predict_fn``.
+    """
+
+    def __init__(self, address: str, model_name: str, timeout: float) -> None:
+        import grpc
+        from kserve.protocol.grpc import grpc_predict_v2_pb2 as pb2
+        from kserve.protocol.grpc import grpc_predict_v2_pb2_grpc as pb2_grpc
+
+        self._pb2 = pb2
+        self._model_name = model_name
+        self._timeout = timeout
+        self._channel = grpc.insecure_channel(address)
+        self._stub = pb2_grpc.GRPCInferenceServiceStub(self._channel)
+
+    def __call__(self, symbol: str) -> dict[str, Any]:
+        pb2 = self._pb2
+        request = pb2.ModelInferRequest(
+            model_name=self._model_name,
+            inputs=[
+                pb2.ModelInferRequest.InferInputTensor(
+                    name="symbol",
+                    datatype="BYTES",
+                    shape=[1],
+                    contents=pb2.InferTensorContents(
+                        bytes_contents=[symbol.encode("utf-8")]
+                    ),
+                )
+            ],
+        )
+        response = self._stub.ModelInfer(request, timeout=self._timeout)
+        return decode_infer_response(response)
 
 
 def parse_screened_action(response: dict[str, Any]) -> dict[str, Any]:
@@ -143,8 +207,9 @@ def run_live_executor(
         config: Loop configuration.
         env_client: modelenv gRPC client exposing ``reset``/``step``; built
             from ``config.grpc_address`` when omitted. Injectable for tests.
-        predict_fn: ``symbol -> predictor response`` callable; defaults to an
-            HTTP POST against ``config.predictor_url``. Injectable for tests.
+        predict_fn: ``symbol -> predictor response`` callable; defaults to a
+            ``GrpcPredictorClient`` against ``config.predictor_grpc_address``.
+            Injectable for tests.
         stop_event: Loop exits cleanly when set (SIGTERM/SIGINT handling);
             also interrupts the inter-step pause immediately.
         max_steps: Stop after this many iterations (None = run until stopped).
@@ -161,8 +226,10 @@ def run_live_executor(
 
         env_client = EnvironmentClient(address=config.grpc_address)
     if predict_fn is None:
-        predict_fn = lambda symbol: _post_predict(  # noqa: E731
-            config.predictor_url, symbol, config.request_timeout
+        predict_fn = GrpcPredictorClient(
+            config.predictor_grpc_address,
+            config.model_name,
+            config.request_timeout,
         )
     if stop_event is None:
         stop_event = threading.Event()
