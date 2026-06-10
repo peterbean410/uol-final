@@ -565,3 +565,94 @@ def test_hot_reload_atomicity(
         f"Budget state lost: risk_short_used={layer.risk_short_used} < "
         f"initial={initial_risk_short}"
     )
+
+
+# ---------------------------------------------------------------------------
+# KServe v2 gRPC path: InferRequest in, InferResponse out
+# ---------------------------------------------------------------------------
+
+
+class _FakeInferOutput:
+    """Records the InferOutput constructor args for assertions."""
+
+    def __init__(self, name, shape, datatype, data):
+        self.name = name
+        self.shape = shape
+        self.datatype = datatype
+        self.data = data
+
+
+class _FakeInferResponse:
+    def __init__(self, response_id, model_name, infer_outputs):
+        self.response_id = response_id
+        self.model_name = model_name
+        self.infer_outputs = infer_outputs
+
+
+def _patch_infer_types(monkeypatch):
+    import kserve  # the module-level mock installed at the top of this file
+
+    monkeypatch.setattr(kserve, "InferOutput", _FakeInferOutput, raising=False)
+    monkeypatch.setattr(
+        kserve, "InferResponse", _FakeInferResponse, raising=False
+    )
+
+
+def test_predict_grpc_infer_request_returns_infer_response(monkeypatch):
+    """A v2 InferRequest with a BYTES 'symbol' input takes the sidecar-pull
+    path and answers with output tensors mirroring the ScreenedAction dict."""
+    from types import SimpleNamespace
+
+    _patch_infer_types(monkeypatch)
+
+    predictor, _ = _build_predictor(symbols=["USDJPY"])
+    predictor, _, _, _ = _load_predictor_with_mocks(predictor, dqn_action=1)
+    for bridge in predictor._bridges.values():
+        bridge.compute_signal = MagicMock(return_value=(0.5, 1.0))
+    for cache in predictor._caches.values():
+        cache.invalidate()
+
+    request = SimpleNamespace(
+        id="req-42",
+        inputs=[SimpleNamespace(name="symbol", data=[b"USDJPY"])],
+    )
+
+    response = predictor.predict(request)
+
+    assert isinstance(response, _FakeInferResponse)
+    assert response.response_id == "req-42"
+    assert response.model_name == "test-predictor"
+    outputs = {output.name: output for output in response.infer_outputs}
+    assert set(outputs) == {
+        "action",
+        "action_name",
+        "screened",
+        "reason",
+        "sigma",
+        "risk_long_used",
+        "risk_short_used",
+        "mu",
+    }
+    assert outputs["action"].datatype == "INT64"
+    assert outputs["action"].data[0] in _VALID_ACTIONS
+    assert outputs["action_name"].datatype == "BYTES"
+    assert outputs["reason"].data[0] in _VALID_REASONS
+    assert all(output.shape == [1] for output in outputs.values())
+
+
+def test_predict_grpc_infer_request_without_symbol_input_is_rejected(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    _patch_infer_types(monkeypatch)
+
+    predictor, _ = _build_predictor(symbols=["USDJPY"])
+    predictor, _, _, _ = _load_predictor_with_mocks(predictor)
+
+    request = SimpleNamespace(
+        id="", inputs=[SimpleNamespace(name="other", data=[b"x"])]
+    )
+
+    with pytest.raises(ValueError, match="input named 'symbol'"):
+        predictor.predict(request)

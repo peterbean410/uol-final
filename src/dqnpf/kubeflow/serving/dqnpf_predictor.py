@@ -102,6 +102,65 @@ def _download_uri_to_local(uri: str) -> str:
     return local_path
 
 
+# ScreenedAction-dict key -> KServe v2 output tensor datatype. Single source
+# of truth for the gRPC response shape; the executor decodes by tensor name.
+_INFER_OUTPUT_DATATYPES: dict[str, str] = {
+    "action": "INT64",
+    "action_name": "BYTES",
+    "screened": "BOOL",
+    "reason": "BYTES",
+    "sigma": "FP64",
+    "risk_long_used": "INT64",
+    "risk_short_used": "INT64",
+    "mu": "FP64",
+}
+
+
+def _payload_from_infer_request(request: Any) -> dict[str, Any]:
+    """Map a KServe v2 ``InferRequest`` onto the dict payload form.
+
+    Only the sidecar-pull form is supported over gRPC: a single BYTES input
+    named ``symbol`` with one element.
+
+    Raises:
+        ValueError: If the request carries no usable ``symbol`` input.
+    """
+    for tensor in getattr(request, "inputs", None) or []:
+        if tensor.name == "symbol":
+            data = list(tensor.data or [])
+            if not data:
+                break
+            value = data[0]
+            if isinstance(value, (bytes, bytearray)):
+                value = value.decode("utf-8")
+            return {"symbol": str(value)}
+    raise ValueError(
+        "InferRequest must carry a BYTES input named 'symbol' with one element"
+    )
+
+
+def _screened_to_infer_response(
+    model_name: str, infer_request: Any, response: dict[str, Any]
+) -> Any:
+    """Build a KServe v2 ``InferResponse`` from the ScreenedAction dict.
+
+    Each field becomes a shape-[1] output tensor named after the dict key, so
+    gRPC clients (the live executor) can decode by name without a shared
+    schema beyond ``_INFER_OUTPUT_DATATYPES``.
+    """
+    outputs = [
+        kserve.InferOutput(
+            name=key, shape=[1], datatype=datatype, data=[response[key]]
+        )
+        for key, datatype in _INFER_OUTPUT_DATATYPES.items()
+    ]
+    return kserve.InferResponse(
+        response_id=getattr(infer_request, "id", "") or "",
+        model_name=model_name,
+        infer_outputs=outputs,
+    )
+
+
 class _ServingEnvClient:
     """Thin wrapper around EnvironmentClient adding ``recent_bars`` support.
 
@@ -259,30 +318,42 @@ class DqnpfIntradayPredictor(kserve.Model):
         return True
 
     def predict(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> dict[str, Any]:
+        self, payload: Any, headers: dict[str, str] | None = None
+    ) -> Any:
         """Run combined DQN + Forecaster screening and return ScreenedAction.
 
-        Accepts two payload formats:
+        Accepts three payload formats:
         1. ``{"instances": [{"symbol": "USDJPY"}]}``, pulls state and bars
-           from the modelenv sidecar.
+           from the modelenv sidecar (REST v1).
         2. ``{"symbol": "USDJPY", "observation": [...], "recent_bars_m5": [...]}``
-, uses provided observation and bars directly.
+, uses provided observation and bars directly (REST v1).
+        3. A KServe v2 ``InferRequest`` (gRPC Open Inference Protocol) with a
+           single BYTES input named ``symbol``, pulls state and bars from the
+           sidecar and answers with an ``InferResponse`` whose output tensors
+           carry the ScreenedAction fields plus ``mu``.
 
         If observation/bars are not provided, they are pulled from the modelenv
         sidecar via EnvironmentClient.
 
         Args:
-            payload: JSON request body.
+            payload: JSON request body (dict) or a v2 InferRequest.
             headers: Optional HTTP headers (unused).
 
         Returns:
-            Dict containing ScreenedAction fields plus ``mu``.
+            Dict containing ScreenedAction fields plus ``mu`` (REST), or an
+            ``InferResponse`` mirroring those fields (gRPC).
 
         Raises:
             ValueError: On unknown symbol, malformed observation, or
                 insufficient bars (mapped to HTTP 400 by kserve).
         """
+        # KServe v2 gRPC path: decode the InferRequest into the dict payload
+        # form so both protocols share the screening logic below.
+        infer_request = None
+        if not isinstance(payload, dict):
+            infer_request = payload
+            payload = _payload_from_infer_request(payload)
+
         # Parse symbol from payload
         symbol = self._extract_symbol(payload)
 
@@ -317,6 +388,8 @@ class DqnpfIntradayPredictor(kserve.Model):
         # Build response
         response = asdict(screened)
         response["mu"] = mu
+        if infer_request is not None:
+            return _screened_to_infer_response(self.name, infer_request, response)
         return response
 
     # -------------------------------------------------------------------------
