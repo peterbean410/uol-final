@@ -730,6 +730,106 @@ impl CtraderClient {
         })
     }
 
+    /// Retrieve closed positions (deal history) from the cTrader API
+    ///
+    /// Used by live `Reset()` to rebuild the rolling realised-P&L window.
+    ///
+    /// # Arguments
+    /// * `symbol` - Trading symbol
+    /// * `from_timestamp_ns` - Only deals closed at or after this instant
+    ///
+    /// # Returns
+    /// Closed positions in ascending close-timestamp order
+    pub async fn closed_positions(
+        &mut self,
+        symbol: &str,
+        from_timestamp_ns: i64,
+    ) -> Result<Vec<crate::position::ClosedPosition>> {
+        if !self.is_connected() {
+            return Err(anyhow!("Not connected to cTrader API"));
+        }
+
+        let symbol = Self::normalise_symbol(symbol)?;
+
+        debug!(
+            "Retrieving closed positions for symbol: {} since {}",
+            symbol, from_timestamp_ns
+        );
+
+        let _ctid_trader_account_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow!("No session ID available"))?;
+
+        // In a real implementation, this would:
+        // 1. Create ProtoOADealListReq with ctidTraderAccountId and the
+        //    [from_timestamp, now] window (ms), paging via maxRows
+        // 2. Send the request via WebSocket to cTrader API
+        // 3. Wait for ProtoOADealListRes and keep deals with a
+        //    closePositionDetail (those are closing deals)
+        // 4. Map each closing deal to a ClosedPosition:
+        //    - positionId -> position_id
+        //    - closePositionDetail.entryPrice -> entry_price
+        //    - executionPrice -> close_price
+        //    - closePositionDetail.closedVolume / 100 -> volume
+        //    - tradeSide (the close side) inverted -> side of the position
+        //    - closePositionDetail.grossProfit / 100 -> realised_pnl
+        //    - closePositionDetail.swap / 100 -> swap
+        //    - executionTimestamp ms * 1_000_000 -> close_timestamp_ns
+        //
+        // For now, return empty history as placeholder.
+        info!("Synchronised 0 closed positions for {}", symbol);
+        Ok(vec![])
+    }
+
+    /// Retrieve the most recent fills from the cTrader API
+    ///
+    /// Used by live `Reset()` to rebuild the `recent_fills` observation
+    /// window.
+    ///
+    /// # Arguments
+    /// * `symbol` - Trading symbol
+    /// * `count` - Maximum number of fills to return
+    ///
+    /// # Returns
+    /// Fills in ascending timestamp order (oldest -> newest)
+    pub async fn recent_fills(
+        &mut self,
+        symbol: &str,
+        count: usize,
+    ) -> Result<Vec<modelenv_proto::Fill>> {
+        if !self.is_connected() {
+            return Err(anyhow!("Not connected to cTrader API"));
+        }
+
+        let symbol = Self::normalise_symbol(symbol)?;
+
+        debug!(
+            "Retrieving up to {} recent fills for symbol: {}",
+            count, symbol
+        );
+
+        let _ctid_trader_account_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow!("No session ID available"))?;
+
+        // In a real implementation, this would:
+        // 1. Create ProtoOADealListReq for a recent window, newest-first
+        // 2. Map each executed deal to a Fill:
+        //    - dealId -> order_id
+        //    - executionTimestamp ms * 1_000_000 -> timestamp_ns
+        //    - executionPrice -> price
+        //    - filledVolume / 100 -> size
+        //    - tradeSide -> side
+        //    - partial when filledVolume < requested volume
+        // 3. Truncate to `count` and return ascending
+        //
+        // For now, return empty history as placeholder.
+        info!("Synchronised 0 recent fills for {}", symbol);
+        Ok(vec![])
+    }
+
     /// Retrieve swap rates from cTrader API
     ///
     /// # Arguments

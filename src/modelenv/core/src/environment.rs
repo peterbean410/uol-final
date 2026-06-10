@@ -597,6 +597,48 @@ impl Environment {
                     self.positions.len()
                 );
 
+                // Rebuild account-history observation features from broker
+                // deal history. reset_episode_state() cleared the realised-P&L
+                // window and recent fills; training observations carry both as
+                // features, so leaving them zeroed after a restart would feed
+                // the policy a falsified account history until it rebuilt
+                // organically.
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as i64;
+                let from_ts =
+                    now_ns - crate::position::DAYS_IN_12_MONTHS * crate::position::NANOS_PER_DAY;
+                let (closed_positions, broker_fills) = {
+                    let broker = self.get_broker_gateway()?;
+                    let closed = broker.closed_positions(&req.symbol, from_ts).await?;
+                    let fills = broker.recent_fills(&req.symbol, RECENT_WINDOW).await?;
+                    (closed, fills)
+                };
+                info!(
+                    "Synchronised {} closed positions and {} recent fills from broker",
+                    closed_positions.len(),
+                    broker_fills.len()
+                );
+                for closed_position in closed_positions {
+                    self.closed_position_window
+                        .add_closed_position(closed_position);
+                }
+                // Restore directly rather than via record_fill: these fills
+                // are history, and re-logging them into the durable trade log
+                // on every reset would duplicate entries.
+                self.recent_fills = broker_fills
+                    .iter()
+                    .map(|fill| Fill {
+                        order_id: fill.order_id.clone(),
+                        timestamp_ns: fill.timestamp_ns,
+                        price: fill.price,
+                        size: fill.size,
+                        side: FillSide::try_from(fill.side).unwrap_or(FillSide::Buy),
+                        partial: fill.partial,
+                    })
+                    .collect();
+
                 // Get current bar from broker
                 let broker = self.get_broker_gateway()?;
                 let current_bar = broker.current_bar(&req.symbol).await?;
@@ -1689,6 +1731,10 @@ mod tests {
         // closed ids here so tests can assert which positions were liquidated.
         positions: Vec<modelenv_proto::Position>,
         close_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        // Deal history returned by closed_positions / recent_fills, for
+        // live-Reset state-rebuild tests.
+        broker_closed_positions: Vec<ClosedPosition>,
+        broker_recent_fills: Vec<modelenv_proto::Fill>,
     }
 
     fn write_test_parquet(path: &PathBuf, timestamps: &[i64], opens: &[f64]) -> Result<()> {
@@ -1860,6 +1906,28 @@ mod tests {
                 },
                 partial: false,
             })
+        }
+
+        async fn closed_positions(
+            &self,
+            _symbol: &str,
+            from_timestamp_ns: i64,
+        ) -> Result<Vec<ClosedPosition>> {
+            Ok(self
+                .broker_closed_positions
+                .iter()
+                .filter(|p| p.close_timestamp_ns >= from_timestamp_ns)
+                .cloned()
+                .collect())
+        }
+
+        async fn recent_fills(
+            &self,
+            _symbol: &str,
+            count: usize,
+        ) -> Result<Vec<modelenv_proto::Fill>> {
+            let skip = self.broker_recent_fills.len().saturating_sub(count);
+            Ok(self.broker_recent_fills[skip..].to_vec())
         }
     }
 
@@ -3121,6 +3189,80 @@ mod tests {
         assert!(!closed.contains(&"win_long".to_string()));
         // Close fills are recorded so they surface in recent_fills.
         assert_eq!(env.recent_fills.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_live_reset_rebuilds_realised_pnl_window_and_recent_fills() {
+        use crate::position::{Side, DAYS_IN_12_MONTHS};
+
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
+        let closed = |id: &str, close_ts: i64| ClosedPosition {
+            position_id: id.to_string(),
+            entry_price: 150.0,
+            close_price: 151.0,
+            volume: 1.0,
+            side: Side::Buy,
+            realised_pnl: 5.0,
+            swap: -1.0,
+            open_timestamp_ns: close_ts - NANOS_PER_DAY,
+            close_timestamp_ns: close_ts,
+        };
+        let fill = |id: &str, ts: i64| modelenv_proto::Fill {
+            order_id: id.to_string(),
+            timestamp_ns: ts,
+            price: 151.0,
+            size: 1.0,
+            side: FillSide::Sell as i32,
+            partial: false,
+        };
+        let broker_gateway = Arc::new(MockBrokerGateway {
+            broker_closed_positions: vec![
+                closed("recent_deal", now_ns - NANOS_PER_DAY),
+                // Outside the realised-P&L window: must not be requested.
+                closed(
+                    "stale_deal",
+                    now_ns - (DAYS_IN_12_MONTHS + 10) * NANOS_PER_DAY,
+                ),
+            ],
+            broker_recent_fills: vec![
+                fill("deal-1", now_ns - NANOS_PER_DAY),
+                fill("deal-2", now_ns - NANOS_PER_DAY / 2),
+            ],
+            ..Default::default()
+        });
+
+        let mut env = Environment::new(
+            Mode::Live,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_broker_gateway(broker_gateway);
+
+        env.reset(ResetRequest {
+            symbol: "USDJPY".to_string(),
+            episode_start_ts: 0,
+            episode_end_ts: 0,
+            seed: 0,
+            step_size_seconds: 0,
+        })
+        .await
+        .unwrap();
+
+        // Realised-P&L window restored from broker deal history (5.0 - 1.0
+        // swap), with history older than the window filtered out.
+        assert_eq!(env.closed_position_window.len(), 1);
+        assert!(
+            (env.closed_position_window.total_realised_pnl_12m(now_ns) - 4.0).abs() < 1e-9,
+            "expected restored net realised P&L of 4.0, got {}",
+            env.closed_position_window.total_realised_pnl_12m(now_ns)
+        );
+        // Recent fills restored in ascending order (not re-logged).
+        assert_eq!(env.recent_fills.len(), 2);
+        assert_eq!(env.recent_fills[0].order_id, "deal-1");
+        assert_eq!(env.recent_fills[1].order_id, "deal-2");
     }
 
     #[tokio::test]

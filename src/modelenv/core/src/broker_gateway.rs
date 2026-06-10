@@ -3,6 +3,7 @@ pub mod ctrader;
 
 use anyhow::Result;
 
+use crate::position::ClosedPosition;
 use modelenv_proto::{Action, Bar, Fill, Position, Tick};
 
 /// Broker Gateway trait for Production Mode
@@ -76,6 +77,33 @@ pub trait BrokerGateway {
     /// # Returns
     /// The Fill message representing the close execution
     async fn close_position(&self, position: &Position) -> Result<Fill>;
+
+    /// Fetch the broker's closed positions (deal history) for the symbol.
+    ///
+    /// Used by live `Reset()` to rebuild the rolling realised-P&L window after
+    /// a restart instead of resetting it to zero, keeping the
+    /// `realised_pnl_12m` observation feature consistent with training.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol to fetch deal history for
+    /// * `from_timestamp_ns` - Only deals closed at or after this instant
+    ///
+    /// # Returns
+    /// Closed positions in ascending close-timestamp order
+    async fn closed_positions(
+        &self,
+        symbol: &str,
+        from_timestamp_ns: i64,
+    ) -> Result<Vec<ClosedPosition>>;
+
+    /// Fetch the broker's most recent fills for the symbol, up to `count`.
+    ///
+    /// Used by live `Reset()` to rebuild the `recent_fills` observation
+    /// window after a restart instead of starting empty.
+    ///
+    /// # Returns
+    /// Fills in ascending timestamp order (oldest -> newest)
+    async fn recent_fills(&self, symbol: &str, count: usize) -> Result<Vec<Fill>>;
 }
 
 /// Factory function to create a broker gateway instance

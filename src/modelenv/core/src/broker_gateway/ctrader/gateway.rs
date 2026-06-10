@@ -507,6 +507,28 @@ impl BrokerGateway for CtraderBrokerGateway {
             }
         }
     }
+
+    /// Fetch closed positions (deal history) for live Reset() state rebuild
+    async fn closed_positions(
+        &self,
+        symbol: &str,
+        from_timestamp_ns: i64,
+    ) -> Result<Vec<crate::position::ClosedPosition>> {
+        let mut client = self.client.lock().await;
+        Self::ensure_connected(&mut client).await?;
+        client.closed_positions(symbol, from_timestamp_ns).await
+    }
+
+    /// Fetch the most recent fills for live Reset() state rebuild
+    async fn recent_fills(
+        &self,
+        symbol: &str,
+        count: usize,
+    ) -> Result<Vec<modelenv_proto::Fill>> {
+        let mut client = self.client.lock().await;
+        Self::ensure_connected(&mut client).await?;
+        client.recent_fills(symbol, count).await
+    }
 }
 
 #[cfg(test)]
