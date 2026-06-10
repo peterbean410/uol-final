@@ -67,9 +67,12 @@ fn build_environment(config: &Config) -> Environment {
     // swap) at each session end and keep winning longs. On by default (end
     // hour defaults to 23h UTC); --no-session-liquidation turns it off. Acts
     // in Training/backtest (episode cursor) and in Live (wall-clock steps,
-    // closes placed at the broker).
-    environment =
-        environment.with_trading_session_end_hour(config.session_liquidation_hour_end());
+    // closes placed at the broker). The start hour anchors the session-scoped
+    // realised P&L observation feature (None = 0h UTC); it does not gate
+    // trading.
+    environment = environment
+        .with_trading_session_start_hour(config.trading_session_hour_start)
+        .with_trading_session_end_hour(config.session_liquidation_hour_end());
 
     // Compute the training tick window once so it can both scope the tick
     // preload AND default the bar-snapshot timestamp.

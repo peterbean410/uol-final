@@ -153,6 +153,11 @@ pub struct Environment {
     daily_swap_rates: HashMap<String, (f64, f64)>,
     // Track the last timestamp when swap was accrued for day boundary detection
     last_swap_accrual_timestamp: i64,
+    // Trading-session start hour (UTC, mod 24; None = 0h). Anchors the
+    // session-scoped realised P&L observation feature: the proto field (still
+    // named `realised_pnl_12m` for compatibility) sums positions closed since
+    // the most recent session start. Does not gate trading.
+    trading_session_start_hour: Option<u32>,
     // Trading-session end hour (UTC, mod 24). When set, the environment
     // liquidates at each session end: close all shorts + losing longs (net of
     // swap), keep winning/break-even longs. Training/backtest closes against
@@ -261,6 +266,7 @@ impl Environment {
             transaction_cost: 0.0, // Default no transaction cost
             daily_swap_rates,
             last_swap_accrual_timestamp: 0, // Will be set on reset
+            trading_session_start_hour: None,
             trading_session_end_hour: None,
             broker_gateway: None,
             reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
@@ -309,6 +315,16 @@ impl Environment {
     /// session. Training/backtest closes against the episode book; Live
     /// detects the crossing on wall-clock step timestamps and places close
     /// orders at the broker. `None` disables it.
+    /// Set the trading-session start hour (UTC, mod 24; `None` = 0h UTC).
+    ///
+    /// Anchors the session-scoped realised P&L observation feature (proto
+    /// field `realised_pnl_12m`): positions closed since the most recent
+    /// session-start instant count toward it. Does not gate trading.
+    pub fn with_trading_session_start_hour(mut self, session_start_hour: Option<u32>) -> Self {
+        self.trading_session_start_hour = session_start_hour;
+        self
+    }
+
     pub fn with_trading_session_end_hour(mut self, session_end_hour: Option<u32>) -> Self {
         self.trading_session_end_hour = session_end_hour;
         self
@@ -602,13 +618,16 @@ impl Environment {
                 // window and recent fills; training observations carry both as
                 // features, so leaving them zeroed after a restart would feed
                 // the policy a falsified account history until it rebuilt
-                // organically.
+                // organically. The cutoff is the most recent session start,
+                // matching training, where the window resets at each
+                // per-session episode's Reset(), so the restored value has the
+                // same "realised P&L this session" semantics the policy
+                // learned.
                 let now_ns = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos() as i64;
-                let from_ts =
-                    now_ns - crate::position::DAYS_IN_12_MONTHS * crate::position::NANOS_PER_DAY;
+                let from_ts = self.session_start_cutoff(now_ns);
                 let (closed_positions, broker_fills) = {
                     let broker = self.get_broker_gateway()?;
                     let closed = broker.closed_positions(&req.symbol, from_ts).await?;
@@ -777,7 +796,7 @@ impl Environment {
             positions: proto_positions,
             realised_pnl_12m: self
                 .closed_position_window
-                .total_realised_pnl_12m(current_timestamp),
+                .total_realised_pnl_since(self.session_start_cutoff(current_timestamp)),
             recent_fills,
             ta,
             double_bottoms,
@@ -846,7 +865,7 @@ impl Environment {
 
                 let realised_pnl_12m = self
                     .closed_position_window
-                    .total_realised_pnl_12m(current_timestamp);
+                    .total_realised_pnl_since(self.session_start_cutoff(current_timestamp));
                 let proto_positions = self.positions_for_observation();
                 let recent_fills = self.recent_fills_for_observation();
                 let mut observation = self
@@ -954,7 +973,7 @@ impl Environment {
 
                 // Reconcile internal positions against broker positions
                 let broker_realised_pnl = 0.0;
-                let realised_pnl_12m = self.realised_pnl_12m();
+                let realised_pnl_12m = self.session_realised_pnl();
                 reconcile_positions(
                     &self
                         .positions
@@ -1045,7 +1064,7 @@ impl Environment {
                 })?;
                 let proto_positions = self.positions_for_observation();
                 let recent_fills = self.recent_fills_for_observation();
-                let realised_pnl = self.realised_pnl_12m();
+                let realised_pnl = self.session_realised_pnl();
                 let mut live = episode.get_observation(
                     proto_positions.as_slice(),
                     realised_pnl,
@@ -1077,7 +1096,7 @@ impl Environment {
                 let recent_fills = self.recent_fills_for_observation();
                 let mut observation = episode.get_observation(
                     proto_positions.as_slice(),
-                    self.realised_pnl_12m(),
+                    self.session_realised_pnl(),
                     self.last_observation_timestamp_ns,
                 );
                 observation.recent_fills = recent_fills;
@@ -1205,11 +1224,23 @@ impl Environment {
         Ok(modelenv_proto::RecentNewsResponse { news })
     }
 
-    /// Calculate the rolling 12-month realised P/L
-    fn realised_pnl_12m(&self) -> f64 {
+    /// The session-start cutoff for the realised P&L feature: the most recent
+    /// instant at or before `now_ns` where the UTC hour equals the configured
+    /// `trading_session_start_hour` (0h UTC when unset).
+    fn session_start_cutoff(&self, now_ns: i64) -> i64 {
+        crate::episode::most_recent_session_start(
+            now_ns,
+            self.trading_session_start_hour.unwrap_or(0),
+        )
+    }
+
+    /// Realised P/L (incl. swap) of positions closed since the most recent
+    /// session start. Carried on the observation in the `realised_pnl_12m`
+    /// proto field (name kept for wire/state-layout compatibility).
+    fn session_realised_pnl(&self) -> f64 {
         let current_timestamp = self.current_timestamp();
         self.closed_position_window
-            .total_realised_pnl_12m(current_timestamp)
+            .total_realised_pnl_since(self.session_start_cutoff(current_timestamp))
     }
 
     /// Get the current timestamp from the episode
@@ -1249,12 +1280,14 @@ impl Environment {
         // Get current timestamp
         let current_timestamp = self.current_timestamp();
 
-        // Calculate current total equity (unrealised_pnl + realised_pnl_12m)
+        // Calculate current total equity (unrealised + cumulative realised).
+        // Deliberately NOT the session-scoped sum the observation carries: the
+        // reward differences equity between steps, and a session-scoped sum
+        // would drop at each session-start crossing, injecting a spurious
+        // negative reward with no economic loss behind it.
         let current_unrealised_pnl: f64 = self.positions.iter().map(|p| p.unrealised_pnl).sum();
-        let current_realised_pnl_12m = self
-            .closed_position_window
-            .total_realised_pnl_12m(current_timestamp);
-        let current_total_equity = current_unrealised_pnl + current_realised_pnl_12m;
+        let current_realised_pnl = self.closed_position_window.total_realised_pnl();
+        let current_total_equity = current_unrealised_pnl + current_realised_pnl;
 
         // Calculate delta_V_t (change in total equity)
         let delta_v_t = if let Some(prev_equity) = self.prev_total_equity {
@@ -2092,8 +2125,9 @@ mod tests {
         window.add_closed_position(closed_position);
 
         // Total P/L should be 1.0 + 0.01 = 1.01
-        let current_timestamp = 3000000000000;
-        assert_eq!(window.total_realised_pnl_12m(current_timestamp), 1.01);
+        assert_eq!(window.total_realised_pnl(), 1.01);
+        assert_eq!(window.total_realised_pnl_since(1500000000000), 1.01);
+        assert_eq!(window.total_realised_pnl_since(2000000000001), 0.0);
     }
 
     #[tokio::test]
@@ -3192,8 +3226,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_live_reset_rebuilds_realised_pnl_window_and_recent_fills() {
-        use crate::position::{Side, DAYS_IN_12_MONTHS};
+    async fn test_live_reset_rebuilds_session_realised_pnl_and_recent_fills() {
+        use crate::position::Side;
 
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3220,16 +3254,16 @@ mod tests {
         };
         let broker_gateway = Arc::new(MockBrokerGateway {
             broker_closed_positions: vec![
-                closed("recent_deal", now_ns - NANOS_PER_DAY),
-                // Outside the realised-P&L window: must not be requested.
-                closed(
-                    "stale_deal",
-                    now_ns - (DAYS_IN_12_MONTHS + 10) * NANOS_PER_DAY,
-                ),
+                // Closed this session (1ns ago; the default session start is
+                // 0h UTC today, which is always <= now - 1).
+                closed("this_session_deal", now_ns - 1),
+                // Closed in a previous session: outside the cutoff, must not
+                // be restored.
+                closed("previous_session_deal", now_ns - 2 * NANOS_PER_DAY),
             ],
             broker_recent_fills: vec![
-                fill("deal-1", now_ns - NANOS_PER_DAY),
-                fill("deal-2", now_ns - NANOS_PER_DAY / 2),
+                fill("deal-1", now_ns - 2),
+                fill("deal-2", now_ns - 1),
             ],
             ..Default::default()
         });
@@ -3251,13 +3285,13 @@ mod tests {
         .await
         .unwrap();
 
-        // Realised-P&L window restored from broker deal history (5.0 - 1.0
-        // swap), with history older than the window filtered out.
+        // Session-scoped realised P&L restored from broker deal history
+        // (5.0 - 1.0 swap), previous sessions excluded.
         assert_eq!(env.closed_position_window.len(), 1);
         assert!(
-            (env.closed_position_window.total_realised_pnl_12m(now_ns) - 4.0).abs() < 1e-9,
+            (env.closed_position_window.total_realised_pnl() - 4.0).abs() < 1e-9,
             "expected restored net realised P&L of 4.0, got {}",
-            env.closed_position_window.total_realised_pnl_12m(now_ns)
+            env.closed_position_window.total_realised_pnl()
         );
         // Recent fills restored in ascending order (not re-logged).
         assert_eq!(env.recent_fills.len(), 2);

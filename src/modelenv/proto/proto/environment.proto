@@ -226,6 +226,9 @@ message Reference {
   map<string, Bar> live_bars = 3;
   // positions are sorted latest -> earliest by open_timestamp_ns.
   repeated Position positions = 5;
+  // Realised P&L (incl. swap) of positions closed since the most recent
+  // trading-session start (field name kept for compatibility; it is no
+  // longer a 12-month window).
   double realised_pnl_12m = 9;
   // recent_fills holds up to 64 fills sorted latest -> earliest.
   repeated Fill recent_fills = 6;

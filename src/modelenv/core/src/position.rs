@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 pub const NANOS_PER_DAY: i64 = 86_400_000_000_000;
 
 /// Number of days in 12 months (approximately 365.25 * 12)
-// 12 months, inclusive of a leap day. (Was `365 * 12 + 3`; a 12-YEAR window
-// mislabelled as 12 months; models trained before the fix saw the long window.)
-pub const DAYS_IN_12_MONTHS: i64 = 366;
 
 /// Position side (BUY or SELL)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -176,16 +173,14 @@ impl ClosedPosition {
     pub fn total_pnl(&self) -> f64 {
         self.realised_pnl + self.swap
     }
-
-    /// Check if the closed position is within the 12-month window
-    pub fn is_within_12_months(&self, current_timestamp_ns: i64) -> bool {
-        let age_days =
-            (current_timestamp_ns - self.close_timestamp_ns) as f64 / NANOS_PER_DAY as f64;
-        age_days <= DAYS_IN_12_MONTHS as f64
-    }
 }
 
-/// Manages a rolling 12-month window of closed positions
+/// Closed positions backing the session-scoped realised P&L feature.
+///
+/// The observation/proto field is still named `realised_pnl_12m` for wire and
+/// state-layout compatibility, but its semantics are "total realised P&L
+/// (incl. swap) since the most recent trading-session start". Callers pass
+/// the session-start cutoff; this window just filters by close timestamp.
 #[derive(Debug, Clone, Default)]
 pub struct ClosedPositionWindow {
     closed_positions: Vec<ClosedPosition>,
@@ -204,19 +199,29 @@ impl ClosedPositionWindow {
         self.closed_positions.push(closed_position);
     }
 
-    /// Calculate total realised P/L (including swap) within the 12-month window
-    pub fn total_realised_pnl_12m(&self, current_timestamp_ns: i64) -> f64 {
+    /// Total realised P/L (including swap) of everything in the window, i.e.
+    /// all positions closed since the window was last cleared (episode start
+    /// in training). Used by the reward's equity delta, which must stay
+    /// cumulative: a session-scoped sum would make equity drop at each
+    /// session-start crossing and inject a spurious negative reward.
+    pub fn total_realised_pnl(&self) -> f64 {
+        self.closed_positions.iter().map(|p| p.total_pnl()).sum()
+    }
+
+    /// Total realised P/L (including swap) of positions closed at or after
+    /// `from_timestamp_ns` (the session-start cutoff).
+    pub fn total_realised_pnl_since(&self, from_timestamp_ns: i64) -> f64 {
         self.closed_positions
             .iter()
-            .filter(|p| p.is_within_12_months(current_timestamp_ns))
+            .filter(|p| p.close_timestamp_ns >= from_timestamp_ns)
             .map(|p| p.total_pnl())
             .sum()
     }
 
-    /// Remove closed positions older than 12 months
-    pub fn prune_old_positions(&mut self, current_timestamp_ns: i64) {
+    /// Remove positions closed before `from_timestamp_ns`.
+    pub fn prune_closed_before(&mut self, from_timestamp_ns: i64) {
         self.closed_positions
-            .retain(|p| p.is_within_12_months(current_timestamp_ns));
+            .retain(|p| p.close_timestamp_ns >= from_timestamp_ns);
     }
 
     /// Get the number of closed positions in the window
@@ -402,13 +407,12 @@ mod tests {
 
         window.add_closed_position(closed_position);
 
-        // Total P/L should be 1.0 + 0.01 = 1.01
-        let current_timestamp = 3000000000000;
-        assert_eq!(window.total_realised_pnl_12m(current_timestamp), 1.01);
+        // Total P/L should be 1.0 + 0.01 = 1.01 (cutoff before the close)
+        assert_eq!(window.total_realised_pnl_since(1500000000000), 1.01);
     }
 
     #[test]
-    fn test_closed_position_window_is_12_months_not_12_years() {
+    fn test_closed_position_window_is_session_scoped() {
         let closed_at = |close_timestamp_ns: i64| ClosedPosition {
             position_id: "pos".to_string(),
             entry_price: 150.0,
@@ -420,17 +424,19 @@ mod tests {
             open_timestamp_ns: close_timestamp_ns - NANOS_PER_DAY,
             close_timestamp_ns,
         };
-        let now = 20 * 366 * NANOS_PER_DAY; // any instant late enough for old closes
+        let session_start = 100 * NANOS_PER_DAY; // arbitrary session-start cutoff
 
         let mut window = ClosedPositionWindow::new();
-        // 300 days old: inside the 12-month window.
-        window.add_closed_position(closed_at(now - 300 * NANOS_PER_DAY));
-        // 2 years old: was wrongly included by the old 12-year constant.
-        window.add_closed_position(closed_at(now - 2 * 366 * NANOS_PER_DAY));
+        // Closed exactly at the session start: included (>= cutoff).
+        window.add_closed_position(closed_at(session_start));
+        // Closed mid-session: included.
+        window.add_closed_position(closed_at(session_start + NANOS_PER_DAY / 2));
+        // Closed in a previous session: excluded.
+        window.add_closed_position(closed_at(session_start - 1));
 
-        assert_eq!(window.total_realised_pnl_12m(now), 1.0);
+        assert_eq!(window.total_realised_pnl_since(session_start), 2.0);
 
-        window.prune_old_positions(now);
-        assert_eq!(window.len(), 1);
+        window.prune_closed_before(session_start);
+        assert_eq!(window.len(), 2);
     }
 }

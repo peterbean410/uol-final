@@ -199,9 +199,11 @@ pub struct Config {
     /// modelenv liquidates at each session end, in Training/backtest and in
     /// Live: **all short positions and all losing long positions (net of
     /// accrued swap) are closed**, and only winning/break-even long positions
-    /// carry into the next session. `hour_start` defines the session window
-    /// (informational today; it does not gate trading; the liquidation
-    /// triggers on `hour_end`). Both are UTC hours; `hour_end` may exceed 23
+    /// carry into the next session. `hour_start` anchors the session-scoped
+    /// realised P&L observation feature (the `realised_pnl_12m` proto field
+    /// sums positions closed since the most recent session start; unset = 0h
+    /// UTC); it does not gate trading; the liquidation triggers on
+    /// `hour_end`. Both are UTC hours; `hour_end` may exceed 23
     /// to denote a session that closes on a later calendar day (e.g. 39 =
     /// 15:00 next day) and is taken modulo 24. On by default: `hour_end`
     /// defaults to 23 (matching the DQNConfig training default); use
@@ -998,7 +1000,7 @@ fn print_help() {
     println!("  --swap-rate-long <RATE>       Override daily swap per unit volume for BUY positions (default: built-in per-symbol table in Training, broker in Live)");
     println!("  --swap-rate-short <RATE>      Override daily swap per unit volume for SELL positions (default: built-in per-symbol table in Training, broker in Live)");
     println!("  --no-swap                     Disable overnight swap entirely (force 0.0/0.0), overriding the built-in table and any --swap-rate-* values");
-    println!("  --trading-session-hour-start <H> Session start hour (UTC). Defines the session window; matches the episode hour_start (informational; does not gate trading)");
+    println!("  --trading-session-hour-start <H> Session start hour (UTC, default 0). Anchors the session-scoped realised P&L feature (realised_pnl_12m = realised P&L since the most recent session start); does not gate trading");
     println!("  --trading-session-hour-end <H>   Session end hour (UTC, may exceed 23, taken mod 24; default 23). At each session end, close all shorts + losing longs (net of swap), keep winning/break-even longs (Training/backtest and Live)");
     println!("  --no-session-liquidation      Disable end-of-session liquidation (on by default at 23h UTC)");
     println!("  --help                     Display this help and exit");

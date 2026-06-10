@@ -55,6 +55,25 @@ pub struct Episode {
     pub done: bool,
 }
 
+/// The most recent instant at or before `now_ns` where the UTC hour-of-day
+/// equals `session_start_hour` (taken modulo 24).
+///
+/// Anchors the session-scoped realised P&L window: the observation feature
+/// (proto field still named `realised_pnl_12m` for compatibility) sums the
+/// realised P&L of positions closed at or after this instant. Pure free
+/// function, like [`has_session_end_crossed`], for easy testing.
+pub fn most_recent_session_start(now_ns: i64, session_start_hour: u32) -> i64 {
+    let nanos_per_hour = NANOS_PER_DAY / 24;
+    let target = (session_start_hour as i64 % 24) * nanos_per_hour;
+    let day_start = now_ns.div_euclid(NANOS_PER_DAY) * NANOS_PER_DAY;
+    let candidate = day_start + target;
+    if candidate <= now_ns {
+        candidate
+    } else {
+        candidate - NANOS_PER_DAY
+    }
+}
+
 /// Check if the trading-session end hour was crossed between two timestamps.
 ///
 /// The session closes daily at `session_end_hour` (UTC, taken modulo 24).
@@ -1236,6 +1255,29 @@ mod tests {
     fn at(day: i64, hour: i64, min: i64) -> i64 {
         let nph = NANOS_PER_DAY / 24;
         day * NANOS_PER_DAY + hour * nph + min * (nph / 60)
+    }
+
+    #[test]
+    fn test_most_recent_session_start_same_day_when_past_start_hour() {
+        // 16:45 with a 7h session start -> today 07:00.
+        assert_eq!(most_recent_session_start(at(5, 16, 45), 7), at(5, 7, 0));
+    }
+
+    #[test]
+    fn test_most_recent_session_start_previous_day_when_before_start_hour() {
+        // 03:00 with a 7h session start -> yesterday 07:00.
+        assert_eq!(most_recent_session_start(at(5, 3, 0), 7), at(4, 7, 0));
+    }
+
+    #[test]
+    fn test_most_recent_session_start_exact_instant_counts_as_started() {
+        assert_eq!(most_recent_session_start(at(5, 7, 0), 7), at(5, 7, 0));
+    }
+
+    #[test]
+    fn test_most_recent_session_start_hour_taken_mod_24() {
+        // 39 ≡ 15h: at 16:00 the latest 15:00 start is today.
+        assert_eq!(most_recent_session_start(at(5, 16, 0), 39), at(5, 15, 0));
     }
 
     #[test]
