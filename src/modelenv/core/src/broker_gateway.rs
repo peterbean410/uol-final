@@ -64,6 +64,18 @@ pub trait BrokerGateway {
     /// # Returns
     /// The Fill message representing the execution result
     async fn submit(&self, action: &Action) -> Result<Fill>;
+
+    /// Close an open broker position with a market order (full close).
+    ///
+    /// Used by end-of-session liquidation in Live mode: at each session-end
+    /// boundary all shorts and all losing longs are closed at the broker.
+    ///
+    /// # Arguments
+    /// * `position` - The broker position (as returned by `sync_positions`) to close
+    ///
+    /// # Returns
+    /// The Fill message representing the close execution
+    async fn close_position(&self, position: &Position) -> Result<Fill>;
 }
 
 /// Factory function to create a broker gateway instance

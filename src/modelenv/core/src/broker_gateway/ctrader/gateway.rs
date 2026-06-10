@@ -437,6 +437,76 @@ impl BrokerGateway for CtraderBrokerGateway {
             }
         }
     }
+
+    /// Close an open broker position with a market order (full close)
+    ///
+    /// Used by end-of-session liquidation in Live mode.
+    ///
+    /// # Arguments
+    /// * `position` - The broker position to close
+    ///
+    /// # Returns
+    /// The Fill message representing the close execution
+    async fn close_position(
+        &self,
+        position: &modelenv_proto::Position,
+    ) -> Result<modelenv_proto::Fill> {
+        if position.position_id.trim().is_empty() {
+            return Err(anyhow!(
+                "ValidationError {{ field: position_id, details: position ID cannot be empty }}"
+            ));
+        }
+
+        debug!(
+            "Closing position: position_id={}, volume={}",
+            position.position_id, position.volume
+        );
+
+        let mut client = self.client.lock().await;
+
+        Self::ensure_connected(&mut client).await.map_err(|err| {
+            anyhow!(
+                "ConnectionError {{ position_id: {}, broker_error: {} }}",
+                position.position_id,
+                err
+            )
+        })?;
+
+        match client.close_position(position).await {
+            Ok(fill) => Ok(fill),
+            Err(e) => {
+                error!("Position close failed: {}", e);
+
+                // Check if it's a connection error that might be recoverable
+                if Self::is_connection_error(&e) {
+                    if let Err(reconnect_err) = client.reconnect().await {
+                        error!("Reconnection failed: {}", reconnect_err);
+                        return Err(anyhow!(
+                            "OrderError {{ position_id: {}, broker_error: {} }}",
+                            position.position_id,
+                            reconnect_err
+                        ));
+                    }
+
+                    // Retry after reconnection
+                    client.close_position(position).await.map_err(|retry_err| {
+                        error!("Retry after reconnection failed: {}", retry_err);
+                        anyhow!(
+                            "OrderError {{ position_id: {}, broker_error: {} }}",
+                            position.position_id,
+                            retry_err
+                        )
+                    })
+                } else {
+                    Err(anyhow!(
+                        "OrderError {{ position_id: {}, broker_error: {} }}",
+                        position.position_id,
+                        e
+                    ))
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

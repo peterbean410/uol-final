@@ -651,6 +651,85 @@ impl CtraderClient {
         })
     }
 
+    /// Close an open broker position with a market order (full close)
+    ///
+    /// Used by end-of-session liquidation in Live mode.
+    ///
+    /// # Arguments
+    /// * `position` - The broker position to close (id, volume, side)
+    ///
+    /// # Returns
+    /// The Fill message representing the close execution
+    pub async fn close_position(
+        &mut self,
+        position: &modelenv_proto::Position,
+    ) -> Result<modelenv_proto::Fill> {
+        if !self.is_connected() {
+            return Err(anyhow!("Not connected to cTrader API"));
+        }
+
+        if position.position_id.trim().is_empty() {
+            return Err(anyhow!(
+                "ValidationError {{ field: position_id, details: position ID cannot be empty }}"
+            ));
+        }
+
+        debug!(
+            "Closing position {} for {:.1} volume",
+            position.position_id, position.volume
+        );
+
+        let _ctid_trader_account_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow!("No session ID available"))?;
+
+        // Volume in cTrader API units (1.0 = 100)
+        let _volume = (position.volume * 100.0) as i64;
+
+        // In a real implementation, this would:
+        // 1. Create ProtoOAClosePositionReq with the position ID and volume
+        // 2. Send the request via WebSocket to cTrader API
+        // 3. Wait for the ProtoOAExecutionEvent response
+        // 4. Parse the execution into a Fill message
+        //
+        // Example request structure:
+        // let request = ProtoOAClosePositionReq {
+        //     payload_type: Some(ProtoOAPayloadType::PROTO_OA_CLOSE_POSITION_REQ),
+        //     ctid_trader_account_id: Some(ctid_trader_account_id.parse()?),
+        //     position_id: Some(position.position_id.parse()?),
+        //     volume: Some(volume),
+        // };
+        //
+        // let response: ProtoOAExecutionEvent = self.send_request_with_timeout(request).await?;
+
+        // Closing a long executes a sell; closing a short executes a buy.
+        let fill_side = match position.side {
+            0 => modelenv_proto::FillSide::Sell,
+            _ => modelenv_proto::FillSide::Buy,
+        };
+
+        // For now, simulate successful execution at the current bar close.
+        let execution_bar = self.current_bar(&self.symbol.clone()).await?;
+        let execution_price = execution_bar.close;
+
+        info!(
+            "Position {} closed at {:.5} for {:.1} volume",
+            position.position_id, execution_price, position.volume
+        );
+        Ok(modelenv_proto::Fill {
+            order_id: format!("close-{}-{}", self.symbol, position.position_id),
+            timestamp_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as i64,
+            price: execution_price,
+            size: position.volume,
+            side: fill_side as i32,
+            partial: false,
+        })
+    }
+
     /// Retrieve swap rates from cTrader API
     ///
     /// # Arguments

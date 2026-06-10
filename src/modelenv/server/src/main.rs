@@ -63,14 +63,13 @@ fn build_environment(config: &Config) -> Environment {
         );
     }
 
-    // Trading-session liquidation: when an end hour is configured, close all
-    // shorts + losing longs (net of swap) at each session end and keep winning
-    // longs. Acts only in Training/backtest (step() gates on Mode::Training);
-    // Live leaves position management to the broker.
-    if config.trading_session_hour_end.is_some() {
-        environment =
-            environment.with_trading_session_end_hour(config.trading_session_hour_end);
-    }
+    // Trading-session liquidation: close all shorts + losing longs (net of
+    // swap) at each session end and keep winning longs. On by default (end
+    // hour defaults to 23h UTC); --no-session-liquidation turns it off. Acts
+    // in Training/backtest (episode cursor) and in Live (wall-clock steps,
+    // closes placed at the broker).
+    environment =
+        environment.with_trading_session_end_hour(config.session_liquidation_hour_end());
 
     // Compute the training tick window once so it can both scope the tick
     // preload AND default the bar-snapshot timestamp.

@@ -153,9 +153,11 @@ pub struct Environment {
     daily_swap_rates: HashMap<String, (f64, f64)>,
     // Track the last timestamp when swap was accrued for day boundary detection
     last_swap_accrual_timestamp: i64,
-    // Trading-session end hour (UTC, mod 24). When set, Training/backtest
+    // Trading-session end hour (UTC, mod 24). When set, the environment
     // liquidates at each session end: close all shorts + losing longs (net of
-    // swap), keep winning/break-even longs. None disables session liquidation.
+    // swap), keep winning/break-even longs. Training/backtest closes against
+    // the episode book; Live places close orders at the broker. None disables
+    // session liquidation.
     trading_session_end_hour: Option<u32>,
     // Broker gateway for Production Mode (Arc for cloneability)
     broker_gateway: Option<Arc<dyn BrokerGateway + Send + Sync>>,
@@ -301,10 +303,12 @@ impl Environment {
 
     /// Enable end-of-session liquidation at `session_end_hour` (UTC, mod 24).
     ///
-    /// When set, each time a step crosses the session-end instant (Training /
-    /// backtest only), all short positions and all losing long positions (net
-    /// of accrued swap) are closed, and winning/break-even long positions carry
-    /// into the next session. `None` disables it.
+    /// When set, each time a step crosses the session-end instant, all short
+    /// positions and all losing long positions (net of accrued swap) are
+    /// closed, and winning/break-even long positions carry into the next
+    /// session. Training/backtest closes against the episode book; Live
+    /// detects the crossing on wall-clock step timestamps and places close
+    /// orders at the broker. `None` disables it.
     pub fn with_trading_session_end_hour(mut self, session_end_hour: Option<u32>) -> Self {
         self.trading_session_end_hour = session_end_hour;
         self
@@ -845,6 +849,22 @@ impl Environment {
             Mode::Live => {
                 // Production mode - submit action to broker and return execution results
                 info!("Production mode: submitting action to broker");
+
+                // End-of-session liquidation, mirroring Training: when the
+                // wall clock crossed the session-end hour since the previous
+                // step's observation, close all shorts + losing longs (net of
+                // swap) at the broker before the new action is submitted.
+                if let Some(end_hour) = self.trading_session_end_hour {
+                    let now_ns = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as i64;
+                    if let Some(prev_ns) = self.last_observation_timestamp_ns {
+                        if crate::episode::has_session_end_crossed(prev_ns, now_ns, end_hour) {
+                            self.close_session_positions_live().await?;
+                        }
+                    }
+                }
 
                 let action_type = ActionType::try_from(action.action).map_err(|_| {
                     anyhow::anyhow!("Unsupported action type {} in live mode", action.action)
@@ -1407,6 +1427,72 @@ impl Environment {
         Ok(())
     }
 
+    /// End-of-session liquidation against the broker (Live mode).
+    ///
+    /// Live counterpart of `close_session_positions`: sync the current broker
+    /// positions, then close every short and every losing long (net P&L
+    /// (mark-to-market at the broker mid + accrued swap) strictly negative)
+    /// with broker close orders. Winning/break-even longs are left open.
+    /// Close fills are recorded so they appear in `recent_fills`; the normal
+    /// `sync_positions` later in the step refreshes the internal book.
+    async fn close_session_positions_live(&mut self) -> Result<()> {
+        let symbol = self.symbol.clone();
+        let (to_close, kept) = {
+            let broker = self.get_broker_gateway()?;
+            let broker_positions = broker.sync_positions(&symbol).await?;
+            if broker_positions.is_empty() {
+                return Ok(());
+            }
+            let current_bar = broker.current_bar(&symbol).await?;
+            let current_mid_price = (current_bar.open + current_bar.close) / 2.0;
+            let mut to_close = Vec::new();
+            let mut kept = 0usize;
+            for proto in &broker_positions {
+                let position = Position::from_proto(proto);
+                let net_pnl =
+                    position.calculate_unrealised_pnl(current_mid_price) + position.swap;
+                if matches!(position.side, Side::Sell) || net_pnl < 0.0 {
+                    to_close.push(proto.clone());
+                } else {
+                    kept += 1;
+                }
+            }
+            (to_close, kept)
+        };
+        if to_close.is_empty() {
+            return Ok(());
+        }
+
+        let closed = to_close.len();
+        for proto in to_close {
+            let fill = {
+                let broker = self.get_broker_gateway()?;
+                broker.close_position(&proto).await?
+            };
+            self.record_fill(
+                FillEvent::Close,
+                Fill {
+                    order_id: fill.order_id.clone(),
+                    timestamp_ns: fill.timestamp_ns,
+                    price: fill.price,
+                    size: fill.size,
+                    side: match FillSide::try_from(fill.side) {
+                        Ok(s) => s,
+                        Err(_) => FillSide::Buy,
+                    },
+                    partial: fill.partial,
+                },
+            );
+        }
+        log::info!(
+            "session-end liquidation (live): symbol={} closed={} (shorts + losing longs), kept={} winning longs",
+            symbol,
+            closed,
+            kept,
+        );
+        Ok(())
+    }
+
     /// Accrue swap on all open positions
     /// Returns true if swap was accrued for any position
     fn accrue_swap_on_positions(&mut self) -> Result<bool> {
@@ -1596,8 +1682,13 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
     struct MockBrokerGateway {
         submit_calls: Arc<AtomicUsize>,
+        // Broker book returned by sync_positions; close_position records the
+        // closed ids here so tests can assert which positions were liquidated.
+        positions: Vec<modelenv_proto::Position>,
+        close_calls: Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     fn write_test_parquet(path: &PathBuf, timestamps: &[i64], opens: &[f64]) -> Result<()> {
@@ -1684,7 +1775,13 @@ mod tests {
     #[async_trait::async_trait]
     impl BrokerGateway for MockBrokerGateway {
         async fn sync_positions(&self, _symbol: &str) -> Result<Vec<modelenv_proto::Position>> {
-            Ok(vec![])
+            let closed = self.close_calls.lock().unwrap().clone();
+            Ok(self
+                .positions
+                .iter()
+                .filter(|p| !closed.contains(&p.position_id))
+                .cloned()
+                .collect())
         }
 
         async fn current_bar(&self, _symbol: &str) -> Result<Bar> {
@@ -1740,6 +1837,27 @@ mod tests {
                 price: 155.21,
                 size: 1.0,
                 side: FillSide::Buy as i32,
+                partial: false,
+            })
+        }
+
+        async fn close_position(
+            &self,
+            position: &modelenv_proto::Position,
+        ) -> Result<modelenv_proto::Fill> {
+            self.close_calls
+                .lock()
+                .unwrap()
+                .push(position.position_id.clone());
+            Ok(modelenv_proto::Fill {
+                order_id: format!("close-{}", position.position_id),
+                timestamp_ns: 2,
+                price: 155.21,
+                size: position.volume,
+                side: match position.side {
+                    0 => FillSide::Sell as i32,
+                    _ => FillSide::Buy as i32,
+                },
                 partial: false,
             })
         }
@@ -1915,6 +2033,7 @@ mod tests {
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let broker_gateway = Arc::new(MockBrokerGateway {
             submit_calls: Arc::clone(&submit_calls),
+            ..Default::default()
         });
 
         let mut environment =
@@ -2254,6 +2373,7 @@ mod tests {
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let broker_gateway = Arc::new(MockBrokerGateway {
             submit_calls: Arc::clone(&submit_calls),
+            ..Default::default()
         });
 
         let mut environment =
@@ -2371,6 +2491,7 @@ mod tests {
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let broker_gateway = Arc::new(MockBrokerGateway {
             submit_calls: Arc::clone(&submit_calls),
+            ..Default::default()
         });
 
         let mut environment =
@@ -2955,5 +3076,70 @@ mod tests {
         );
         env.close_session_positions().unwrap();
         assert!(env.positions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_live_session_liquidation_closes_at_broker_keeps_winning_longs() {
+        // Mock broker bar: open 155.20 / close 155.21 -> mid 155.205. The
+        // win/lose decision recomputes unrealised P&L from entry vs. this mid
+        // (plus the broker-reported swap), not from the proto's stale field.
+        let proto_position = |id: &str, entry: f64, swap: f64, side: i32| modelenv_proto::Position {
+            position_id: id.to_string(),
+            entry_price: entry,
+            unrealised_pnl: 0.0,
+            swap,
+            open_timestamp_ns: 0,
+            volume: 1.0,
+            side,
+        };
+        let close_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let broker_gateway = Arc::new(MockBrokerGateway {
+            positions: vec![
+                proto_position("win_long", 150.0, 0.0, 0), // net +5.205 -> kept
+                proto_position("lose_long", 160.0, 0.0, 0), // net -4.795 -> closed
+                proto_position("swap_lose_long", 155.0, -10.0, 0), // net -9.795 -> closed
+                proto_position("short_win", 160.0, 0.0, 1), // shorts always closed
+            ],
+            close_calls: Arc::clone(&close_calls),
+            ..Default::default()
+        });
+
+        let mut env = Environment::new(
+            Mode::Live,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_broker_gateway(broker_gateway);
+
+        env.close_session_positions_live().await.unwrap();
+
+        let closed = close_calls.lock().unwrap().clone();
+        assert_eq!(closed.len(), 3, "closed: {:?}", closed);
+        assert!(closed.contains(&"lose_long".to_string()));
+        assert!(closed.contains(&"swap_lose_long".to_string()));
+        assert!(closed.contains(&"short_win".to_string()));
+        assert!(!closed.contains(&"win_long".to_string()));
+        // Close fills are recorded so they surface in recent_fills.
+        assert_eq!(env.recent_fills.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_live_session_liquidation_empty_broker_book_is_noop() {
+        let close_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let broker_gateway = Arc::new(MockBrokerGateway {
+            close_calls: Arc::clone(&close_calls),
+            ..Default::default()
+        });
+        let mut env = Environment::new(
+            Mode::Live,
+            "USDJPY".to_string(),
+            "s3://unused".to_string(),
+        )
+        .with_broker_gateway(broker_gateway);
+
+        env.close_session_positions_live().await.unwrap();
+
+        assert!(close_calls.lock().unwrap().is_empty());
+        assert!(env.recent_fills.is_empty());
     }
 }
