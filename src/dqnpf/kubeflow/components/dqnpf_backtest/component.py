@@ -125,14 +125,16 @@ def _start_modelenv_sidecar(
     non-zero rate is forwarded as ``--swap-rate-long`` / ``--swap-rate-short`` so
     the backtest's PnL and trade log reflect overnight swap costs.
 
-    ``trading_session_hour_start`` / ``trading_session_hour_end`` enable
-    modelenv's end-of-session liquidation (Training/backtest only): at each
-    session end modelenv closes all shorts + losing longs (net of swap) and
-    keeps winning/break-even longs. They are forwarded as
+    ``trading_session_hour_start`` / ``trading_session_hour_end`` align
+    modelenv's end-of-session liquidation boundary: at each session end
+    modelenv closes all shorts + losing longs (net of swap) and keeps
+    winning/break-even longs. They are forwarded as
     ``--trading-session-hour-start`` / ``--trading-session-hour-end`` only when
     set (date-range backtests), so the liquidation boundary matches the
     hour-bound episode windows the backtest runs. ``None`` (legacy fixed-window
-    mode) leaves session liquidation off.
+    mode) forwards nothing, in which case modelenv's own default applies,
+    liquidation is ON by default at 23h UTC (modelenv T-6.3-08); a fully
+    liquidation-free run must start modelenv with ``--no-session-liquidation``.
     """
     # Coerce to float before the truthiness guards below. A string like "0.0"
     # (e.g. a KFP str pipeline param) is truthy, which would forward
