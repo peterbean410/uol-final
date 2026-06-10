@@ -242,13 +242,25 @@ def train(config: DQNConfig) -> None:
             episode_losses: list[float] = []
             last_loss: float | None = None
 
+            # Per-phase wall-clock accumulators (seconds), reset each episode.
+            # Breaks the step loop into action selection (GPU forward), the
+            # env.step() gRPC round-trip to modelenv, observation preprocessing,
+            # and the gradient update (GPU) so we can see what actually dominates.
+            t_action = t_env = t_prep = t_learn = 0.0
+
             for step in range(config.max_steps_per_episode):
                 # Select action (epsilon-greedy)
+                _t0 = time.perf_counter()
                 action = agent.select_action(state, training=True)
+                t_action += time.perf_counter() - _t0
 
                 # Step environment
+                _t0 = time.perf_counter()
                 response = env_client.step(action, generate_order_id())
+                t_env += time.perf_counter() - _t0
+                _t0 = time.perf_counter()
                 next_state = preprocessor.process(response.data)
+                t_prep += time.perf_counter() - _t0
                 reward = response.data.reward
                 done = response.data.done
 
@@ -263,7 +275,9 @@ def train(config: DQNConfig) -> None:
                     len(agent.replay_buffer) >= config.batch_size
                     and step_count % config.train_freq == 0
                 ):
+                    _t0 = time.perf_counter()
                     loss = agent.update()
+                    t_learn += time.perf_counter() - _t0
                     if loss is not None:
                         episode_losses.append(loss)
                         last_loss = loss
@@ -290,9 +304,13 @@ def train(config: DQNConfig) -> None:
                 ):
                     elapsed = time.time() - episode_start_time
                     steps_per_sec = step / elapsed if elapsed > 0 else 0.0
+                    t_total = t_action + t_env + t_prep + t_learn
+                    pct = (lambda v: 100.0 * v / t_total if t_total > 0 else 0.0)
                     logger.info(
                         "  [progress] ep=%d step=%d/%d global_step=%d epsilon=%.3f "
-                        "buffer=%d reward=%.4f last_loss=%s %.1f steps/s",
+                        "buffer=%d reward=%.4f last_loss=%s %.1f steps/s | "
+                        "profile: env=%.0f%% learn=%.0f%% action=%.0f%% prep=%.0f%% "
+                        "(env=%.2fms learn=%.2fms / step)",
                         overall_episode,
                         step,
                         config.max_steps_per_episode,
@@ -302,6 +320,12 @@ def train(config: DQNConfig) -> None:
                         episode_reward,
                         f"{last_loss:.6f}" if last_loss is not None else "n/a",
                         steps_per_sec,
+                        pct(t_env),
+                        pct(t_learn),
+                        pct(t_action),
+                        pct(t_prep),
+                        1000.0 * t_env / step,
+                        1000.0 * t_learn / step,
                     )
 
                 if done:
@@ -313,6 +337,30 @@ def train(config: DQNConfig) -> None:
                 sum(episode_losses) / len(episode_losses) if episode_losses else 0.0
             )
             episode_length = step + 1
+
+            # Per-episode phase breakdown. Logged every episode (the [progress]
+            # line only fires for long episodes), so short episodes still surface
+            # where wall-clock went. Percentages are of the four timed phases;
+            # the remainder vs episode_duration is replay-buffer push + Python.
+            t_total = t_action + t_env + t_prep + t_learn
+            if t_total > 0:
+                logger.info(
+                    "  [profile] ep=%d steps=%d | env=%.0f%% learn=%.0f%% "
+                    "action=%.0f%% prep=%.0f%% | env=%.2fms learn=%.2fms "
+                    "action=%.2fms prep=%.2fms per step | timed=%.1fs of %.1fs",
+                    overall_episode,
+                    episode_length,
+                    100.0 * t_env / t_total,
+                    100.0 * t_learn / t_total,
+                    100.0 * t_action / t_total,
+                    100.0 * t_prep / t_total,
+                    1000.0 * t_env / episode_length,
+                    1000.0 * t_learn / episode_length,
+                    1000.0 * t_action / episode_length,
+                    1000.0 * t_prep / episode_length,
+                    t_total,
+                    episode_duration,
+                )
 
             # Track rewards for rolling average
             recent_rewards.append(episode_reward)
