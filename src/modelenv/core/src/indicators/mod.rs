@@ -753,7 +753,7 @@ pub fn state_columns() -> Vec<String> {
     }
 
     // -- realised P&L --
-    cols.push("realised_pnl_12m".to_string());
+    cols.push("session_realised_pnl".to_string());
 
     cols.push("unrealised_pnl".to_string());
     cols.push("num_positions_buy".to_string());

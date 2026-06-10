@@ -227,9 +227,9 @@ message Reference {
   // positions are sorted latest -> earliest by open_timestamp_ns.
   repeated Position positions = 5;
   // Realised P&L (incl. swap) of positions closed since the most recent
-  // trading-session start (field name kept for compatibility; it is no
-  // longer a 12-month window).
-  double realised_pnl_12m = 9;
+  // trading-session start (renamed from realised_pnl_12m; same field number,
+  // so the binary wire format is unchanged).
+  double session_realised_pnl = 9;
   // recent_fills holds up to 64 fills sorted latest -> earliest.
   repeated Fill recent_fills = 6;
   // per-interval technical indicators (M1, M5, M15, H1, H4, D1, W1, MN)

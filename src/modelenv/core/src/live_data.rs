@@ -18,7 +18,7 @@ pub struct LiveData {
     pub symbol: String,
     pub live_bars: HashMap<String, Bar>,
     pub positions: Vec<Position>,
-    pub realised_pnl_12m: f64,
+    pub session_realised_pnl: f64,
     pub recent_fills: Vec<Fill>,
     pub ta: Vec<IntervalIndicators>,
     pub double_bottoms: Vec<DoubleBottomPattern>,
@@ -43,7 +43,7 @@ impl LiveData {
             symbol: self.symbol,
             live_bars: self.live_bars,
             positions: self.positions,
-            realised_pnl_12m: self.realised_pnl_12m,
+            session_realised_pnl: self.session_realised_pnl,
             recent_fills: self.recent_fills,
             ta: self.ta,
             double_bottoms: self.double_bottoms,
@@ -128,7 +128,7 @@ impl LiveData {
 
         // --- global scalars ---
         match col {
-            "realised_pnl_12m" => self.realised_pnl_12m,
+            "session_realised_pnl" => self.session_realised_pnl,
             "unrealised_pnl" => self
                 .positions
                 .iter()

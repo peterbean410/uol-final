@@ -227,7 +227,7 @@ impl Normaliser {
         }
 
         // --- P&L (z-score, window 504, clip ±5) ---
-        if name == "realised_pnl_12m" || name == "unrealised_pnl" {
+        if name == "session_realised_pnl" || name == "unrealised_pnl" {
             return ColumnConfig::new(FeatureCategory::PnL, 504, 5.0);
         }
 
@@ -290,7 +290,7 @@ mod tests {
             "M5_ta_rsi_14".to_string(),
             "M5_ta_macd".to_string(),
             "M5_bar_volume".to_string(),
-            "realised_pnl_12m".to_string(),
+            "session_realised_pnl".to_string(),
             "num_positions_buy".to_string(),
             "tick_spread".to_string(),
             "sin_hour".to_string(),
@@ -314,7 +314,7 @@ mod tests {
         let config = Normaliser::default_config("M5_bar_volume");
         assert_eq!(config.category, FeatureCategory::Volume);
 
-        let config = Normaliser::default_config("realised_pnl_12m");
+        let config = Normaliser::default_config("session_realised_pnl");
         assert_eq!(config.category, FeatureCategory::PnL);
         assert_eq!(config.clip, 5.0);
 

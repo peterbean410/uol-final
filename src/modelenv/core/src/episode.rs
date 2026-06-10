@@ -58,10 +58,10 @@ pub struct Episode {
 /// The most recent instant at or before `now_ns` where the UTC hour-of-day
 /// equals `session_start_hour` (taken modulo 24).
 ///
-/// Anchors the session-scoped realised P&L window: the observation feature
-/// (proto field still named `realised_pnl_12m` for compatibility) sums the
-/// realised P&L of positions closed at or after this instant. Pure free
-/// function, like [`has_session_end_crossed`], for easy testing.
+/// Anchors the session-scoped realised P&L window: the `session_realised_pnl`
+/// observation feature sums the realised P&L of positions closed at or after
+/// this instant. Pure free function, like [`has_session_end_crossed`], for
+/// easy testing.
 pub fn most_recent_session_start(now_ns: i64, session_start_hour: u32) -> i64 {
     let nanos_per_hour = NANOS_PER_DAY / 24;
     let target = (session_start_hour as i64 % 24) * nanos_per_hour;
@@ -214,7 +214,7 @@ impl Episode {
     pub fn get_observation(
         &self,
         positions: &[modelenv_proto::Position],
-        realised_pnl_12m: f64,
+        session_realised_pnl: f64,
         previous_timestamp_ns: Option<i64>,
     ) -> LiveData {
         let mut live_bars = HashMap::new();
@@ -289,7 +289,7 @@ impl Episode {
             symbol: self.symbol.clone(),
             live_bars,
             positions: positions.to_vec(),
-            realised_pnl_12m,
+            session_realised_pnl,
             recent_fills: Vec::new(),
             ta,
             double_bottoms,

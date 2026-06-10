@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 /// Number of nanoseconds in a day (86,400,000,000,000)
 pub const NANOS_PER_DAY: i64 = 86_400_000_000_000;
 
-/// Number of days in 12 months (approximately 365.25 * 12)
-
 /// Position side (BUY or SELL)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum Side {
@@ -175,12 +173,10 @@ impl ClosedPosition {
     }
 }
 
-/// Closed positions backing the session-scoped realised P&L feature.
-///
-/// The observation/proto field is still named `realised_pnl_12m` for wire and
-/// state-layout compatibility, but its semantics are "total realised P&L
-/// (incl. swap) since the most recent trading-session start". Callers pass
-/// the session-start cutoff; this window just filters by close timestamp.
+/// Closed positions backing the `session_realised_pnl` observation feature:
+/// total realised P&L (incl. swap) since the most recent trading-session
+/// start. Callers pass the session-start cutoff; this window just filters by
+/// close timestamp.
 #[derive(Debug, Clone, Default)]
 pub struct ClosedPositionWindow {
     closed_positions: Vec<ClosedPosition>,

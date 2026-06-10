@@ -154,9 +154,8 @@ pub struct Environment {
     // Track the last timestamp when swap was accrued for day boundary detection
     last_swap_accrual_timestamp: i64,
     // Trading-session start hour (UTC, mod 24; None = 0h). Anchors the
-    // session-scoped realised P&L observation feature: the proto field (still
-    // named `realised_pnl_12m` for compatibility) sums positions closed since
-    // the most recent session start. Does not gate trading.
+    // `session_realised_pnl` observation feature: positions closed since the
+    // most recent session start count toward it. Does not gate trading.
     trading_session_start_hour: Option<u32>,
     // Trading-session end hour (UTC, mod 24). When set, the environment
     // liquidates at each session end: close all shorts + losing longs (net of
@@ -318,7 +317,7 @@ impl Environment {
     /// Set the trading-session start hour (UTC, mod 24; `None` = 0h UTC).
     ///
     /// Anchors the session-scoped realised P&L observation feature (proto
-    /// field `realised_pnl_12m`): positions closed since the most recent
+    /// field `session_realised_pnl`): positions closed since the most recent
     /// session-start instant count toward it. Does not gate trading.
     pub fn with_trading_session_start_hour(mut self, session_start_hour: Option<u32>) -> Self {
         self.trading_session_start_hour = session_start_hour;
@@ -794,7 +793,7 @@ impl Environment {
             symbol,
             live_bars,
             positions: proto_positions,
-            realised_pnl_12m: self
+            session_realised_pnl: self
                 .closed_position_window
                 .total_realised_pnl_since(self.session_start_cutoff(current_timestamp)),
             recent_fills,
@@ -863,7 +862,7 @@ impl Environment {
 
                 self.update_max_total_margin();
 
-                let realised_pnl_12m = self
+                let session_realised_pnl = self
                     .closed_position_window
                     .total_realised_pnl_since(self.session_start_cutoff(current_timestamp));
                 let proto_positions = self.positions_for_observation();
@@ -874,7 +873,7 @@ impl Environment {
                     .ok_or_else(|| anyhow::anyhow!("Episode not initialized. Call reset() first."))?
                     .get_observation(
                         proto_positions.as_slice(),
-                        realised_pnl_12m,
+                        session_realised_pnl,
                         Some(prev_timestamp),
                     );
                 observation.recent_fills = recent_fills;
@@ -973,7 +972,7 @@ impl Environment {
 
                 // Reconcile internal positions against broker positions
                 let broker_realised_pnl = 0.0;
-                let realised_pnl_12m = self.session_realised_pnl();
+                let session_realised_pnl = self.session_realised_pnl();
                 reconcile_positions(
                     &self
                         .positions
@@ -981,7 +980,7 @@ impl Environment {
                         .map(|p| p.to_proto())
                         .collect::<Vec<_>>(),
                     &broker_positions,
-                    realised_pnl_12m,
+                    session_realised_pnl,
                     broker_realised_pnl,
                 );
 
@@ -1235,8 +1234,8 @@ impl Environment {
     }
 
     /// Realised P/L (incl. swap) of positions closed since the most recent
-    /// session start. Carried on the observation in the `realised_pnl_12m`
-    /// proto field (name kept for wire/state-layout compatibility).
+    /// session start. Carried on the observation in the `session_realised_pnl`
+    /// proto field and state column.
     fn session_realised_pnl(&self) -> f64 {
         let current_timestamp = self.current_timestamp();
         self.closed_position_window

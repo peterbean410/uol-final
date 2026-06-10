@@ -402,7 +402,7 @@ def run_evaluation_episode(
             "ReferenceData: env_stub.ReferenceData returned",
             extra={"seed": episode_seed},
         )
-        cumulative_pnl = reference.realised_pnl_12m
+        cumulative_pnl = reference.session_realised_pnl
     except Exception:
         # Fall back to using total reward as P&L proxy
         cumulative_pnl = total_reward
