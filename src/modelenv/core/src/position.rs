@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 pub const NANOS_PER_DAY: i64 = 86_400_000_000_000;
 
 /// Number of days in 12 months (approximately 365.25 * 12)
-pub const DAYS_IN_12_MONTHS: i64 = 365 * 12 + 3; // Account for leap years
+// 12 months, inclusive of a leap day. (Was `365 * 12 + 3`; a 12-YEAR window
+// mislabelled as 12 months; models trained before the fix saw the long window.)
+pub const DAYS_IN_12_MONTHS: i64 = 366;
 
 /// Position side (BUY or SELL)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -403,5 +405,32 @@ mod tests {
         // Total P/L should be 1.0 + 0.01 = 1.01
         let current_timestamp = 3000000000000;
         assert_eq!(window.total_realised_pnl_12m(current_timestamp), 1.01);
+    }
+
+    #[test]
+    fn test_closed_position_window_is_12_months_not_12_years() {
+        let closed_at = |close_timestamp_ns: i64| ClosedPosition {
+            position_id: "pos".to_string(),
+            entry_price: 150.0,
+            close_price: 151.0,
+            volume: 1.0,
+            side: Side::Buy,
+            realised_pnl: 1.0,
+            swap: 0.0,
+            open_timestamp_ns: close_timestamp_ns - NANOS_PER_DAY,
+            close_timestamp_ns,
+        };
+        let now = 20 * 366 * NANOS_PER_DAY; // any instant late enough for old closes
+
+        let mut window = ClosedPositionWindow::new();
+        // 300 days old: inside the 12-month window.
+        window.add_closed_position(closed_at(now - 300 * NANOS_PER_DAY));
+        // 2 years old: was wrongly included by the old 12-year constant.
+        window.add_closed_position(closed_at(now - 2 * 366 * NANOS_PER_DAY));
+
+        assert_eq!(window.total_realised_pnl_12m(now), 1.0);
+
+        window.prune_old_positions(now);
+        assert_eq!(window.len(), 1);
     }
 }
