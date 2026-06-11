@@ -1,7 +1,7 @@
-"""DAG: Create end-of-interval price snapshots (M1, M5, M15), 2018 backfill.
+"""DAG: Create end-of-interval price snapshots (M1, M5, M15), 2019 backfill.
 
 Runs hourly every day. On Mon–Fri the run waits for the corresponding
-download task in the download_price_bars_hourly_2018 DAG. On Sat–Sun
+download task in the download_price_bars_hourly_2019 DAG. On Sat–Sun
 (when no download fires) the wait is bypassed so the snapshot chain
 stays unbroken, `create_snapshot` then re-emits the prior snapshot's
 contents under the weekend key.
@@ -30,7 +30,7 @@ _ECR_IMAGE = (
 )
 
 _INTERVALS = ["M1", "M5", "M15"]
-# download_price_bars_hourly_2018 runs Mon–Fri (cron "0 * * * 1-5").
+# download_price_bars_hourly_2019 runs Mon–Fri (cron "0 * * * 1-5").
 # Python weekday(): Mon=0…Sun=6. Skip the wait on Sat and Sun.
 _NO_UPSTREAM_WEEKDAYS = {5, 6}
 
@@ -44,13 +44,13 @@ def _make_branch(wait_task_id: str, skip_task_id: str):
 
 
 with DAG(
-    dag_id="create_eoh_snapshot_2018",
+    dag_id="create_eoh_snapshot_2019",
     default_args=default_args,
-    description="Create FX end-of-interval price snapshots (M1, M5, M15), 2018 backfill",
+    description="Create FX end-of-interval price snapshots (M1, M5, M15), 2019 backfill",
     schedule="0 * * * *",
-    start_date=datetime(2018, 1, 1),
+    start_date=datetime(2019, 1, 1),
     catchup=True,
-    tags=["marketdata", "snapshot", "backfill-2018"],
+    tags=["marketdata", "snapshot", "backfill-2019"],
 ) as dag:
 
     for interval in _INTERVALS:
@@ -64,7 +64,7 @@ with DAG(
 
         wait_for_download = ExternalTaskSensor(
             task_id=wait_id,
-            external_dag_id="download_price_bars_hourly_2018",
+            external_dag_id="download_price_bars_hourly_2019",
             external_task_id=f"download_{interval}_price_bars",
             poke_interval=60,
             timeout=3600,
