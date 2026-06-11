@@ -13,6 +13,7 @@ are committed to ``config/dqnpf_pipeline_config.yaml``.
 Requirements: 21.1
 """
 
+import os
 from pathlib import Path
 from typing import Union
 
@@ -22,6 +23,47 @@ from kfp.dsl import Dataset, Output
 # ECR registry base matches the rest of the platform's images.
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
 COMPONENT_IMAGE = f"{ECR_BASE}/dqnpf-intraday-backtest:latest"
+
+# Compile-time pin onto the spark GPU node that does NOT host the gemma LLM
+# predictors (those live on spark-4214). Requires the multi-arch (arm64)
+# dqnpf-intraday-backtest image from images-chain.yml. Mirrors
+# deepqnetwork/kubeflow/pipeline/dqn_pipeline.py so DQN training/backtest and
+# this screening backtest co-locate and share warm dqn/base layers. Disable
+# with DQNPF_SPARK_NODE=false; override the host with
+# DQNPF_SPARK_NODE_HOSTNAME.
+SPARK_NODE_ENABLED: bool = os.getenv("DQNPF_SPARK_NODE", "true").strip().lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
+SPARK_NODE_HOSTNAME: str = os.getenv(
+    "DQNPF_SPARK_NODE_HOSTNAME", "spark-5790"
+).strip()
+# NoExecute taints carried by the spark nodes.
+SPARK_TAINTS = (
+    ("workload", "ml"),
+    ("arch", "arm64"),
+)
+
+
+def _pin_to_spark(task) -> None:
+    """Pin a task onto the designated spark node (tolerations + hostname)."""
+    if not (SPARK_NODE_ENABLED and SPARK_NODE_HOSTNAME):
+        return
+    for key, value in SPARK_TAINTS:
+        kubernetes.add_toleration(
+            task,
+            key=key,
+            operator="Equal",
+            value=value,
+            effect="NoExecute",
+        )
+    kubernetes.add_node_selector(
+        task,
+        label_key="kubernetes.io/hostname",
+        label_value=SPARK_NODE_HOSTNAME,
+    )
 
 # The in-pod modelenv sidecar runs in Training mode (modelenv's default) and
 # preloads market data on startup. The deepqnetwork warmup DAG populates this
@@ -131,6 +173,9 @@ def dqnpf_intraday_pipeline(
     # Disable caching: every backtest run resolves fresh production checkpoints
     # and emits a versioned artifact, cached output would be a foot-gun.
     task.set_caching_options(enable_caching=False)
+    # Keep the screening backtest off the LLM-serving spark node and co-located
+    # with DQN training/backtest (warm shared dqn/base layers).
+    _pin_to_spark(task)
     # Mount the warm modelenv cache so the in-pod sidecar's training-data
     # preload reads locally instead of downloading from S3 on every run.
     kubernetes.mount_pvc(

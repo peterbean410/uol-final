@@ -2,7 +2,8 @@
 # Extends the shared base image with training-specific dependencies
 # Requirements: 2.1, 2.2, 2.3, 2.4, 2.5
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
+ARG FORECASTER_BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
+FROM ${FORECASTER_BASE_IMAGE}
 
 LABEL component="model_training"
 LABEL description="Train ProbabilisticTransformer with Gaussian NLL loss, supports scratch and finetune modes"

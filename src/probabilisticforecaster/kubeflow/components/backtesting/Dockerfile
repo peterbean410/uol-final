@@ -2,7 +2,8 @@
 # Extends the shared base image with component-specific dependencies
 # Requirements: 1.6, 2.1, 2.2, 2.3, 2.4, 2.5
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
+ARG FORECASTER_BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
+FROM ${FORECASTER_BASE_IMAGE}
 
 LABEL component="backtesting"
 LABEL description="Load model checkpoint and test dataset, run all trading strategies, output performance metrics"

@@ -17,6 +17,7 @@ Requirements: 1.1, 1.2, 1.7, 1.8, 1.9, 6.2, 6.4, 9.4
 """
 
 import json
+import os
 from dataclasses import asdict
 from typing import NamedTuple
 
@@ -24,6 +25,44 @@ from kfp import dsl, kubernetes
 from kfp.dsl import Dataset, Input, Metrics, Model, Output
 
 from probabilisticforecaster.kubeflow.pipeline.config_schema import PipelineConfig
+
+# Compile-time pin for the training + backtesting steps onto the spark GPU
+# node that does NOT host the gemma LLM predictors (those live on spark-4214).
+# Requires the multi-arch (arm64) forecaster images from
+# forecaster-images-build.yml. Mirrors deepqnetwork's dqn_pipeline so all
+# training/backtesting workloads co-locate on one node. Disable with
+# FORECASTER_SPARK_NODE=false; override the host with
+# FORECASTER_SPARK_NODE_HOSTNAME.
+SPARK_NODE_ENABLED: bool = os.getenv(
+    "FORECASTER_SPARK_NODE", "true"
+).strip().lower() in ("true", "1", "yes", "on")
+SPARK_NODE_HOSTNAME: str = os.getenv(
+    "FORECASTER_SPARK_NODE_HOSTNAME", "spark-5790"
+).strip()
+# NoExecute taints carried by the spark nodes.
+SPARK_TAINTS = (
+    ("workload", "ml"),
+    ("arch", "arm64"),
+)
+
+
+def _pin_to_spark(task) -> None:
+    """Pin a task onto the designated spark node (tolerations + hostname)."""
+    if not (SPARK_NODE_ENABLED and SPARK_NODE_HOSTNAME):
+        return
+    for key, value in SPARK_TAINTS:
+        kubernetes.add_toleration(
+            task,
+            key=key,
+            operator="Equal",
+            value=value,
+            effect="NoExecute",
+        )
+    kubernetes.add_node_selector(
+        task,
+        label_key="kubernetes.io/hostname",
+        label_value=SPARK_NODE_HOSTNAME,
+    )
 
 
 def _mount_minio_creds(task) -> None:
@@ -923,6 +962,9 @@ def forecaster_pipeline(
     )
     mt_task.set_retry(num_retries=3)
     _mount_minio_creds(mt_task)
+    # Keep training off the LLM-serving spark node (and off the busy amd64
+    # nodes), co-located with the other training/backtesting workloads.
+    _pin_to_spark(mt_task)
 
     # -----------------------------------------------------------------------
     # Step 3: Model Evaluation
@@ -962,3 +1004,5 @@ def forecaster_pipeline(
     )
     bt_task.set_retry(num_retries=3)
     _mount_minio_creds(bt_task)
+    # Backtesting joins training on the non-LLM spark node.
+    _pin_to_spark(bt_task)

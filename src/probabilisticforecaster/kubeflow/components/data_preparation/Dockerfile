@@ -2,7 +2,8 @@
 # Extends the shared base image with component-specific dependencies
 # Requirements: 2.1, 2.2, 2.3, 2.4, 2.5
 
-FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
+ARG FORECASTER_BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
+FROM ${FORECASTER_BASE_IMAGE}
 
 LABEL component="data_preparation"
 LABEL description="Load S3 parquet data, compute 16 features, build train/test ForexDataset splits"
