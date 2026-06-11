@@ -39,21 +39,27 @@ GPU_ENABLED: bool = os.getenv("DQN_GPU_ENABLED", "true").strip().lower() not in 
     "off",
 )
 
-# Compile-time toggle to pin the GPU training step onto the arm64 Grace-Blackwell
-# "spark" GPU nodes (spark-4214 / spark-5790). Backtest is intentionally left
-# unpinned (CPU-only inference, see where it's wired below).
+# Compile-time toggle to pin training AND backtest onto a spark GPU node.
 #
-# Those nodes carry two NoExecute taints (`workload=ml`, `arch=arm64`) and are
-# the only arm64 + GPU nodes in the cluster, so pinning means: tolerate both
-# taints AND nodeSelect arch=arm64 ∩ nvidia.com/gpu.present=true. Off by default
-#; it requires the multi-arch (arm64) dqn images from images-chain.yml; flip it
-# on at compile time with ``DQN_SPARK_NODE=true`` once those images exist.
-SPARK_NODE_ENABLED: bool = os.getenv("DQN_SPARK_NODE", "false").strip().lower() in (
+# The spark nodes carry two NoExecute taints (`workload=ml`, `arch=arm64`), so
+# pinning means: tolerate both taints AND nodeSelect the target host. On by
+# default now that images-chain.yml publishes multi-arch (arm64) dqn images;
+# compile with ``DQN_SPARK_NODE=false`` to fall back to the amd64 nodes
+# (training unpinned, backtest pinned to ``DQN_BACKTEST_NODE``).
+SPARK_NODE_ENABLED: bool = os.getenv("DQN_SPARK_NODE", "true").strip().lower() in (
     "true",
     "1",
     "yes",
     "on",
 )
+
+# Which spark node to pin to. spark-4214 hosts the LLM inference services
+# (gemma-* predictors), so training/backtest default to the other one,
+# spark-5790, to keep the heavy RL workloads off the serving node. Override at
+# compile time with ``DQN_SPARK_NODE_HOSTNAME``.
+SPARK_NODE_HOSTNAME: str = os.getenv(
+    "DQN_SPARK_NODE_HOSTNAME", "spark-5790"
+).strip()
 
 # Taints on the spark nodes that workloads must tolerate to land there, and the
 # label set that uniquely identifies them (arch=arm64 ∩ GPU present).
@@ -66,8 +72,9 @@ SPARK_NODE_SELECTOR = (
     ("nvidia.com/gpu.present", "true"),
 )
 
-# Compile-time pin for the backtest step's node, to avoid the cold image-pull
-# tax. The backtest image is ~3 GB; left unpinned the pod lands on whichever
+# Fallback compile-time pin for the backtest step's node when spark pinning is
+# disabled (DQN_SPARK_NODE=false), to avoid the cold image-pull tax. The
+# backtest image is ~3 GB; left unpinned the pod lands on whichever
 # untainted amd64 node the scheduler picks, and any node that has never pulled
 # the image (or only has an older base) does a full multi-GB cold pull (~40 min
 # on this cluster's uplink to ECR). Pinning to one stable node keeps its layers
@@ -110,12 +117,14 @@ def _mount_minio_creds(task) -> None:
 
 
 def _pin_to_spark(task) -> None:
-    """Pin a task onto the arm64 Grace-Blackwell spark GPU nodes.
+    """Pin a task onto the designated spark GPU node (``SPARK_NODE_HOSTNAME``).
 
-    No-op unless ``SPARK_NODE_ENABLED`` (``DQN_SPARK_NODE=true`` at compile time).
-    Adds a toleration for each spark NoExecute taint and a nodeSelector entry for
-    each identifying label; the selector labels AND together, so the pod is
-    eligible only on nodes matching the full set (the two spark nodes).
+    No-op unless ``SPARK_NODE_ENABLED``. Adds a toleration for each spark
+    NoExecute taint plus a hostname nodeSelector when ``SPARK_NODE_HOSTNAME``
+    is set (the default, spark-5790, keeps training/backtest off spark-4214
+    where the gemma LLM predictors live). With an empty hostname it falls back
+    to the identifying label set (arch=arm64 ∩ GPU present), making the pod
+    eligible on either spark node.
 
     Requires the multi-arch (arm64) dqn images; an amd64-only image will fail to
     exec on these nodes regardless of scheduling.
@@ -130,6 +139,13 @@ def _pin_to_spark(task) -> None:
             value=value,
             effect="NoExecute",
         )
+    if SPARK_NODE_HOSTNAME:
+        kubernetes.add_node_selector(
+            task,
+            label_key="kubernetes.io/hostname",
+            label_value=SPARK_NODE_HOSTNAME,
+        )
+        return
     for label_key, label_value in SPARK_NODE_SELECTOR:
         kubernetes.add_node_selector(
             task,
@@ -881,15 +897,18 @@ def dqn_pipeline(
     # Backtest reads the checkpoint URI from training and writes its own
     # metrics URI; both now URI-route via deepqnetwork.artifact_io.
     _mount_minio_creds(backtest_task)
-    # Backtest is batch-1 greedy inference on a small Q-network gated by per-step
-    # gRPC round-trips to modelenv, so it gains nothing from a GPU and is NOT
-    # pinned to spark; that keeps the scarce spark GPUs free for training (the
-    # multi-arch image would run on arm64, but the spark taints exclude it). See
-    # T-12.1-10. It IS pinned to a single stable amd64 node, however, to avoid the
-    # cold ~3 GB image-pull tax that hit when the scheduler bounced it onto a node
-    # that had never pulled the image (full multi-GB pull, ~40 min). See T-12.1-11;
-    # disable with DQN_BACKTEST_NODE="".
-    _pin_backtest_node(backtest_task)
+    # Backtest requests no GPU (batch-1 greedy inference gated by per-step gRPC
+    # round-trips to modelenv), but it IS pinned to the same spark node as
+    # training (spark-5790 by default): co-locating training and backtest on
+    # one stable node keeps the LLM-serving spark node (spark-4214) free, lets
+    # backtest reuse the dqn/base layers training just pulled, and avoids the
+    # cold ~3 GB image-pull tax (~40 min) of bouncing between nodes (T-12.1-11).
+    # With DQN_SPARK_NODE=false it falls back to the amd64 pin
+    # (DQN_BACKTEST_NODE, default dualxeonpc; disable with DQN_BACKTEST_NODE="").
+    if SPARK_NODE_ENABLED:
+        _pin_to_spark(backtest_task)
+    else:
+        _pin_backtest_node(backtest_task)
 
     # -----------------------------------------------------------------------
     # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)
