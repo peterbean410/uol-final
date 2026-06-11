@@ -154,6 +154,29 @@ def _pin_to_spark(task) -> None:
         )
 
 
+def _enable_gpu(task) -> None:
+    """Give a task GPU access.
+
+    On the spark node the containerd default runtime is ``nvidia`` (set
+    node-side), so a pod gets the GPU just by carrying the NVIDIA env vars;
+    no ``nvidia.com/gpu`` resource request, which lets the single GPU be
+    shared across pods (the same pattern the gemma LLM predictors use).
+
+    When spark pinning is disabled (``DQN_SPARK_NODE=false``) the task falls
+    back to the amd64 GPU nodes, whose default runtime is plain runc, so it
+    must request the device explicitly. KFP v2 needs BOTH the count and the
+    accelerator *type*: ``set_accelerator_limit`` alone emits a count with no
+    resource name, which the driver silently drops (pod trains on CPU);
+    ``set_accelerator_type`` supplies the ``nvidia.com/gpu`` resource name.
+    """
+    if SPARK_NODE_ENABLED:
+        task.set_env_variable("NVIDIA_VISIBLE_DEVICES", "all")
+        task.set_env_variable("NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
+    else:
+        task.set_accelerator_limit(1)
+        task.set_accelerator_type("nvidia.com/gpu")
+
+
 def _pin_backtest_node(task) -> None:
     """Pin a task onto a single stable amd64 node to keep its (~3 GB) image
     layers warm across runs, avoiding the cold image-pull tax.
@@ -852,13 +875,7 @@ def dqn_pipeline(
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
     if GPU_ENABLED:
-        # KFP v2 needs BOTH the count and the accelerator *type*: set_gpu_limit/
-        # set_accelerator_limit alone emits an accelerator count with no resource
-        # name, which the driver silently drops; the pod then never gets an
-        # nvidia.com/gpu limit and trains on CPU. set_accelerator_type supplies
-        # the resource name so the limit actually reaches the pod.
-        training_task.set_accelerator_limit(1)
-        training_task.set_accelerator_type("nvidia.com/gpu")
+        _enable_gpu(training_task)
     kubernetes.mount_pvc(
         training_task,
         pvc_name=MODELENV_CACHE_PVC,
