@@ -38,6 +38,7 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_lambda(config.reward_lambda)
     .with_reward_action_penalty(config.reward_action_penalty)
     .with_reward_holding_penalty(config.reward_holding_penalty)
+    .with_reward_clip(config.reward_clip)
     .with_disable_hedging(config.disable_hedging)
     .with_leverage(config.leverage)
     .with_trade_log(config.trade_log_path.clone());

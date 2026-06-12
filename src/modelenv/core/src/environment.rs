@@ -176,6 +176,11 @@ pub struct Environment {
     // normalisation, this preserves the relative scale of large vs small moves
     // so the agent can distinguish a 50-pip loss from a 1-pip loss.
     reward_scale: f64,
+    // Symmetric clamp on the final (post-scale) per-step reward. A defensive
+    // rail against data artifacts (synthetic M1-derived ticks with bid=low /
+    // ask=high, or price gaps) producing an oversized single-step mark; it
+    // does NOT reshape normal signal. <= 0 disables the clamp.
+    reward_clip: f64,
     disable_hedging: bool,
     // Leverage ratio for margin calculation: max_total_margin = total_notional / leverage.
     leverage: f64,
@@ -268,10 +273,11 @@ impl Environment {
             trading_session_start_hour: None,
             trading_session_end_hour: None,
             broker_gateway: None,
-            reward_lambda: 1.0, // Default asymmetric drawdown penalty coefficient
+            reward_lambda: 0.5, // Linear downside weight: losses weigh (1+λ)=1.5x gains
             reward_action_penalty: 0.001, // Default action penalty (scaled to USD/JPY spread)
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
             reward_scale: 0.01, // 1 pip = 0.01 price units for USDJPY; tune for other CCYs
+            reward_clip: 150.0, // Artifact rail; bounds a 1-yen (100-pip) step at λ=0.5
             disable_hedging: true,
             leverage: 200.0,
             prev_total_equity: None,
@@ -367,6 +373,11 @@ impl Environment {
 
     pub fn with_reward_scale(mut self, reward_scale: f64) -> Self {
         self.reward_scale = reward_scale;
+        self
+    }
+
+    pub fn with_reward_clip(mut self, reward_clip: f64) -> Self {
+        self.reward_clip = reward_clip;
         self
     }
 
@@ -1270,11 +1281,13 @@ impl Environment {
 
     /// Calculate reward based on action.
     ///
-    /// The raw monetary step PnL (delta equity minus penalties) is divided by
-    /// ``reward_scale`` (a fixed, pair-specific constant; default 0.01 = 1 pip
-    /// for USDJPY). Unlike the old per-regime z-score + clip regime, this
-    /// preserves the relative scale of large vs small moves so the DQN can
-    /// distinguish a 50-pip loss from a 1-pip loss on the training signal.
+    /// `reward = clamp((ΔV_t − asymmetric_penalty − action_penalty −
+    /// holding_penalty) / reward_scale, ±reward_clip)`, where the asymmetric
+    /// penalty is `reward_lambda · |ΔV_t|` on losing steps (linear loss
+    /// aversion: a loss weighs (1+λ)× an equal gain). Dividing by
+    /// ``reward_scale`` (default 0.01 = 1 pip for USDJPY) expresses the reward
+    /// in pips and keeps pairs comparable; the clamp is a defensive rail
+    /// against data artifacts.
     fn calculate_reward(&mut self, action: &Action) -> Result<f64> {
         // Get current timestamp
         let current_timestamp = self.current_timestamp();
@@ -1303,10 +1316,18 @@ impl Environment {
         // observation can report monetary PnL alongside the scaled reward.
         self.last_raw_pnl_delta = delta_v_t;
 
-        // Calculate asymmetric drawdown penalty
-        // Only apply penalty when delta_V_t is negative
+        // Asymmetric (loss-averse) penalty, LINEAR in the loss size, applied
+        // only when delta_V_t is negative. A losing step nets
+        // `(1 + reward_lambda) * delta_v_t`, i.e. losses weigh (1+λ)x an equal
+        // gain; a fixed, bounded loss-aversion ratio.
+        //
+        // This was `reward_lambda * delta_v_t²` (squared). That made the
+        // aversion ratio grow without bound with the move size (51x at a 50-unit
+        // step) and mixed yen with yen², so per-step reward spanned millions and
+        // the value-maximising policy collapsed to "never trade". Linear keeps
+        // loss aversion, stays dimensionally consistent, and is Q-fittable.
         let asymmetric_penalty = if delta_v_t < 0.0 {
-            self.reward_lambda * (delta_v_t.abs()).powf(2.0)
+            self.reward_lambda * delta_v_t.abs()
         } else {
             0.0
         };
@@ -1343,7 +1364,16 @@ impl Environment {
         // scale, so 1 pip ≈ 1 reward unit (for USDJPY at reward_scale=0.01).
         // Penalties share the scale; they are measured in the same units.
         let raw = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
-        Ok(raw / self.reward_scale)
+        let reward = raw / self.reward_scale;
+
+        // Defensive clamp on the final per-step reward (artifact rail; <= 0
+        // disables). Loose enough not to touch realistic moves, so the
+        // loss-aversion asymmetry is preserved across the normal range.
+        if self.reward_clip > 0.0 {
+            Ok(reward.clamp(-self.reward_clip, self.reward_clip))
+        } else {
+            Ok(reward)
+        }
     }
 
     /// Apply an action to the environment
@@ -2732,6 +2762,54 @@ mod tests {
         .with_reward_holding_penalty(0.0002);
 
         assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 0.01));
+    }
+
+    /// Reward is LINEAR in the loss (not squared) and applies the clamp.
+    #[test]
+    fn test_reward_linear_asymmetric_penalty_and_clip() {
+        use crate::position::Side;
+
+        let make = |unrealised: f64, clip: f64| {
+            let mut env = Environment::new(
+                Mode::Training,
+                "USDJPY".to_string(),
+                "s3://unused".to_string(),
+            );
+            // Isolate the asymmetric term: zero the other penalties, scale 0.01,
+            // lambda 0.5 (losses weigh 1.5x), prev equity 0 so delta == unrealised.
+            env.reward_lambda = 0.5;
+            env.reward_action_penalty = 0.0;
+            env.reward_holding_penalty = 0.0;
+            env.reward_scale = 0.01;
+            env.reward_clip = clip;
+            env.prev_total_equity = Some(0.0);
+            let mut pos = Position::new("p".to_string(), 150.0, 0.0, 1.0, Side::Buy, 0);
+            pos.unrealised_pnl = unrealised;
+            env.positions.push(pos);
+            env
+        };
+        let hold = Action {
+            action: ActionType::ActionHold as i32,
+            client_order_id: "h".to_string(),
+        };
+
+        // Gain: delta=+1.0 → no penalty → +1.0/0.01 = +100.
+        let mut env = make(1.0, 0.0);
+        assert!((env.calculate_reward(&hold).unwrap() - 100.0).abs() < 1e-9);
+
+        // Loss: delta=-1.0 → (-1.0 - 0.5*1.0)/0.01 = -150 (LINEAR; the old
+        // squared form would have given (-1 - 1)/0.01 = -200).
+        let mut env = make(-1.0, 0.0);
+        assert!((env.calculate_reward(&hold).unwrap() - (-150.0)).abs() < 1e-9);
+
+        // Larger loss stays proportional: delta=-2.0 → (-2 - 1)/0.01 = -300
+        // (linear); squared would have been (-2 - 4)/0.01 = -600.
+        let mut env = make(-2.0, 0.0);
+        assert!((env.calculate_reward(&hold).unwrap() - (-300.0)).abs() < 1e-9);
+
+        // Clip: same -300 reward clamped to the ±150 rail.
+        let mut env = make(-2.0, 150.0);
+        assert!((env.calculate_reward(&hold).unwrap() - (-150.0)).abs() < 1e-9);
     }
 
     fn write_test_parquet_for_interval(

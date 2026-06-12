@@ -31,7 +31,8 @@ class DQNConfig:
     hour_of_day_end: int = 23
 
     # Agent
-    gamma: float = 0.99
+    # Horizon ~1000 steps to span the full 1440-step session (see config.yaml).
+    gamma: float = 0.999
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
     epsilon_decay_steps: int = 0  # 0 = auto: train() derives the horizon from the total step budget

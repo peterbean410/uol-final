@@ -22,7 +22,7 @@ class TestDQNConfig:
 
     def test_default_agent_fields(self):
         config = DQNConfig()
-        assert config.gamma == 0.99
+        assert config.gamma == 0.999
         assert config.epsilon_start == 1.0
         assert config.epsilon_end == 0.01
         assert config.epsilon_decay_steps == 50_000
@@ -117,7 +117,7 @@ class TestLoadConfig:
     def test_missing_yaml_uses_defaults(self):
         config = load_config(["--config", "/nonexistent/path.yaml"])
         assert config.symbol == "USDJPY"
-        assert config.gamma == 0.99
+        assert config.gamma == 0.999
 
     def test_live_mode_requires_checkpoint(self):
         with pytest.raises(ValueError, match="Live mode requires"):
@@ -158,7 +158,7 @@ class TestLoadConfig:
         """Loading with no --config uses deepqnetwork/config.yaml."""
         config = load_config([])
         assert config.symbol == "USDJPY"
-        assert config.gamma == 0.99
+        assert config.gamma == 0.999
 
     def test_train_mode_without_checkpoint_succeeds(self):
         config = load_config(["--mode", "train"])

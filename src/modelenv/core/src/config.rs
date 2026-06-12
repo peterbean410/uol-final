@@ -163,6 +163,8 @@ pub struct Config {
     pub reward_lambda: f64,
     pub reward_action_penalty: f64,
     pub reward_holding_penalty: f64,
+    /// Symmetric clamp on the final per-step reward (artifact rail; <= 0 = off).
+    pub reward_clip: f64,
     /// When true, close opposite-side positions before opening new ones (no hedging)
     pub disable_hedging: bool,
     /// Leverage ratio for margin calculation (margin = notional / leverage).
@@ -227,9 +229,10 @@ impl Default for Config {
             local_cache_dir: DEFAULT_LOCAL_CACHE_DIR.to_string(),
             symbol: "USDJPY".to_string(),
             broker_gateway: BrokerGatewayConfig::default(),
-            reward_lambda: 1.0,
+            reward_lambda: 0.5,
             reward_action_penalty: 0.001,
             reward_holding_penalty: 1e-6,
+            reward_clip: 150.0,
             disable_hedging: true,
             leverage: 200.0,
             training_date_start: None,
@@ -407,6 +410,14 @@ impl Config {
                         i += 2;
                     } else {
                         return Err(anyhow::anyhow!("--reward-action-penalty requires a value"));
+                    }
+                }
+                "--reward-clip" => {
+                    if i + 1 < args.len() {
+                        self.reward_clip = args[i + 1].parse()?;
+                        i += 2;
+                    } else {
+                        return Err(anyhow::anyhow!("--reward-clip requires a value"));
                     }
                 }
                 "--reward-holding-penalty" => {
@@ -619,6 +630,12 @@ impl Config {
         {
             if let Ok(value) = reward_action_penalty_env.parse::<f64>() {
                 self.reward_action_penalty = value;
+            }
+        }
+
+        if let Some(reward_clip_env) = Self::non_empty_env(env_get, "MODELENV_REWARD_CLIP") {
+            if let Ok(value) = reward_clip_env.parse::<f64>() {
+                self.reward_clip = value;
             }
         }
 
@@ -885,9 +902,10 @@ impl Config {
         }
         info!("Local Cache Dir: {}", self.local_cache_dir);
         info!("Symbol: {}", self.symbol);
-        info!("Reward Lambda: {}", self.reward_lambda);
+        info!("Reward Lambda: {} (linear loss-aversion weight)", self.reward_lambda);
         info!("Reward Action Penalty: {}", self.reward_action_penalty);
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
+        info!("Reward Clip: {} (per-step clamp; <=0 = off)", self.reward_clip);
         info!("Disable Hedging: {}", self.disable_hedging);
         info!("Leverage: {}:1", self.leverage);
         match self.session_liquidation_hour_end() {
@@ -1022,6 +1040,7 @@ fn print_help() {
     println!("  MODELENV_REWARD_LAMBDA     Same as --reward-lambda");
     println!("  MODELENV_REWARD_ACTION_PENALTY   Same as --reward-action-penalty");
     println!("  MODELENV_REWARD_HOLDING_PENALTY  Same as --reward-holding-penalty");
+    println!("  MODELENV_REWARD_CLIP             Same as --reward-clip (<=0 disables)");
     println!("  MODELENV_LEVERAGE              Same as --leverage");
     println!("  MODELENV_TRADE_LOG            Same as --trade-log");
     println!("  MODELENV_SWAP_RATE_LONG       Same as --swap-rate-long");
