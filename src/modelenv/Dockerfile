@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 # Multi-stage build for modelenv-server (Rust + tonic gRPC).
 #
-# Rebuild marker: bbb2964-multiarch-latest (force a full chain rebuild so
-# modelenv:latest is re-published as a multi-arch (amd64+arm64) manifest; the
-# prior latest was amd64-only, which broke the arm64 dqn/base fallback).
+# Rebuild marker: 283c5a5-reward-retrigger (force a full chain rebuild; the
+# amd64 images-chain job flaked on 283c5a5, so :latest was never re-merged
+# with the linear-reward modelenv + gamma=0.999 dqn images for the retrain).
 #
 # The builder pins itself to the *build* platform (BUILDPLATFORM) and
 # cross-compiles to the requested TARGETARCH, instead of running the whole Rust
