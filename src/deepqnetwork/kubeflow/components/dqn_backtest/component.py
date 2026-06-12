@@ -540,24 +540,68 @@ def degradation_gate(
             f"while production={prod_pnl:.6f} > 0"
         )
 
-    # (c) Absolute Sharpe floor (must beat buy & hold baseline from thesis)
-    if current_metrics.sharpe_ratio < sharpe_absolute_threshold:
-        reasons.append(
-            f"Sharpe below absolute floor: current={current_metrics.sharpe_ratio:.4f} < "
-            f"absolute_threshold={sharpe_absolute_threshold}"
+    # (c)+(d) Absolute floors, candidate-only, ALSO enforced at bootstrap.
+    reasons.extend(
+        absolute_floor_reasons(
+            current_metrics,
+            sharpe_absolute_threshold=sharpe_absolute_threshold,
+            pnl_absolute_threshold=pnl_absolute_threshold,
         )
-
-    # (d) Absolute P&L floor (must be profitable)
-    if current_metrics.cumulative_pnl <= pnl_absolute_threshold:
-        reasons.append(
-            f"P&L below absolute floor: current={current_metrics.cumulative_pnl:.6f} <= "
-            f"absolute_threshold={pnl_absolute_threshold}"
-        )
+    )
 
     if reasons:
         return False, "; ".join(reasons)
 
     return True, "All metrics within acceptable thresholds"
+
+
+def absolute_floor_reasons(
+    metrics: BacktestMetrics,
+    sharpe_absolute_threshold: float = DEFAULT_SHARPE_ABSOLUTE_THRESHOLD,
+    pnl_absolute_threshold: float = DEFAULT_PNL_ABSOLUTE_THRESHOLD,
+) -> list[str]:
+    """Candidate-only absolute-floor failures (independent of any production model).
+
+    A model must clear these regardless of whether a production baseline exists,
+    so they are enforced both by :func:`degradation_gate` (relative path) and by
+    :func:`absolute_floor_gate` (bootstrap path). Empty list = both floors cleared.
+    """
+    reasons = []
+    # Sharpe floor (must beat buy & hold baseline from thesis)
+    if metrics.sharpe_ratio < sharpe_absolute_threshold:
+        reasons.append(
+            f"Sharpe below absolute floor: current={metrics.sharpe_ratio:.4f} < "
+            f"absolute_threshold={sharpe_absolute_threshold}"
+        )
+    # P&L floor (must be profitable)
+    if metrics.cumulative_pnl <= pnl_absolute_threshold:
+        reasons.append(
+            f"P&L below absolute floor: current={metrics.cumulative_pnl:.6f} <= "
+            f"absolute_threshold={pnl_absolute_threshold}"
+        )
+    return reasons
+
+
+def absolute_floor_gate(
+    metrics: BacktestMetrics,
+    sharpe_absolute_threshold: float = DEFAULT_SHARPE_ABSOLUTE_THRESHOLD,
+    pnl_absolute_threshold: float = DEFAULT_PNL_ABSOLUTE_THRESHOLD,
+) -> tuple[bool, str]:
+    """The gate applied when there is no production baseline (bootstrap / first
+    deployment): run the absolute floors only.
+
+    Without this, the bootstrap path promoted ANY model, including degenerate
+    ones (e.g. Sharpe ≈ -2e16, P&L 0), because the absolute floors lived only
+    inside the relative comparison that bootstrap skipped.
+    """
+    reasons = absolute_floor_reasons(
+        metrics,
+        sharpe_absolute_threshold=sharpe_absolute_threshold,
+        pnl_absolute_threshold=pnl_absolute_threshold,
+    )
+    if reasons:
+        return False, "; ".join(reasons)
+    return True, "Absolute floors passed (no production baseline to compare)"
 
 
 def download_checkpoint_from_s3(
@@ -920,18 +964,39 @@ def main() -> None:
     )
 
     # Step 7: Degradation gate
+    #
+    # The absolute floors (Sharpe >= threshold, P&L > 0) ALWAYS apply; a model
+    # with sub-floor metrics must never be promoted, production baseline or not.
+    # "Bootstrap" only means "no production baseline to compare against", so it
+    # skips the RELATIVE checks; it does NOT skip the absolute floors. (Before
+    # this, bootstrap skipped the whole gate, so a degenerate model, e.g.
+    # Sharpe ~ -2e16, P&L 0, auto-promoted.) gate_skipped now means "relative
+    # checks skipped", and is only meaningful when the floors passed.
+    def _bootstrap_gate(note: str) -> tuple[bool, bool, str]:
+        passed, reason = absolute_floor_gate(
+            metrics,
+            sharpe_absolute_threshold=args.sharpe_absolute_threshold,
+            pnl_absolute_threshold=args.pnl_absolute_threshold,
+        )
+        if passed:
+            return True, True, f"{note}; absolute floors passed, auto-promoting"
+        return False, False, f"{note}; blocked by absolute floor: {reason}"
+
     gate_passed = True
     gate_skipped = False
     gate_reason = ""
 
     if not args.production_metrics_path:
-        # Bootstrap: no production model → skip gate, auto-promote
-        gate_passed = True
-        gate_skipped = True
-        gate_reason = "Bootstrap: no production model exists, auto-promoting"
+        gate_passed, gate_skipped, gate_reason = _bootstrap_gate(
+            "Bootstrap: no production model"
+        )
         logger.info(
-            "Degradation gate skipped (bootstrap (no production model)",
-            extra={"gate_passed": True, "gate_skipped": True},
+            "Degradation gate (bootstrap (absolute floors only)",
+            extra={
+                "gate_passed": gate_passed,
+                "gate_skipped": gate_skipped,
+                "gate_reason": gate_reason,
+            },
         )
     else:
         # Load production metrics and compare
@@ -954,18 +1019,18 @@ def main() -> None:
                 },
             )
         except FileNotFoundError:
-            # Production metrics file doesn't exist) treat as bootstrap
-            gate_passed = True
-            gate_skipped = True
-            gate_reason = (
-                "Production metrics file not found, treating as bootstrap"
+            # Production metrics file doesn't exist) treat as bootstrap, but
+            # still enforce the absolute floors.
+            gate_passed, gate_skipped, gate_reason = _bootstrap_gate(
+                "Production metrics file not found"
             )
             logger.warning(
-                "Production metrics not found, skipping gate",
+                "Production metrics not found; applying absolute floors only",
                 extra={
                     "production_metrics_path": args.production_metrics_path,
-                    "gate_passed": True,
-                    "gate_skipped": True,
+                    "gate_passed": gate_passed,
+                    "gate_skipped": gate_skipped,
+                    "gate_reason": gate_reason,
                 },
             )
 

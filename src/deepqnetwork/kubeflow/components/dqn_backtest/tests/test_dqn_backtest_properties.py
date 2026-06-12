@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 from deepqnetwork.kubeflow.components.dqn_backtest.component import (
     BacktestMetrics,
     EpisodeResult,
+    absolute_floor_gate,
     compute_backtest_metrics,
     degradation_gate,
 )
@@ -356,3 +357,47 @@ class TestDegradationGateBlocksPromotion:
             f"Gate should have blocked promotion due to P&L <= 0 absolute. "
             f"current_pnl={current_pnl:.6f}, threshold=0.0, reason={reason}"
         )
+
+
+class TestBootstrapAbsoluteFloor:
+    """The bootstrap path (no production baseline) must still enforce the
+    absolute floors, regression for the gate that auto-promoted a degenerate
+    model (Sharpe ~ -2e16, P&L 0)."""
+
+    def _metrics(self, sharpe: float, pnl: float) -> BacktestMetrics:
+        return BacktestMetrics(
+            cumulative_pnl=pnl,
+            sharpe_ratio=sharpe,
+            max_drawdown=0.0,
+            win_rate=0.5,
+            avg_episode_reward=1.0,
+            avg_episode_length=1000.0,
+        )
+
+    def test_bootstrap_blocks_degenerate_sharpe(self):
+        passed, reason = absolute_floor_gate(
+            self._metrics(sharpe=-2.13e16, pnl=0.0),
+            sharpe_absolute_threshold=1.0,
+            pnl_absolute_threshold=0.0,
+        )
+        assert passed is False
+        assert "Sharpe below absolute floor" in reason
+        assert "P&L below absolute floor" in reason
+
+    def test_bootstrap_blocks_zero_pnl_even_with_ok_sharpe(self):
+        passed, reason = absolute_floor_gate(
+            self._metrics(sharpe=2.0, pnl=0.0),
+            sharpe_absolute_threshold=1.0,
+            pnl_absolute_threshold=0.0,
+        )
+        assert passed is False
+        assert "P&L below absolute floor" in reason
+
+    def test_bootstrap_passes_when_floors_cleared(self):
+        passed, reason = absolute_floor_gate(
+            self._metrics(sharpe=1.5, pnl=10.0),
+            sharpe_absolute_threshold=1.0,
+            pnl_absolute_threshold=0.0,
+        )
+        assert passed is True
+        assert "Absolute floors passed" in reason
