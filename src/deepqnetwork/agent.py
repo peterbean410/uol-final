@@ -21,6 +21,34 @@ from deepqnetwork.replay_buffer import ReplayBuffer
 logger = logging.getLogger(__name__)
 
 
+class _RunningRMS:
+    """Exact count-based running root-mean-square of a scalar stream.
+
+    Used to scale rewards to ~unit magnitude for stable value learning,
+    independent of the reward's unit (a pip is 0.01, a yen 1.0; an arbitrary
+    100x) and of the episode horizon. It only **scales** (divides by the RMS),
+    never centers, so the sign of the reward (profit vs loss) is preserved.
+    """
+
+    def __init__(self) -> None:
+        self._sum_sq = 0.0
+        self._count = 0
+
+    def update(self, x: torch.Tensor) -> None:
+        self._sum_sq += float((x.double() ** 2).sum().item())
+        self._count += int(x.numel())
+
+    @property
+    def rms(self) -> float:
+        if self._count == 0:
+            return 1.0
+        return (self._sum_sq / self._count) ** 0.5
+
+    @property
+    def count(self) -> int:
+        return self._count
+
+
 class DQNAgent:
     """Deep Q-Network agent for training.
 
@@ -47,6 +75,10 @@ class DQNAgent:
         # Epsilon schedule state
         self.epsilon = config.epsilon_start
         self.step_count = 0
+
+        # Adaptive reward normalisation (scale-only) for value stability.
+        self.reward_rms = _RunningRMS()
+        self._reward_norm_warmup = 1024  # samples before scaling kicks in
 
         # Build Q-Network (online)
         self.q_network = QNetwork(
@@ -164,6 +196,19 @@ class DQNAgent:
         #   y = r + γ * Q_target(s', argmax_a' Q_online(s', a')) * (1 - done)
         # Double DQN eliminates the maximisation bias of vanilla DQN by
         # decoupling action selection (online net) from evaluation (target net).
+        # Adaptive reward normalisation: scale rewards to ~unit RMS so the value
+        # targets stay O(tens) regardless of the reward unit (pip/yen) and the
+        # ~1440-step x gamma=0.999 horizon, large targets destabilise DQN value
+        # learning. Scale only (never center), so reward sign (profit vs loss)
+        # is preserved; a warmup avoids dividing by a noisy early estimate.
+        # Action selection is argmax(Q) and thus scale-invariant, so the
+        # deployed policy (advisor/backtest) is unchanged by this.
+        norm_rewards = rewards
+        if self.config.reward_normalize:
+            self.reward_rms.update(rewards)
+            if self.reward_rms.count >= self._reward_norm_warmup:
+                norm_rewards = rewards / (self.reward_rms.rms + 1e-8)
+
         with torch.no_grad():
             if self.config.use_double:
                 # Select the best action using the online (q_) network
@@ -175,7 +220,7 @@ class DQNAgent:
             else:
                 next_q_values = self.target_network(next_states)
                 max_next_q = next_q_values.max(dim=1).values
-            targets = rewards + self.config.gamma * max_next_q * (1.0 - dones)
+            targets = norm_rewards + self.config.gamma * max_next_q * (1.0 - dones)
 
         # Compute loss
         loss = self.loss_fn(q_values_for_actions, targets)

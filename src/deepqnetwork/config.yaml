@@ -33,6 +33,7 @@ eps: 0.00000001
 weight_decay: 0.0
 grad_clip_norm: 10.0
 loss_function: "huber"
+reward_normalize: true   # scale rewards by running RMS (sign-preserving) for value stability
 
 # Training
 # Episode-count knobs are mode-specific and mutually exclusive, set at most the

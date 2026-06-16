@@ -55,6 +55,7 @@ class DQNConfig:
     grad_clip_norm: float = 10.0
     loss_function: str = "huber"
     use_double: bool = True         # Double DQN: use online net for action selection, target for eval
+    reward_normalize: bool = True   # scale rewards by a running RMS (sign-preserving) for value stability
 
     # Training
     # Episode-count knobs are mode-specific and mutually exclusive; both default
@@ -199,6 +200,7 @@ _CLI_TO_CONFIG = {
     "progress_log_interval": "progress_log_interval",
     "loss_function": "loss_function",
     "use_double": "use_double",
+    "reward_normalize": "reward_normalize",
 }
 
 
