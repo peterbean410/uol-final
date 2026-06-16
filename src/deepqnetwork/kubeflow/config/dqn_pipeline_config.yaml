@@ -10,7 +10,12 @@ episode_end_ts: 0
 step_size_seconds: 5
 
 # Agent hyperparameters
-gamma: 0.99
+# Horizon 1/(1-gamma) ~= 1000 steps to span most of the 1440-step (24h, 60s)
+# session incl. end-of-session liquidation. Was 0.99 (~100-step horizon, too
+# myopic). NOTE: this is the file the KFP pipeline reads (component.py loads
+# kubeflow/config/dqn_pipeline_config.yaml); deepqnetwork/config.yaml is the
+# CLI/local default and must be kept in sync.
+gamma: 0.999
 epsilon_start: 1.0
 epsilon_end: 0.05            # sustained exploration floor (~5% random actions throughout)
 epsilon_decay_steps: 0       # 0 = auto: anneal over the full step budget (total_episodes x steps/episode)
