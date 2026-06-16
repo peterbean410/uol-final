@@ -180,6 +180,12 @@ impl ClosedPosition {
 #[derive(Debug, Clone, Default)]
 pub struct ClosedPositionWindow {
     closed_positions: Vec<ClosedPosition>,
+    // Running sum of total_pnl() over `closed_positions`, kept in sync on
+    // add/prune. Lets `total_realised_pnl()` (called every step by the reward)
+    // be O(1) instead of re-summing the whole list; the latter was an
+    // O(closed) per-step hot path that made the env step time grow with the
+    // number of trades in an episode.
+    running_total: f64,
 }
 
 impl ClosedPositionWindow {
@@ -187,11 +193,13 @@ impl ClosedPositionWindow {
     pub fn new() -> Self {
         ClosedPositionWindow {
             closed_positions: Vec::new(),
+            running_total: 0.0,
         }
     }
 
     /// Add a closed position to the window
     pub fn add_closed_position(&mut self, closed_position: ClosedPosition) {
+        self.running_total += closed_position.total_pnl();
         self.closed_positions.push(closed_position);
     }
 
@@ -199,25 +207,38 @@ impl ClosedPositionWindow {
     /// all positions closed since the window was last cleared (episode start
     /// in training). Used by the reward's equity delta, which must stay
     /// cumulative: a session-scoped sum would make equity drop at each
-    /// session-start crossing and inject a spurious negative reward.
+    /// session-start crossing and inject a spurious negative reward. O(1) via
+    /// the maintained running total.
     pub fn total_realised_pnl(&self) -> f64 {
-        self.closed_positions.iter().map(|p| p.total_pnl()).sum()
+        self.running_total
     }
 
     /// Total realised P/L (including swap) of positions closed at or after
-    /// `from_timestamp_ns` (the session-start cutoff).
+    /// `from_timestamp_ns` (the session-start cutoff). Closed positions are
+    /// appended in close-time order, so when the oldest is already at/after the
+    /// cutoff (the common case in training, where the window is cleared each
+    /// episode and every close is within the session) this is the O(1) running
+    /// total; otherwise it falls back to an O(n) filtered sum.
     pub fn total_realised_pnl_since(&self, from_timestamp_ns: i64) -> f64 {
-        self.closed_positions
-            .iter()
-            .filter(|p| p.close_timestamp_ns >= from_timestamp_ns)
-            .map(|p| p.total_pnl())
-            .sum()
+        match self.closed_positions.first() {
+            Some(oldest) if oldest.close_timestamp_ns >= from_timestamp_ns => self.running_total,
+            None => 0.0,
+            _ => self
+                .closed_positions
+                .iter()
+                .filter(|p| p.close_timestamp_ns >= from_timestamp_ns)
+                .map(|p| p.total_pnl())
+                .sum(),
+        }
     }
 
     /// Remove positions closed before `from_timestamp_ns`.
     pub fn prune_closed_before(&mut self, from_timestamp_ns: i64) {
         self.closed_positions
             .retain(|p| p.close_timestamp_ns >= from_timestamp_ns);
+        // Recompute the running total from the survivors (prune is rare (
+        // never in the per-step hot path) so the O(n) recompute is fine).
+        self.running_total = self.closed_positions.iter().map(|p| p.total_pnl()).sum();
     }
 
     /// Get the number of closed positions in the window
@@ -423,16 +444,21 @@ mod tests {
         let session_start = 100 * NANOS_PER_DAY; // arbitrary session-start cutoff
 
         let mut window = ClosedPositionWindow::new();
+        // Added in close-time order (the real invariant: a position can only
+        // close at-or-after the cursor, so closes are monotonic).
+        // Closed in a previous session: excluded by the cutoff.
+        window.add_closed_position(closed_at(session_start - 1));
         // Closed exactly at the session start: included (>= cutoff).
         window.add_closed_position(closed_at(session_start));
         // Closed mid-session: included.
         window.add_closed_position(closed_at(session_start + NANOS_PER_DAY / 2));
-        // Closed in a previous session: excluded.
-        window.add_closed_position(closed_at(session_start - 1));
 
+        // since(cutoff) excludes the previous-session close → 2.0; total is 3.0.
         assert_eq!(window.total_realised_pnl_since(session_start), 2.0);
+        assert_eq!(window.total_realised_pnl(), 3.0);
 
         window.prune_closed_before(session_start);
         assert_eq!(window.len(), 2);
+        assert_eq!(window.total_realised_pnl(), 2.0); // running total recomputed
     }
 }
