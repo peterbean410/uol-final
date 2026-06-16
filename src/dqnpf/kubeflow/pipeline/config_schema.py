@@ -39,6 +39,7 @@ class DqnpfPipelineConfig:
     max_risk_short_units: int = 1
     directional_disagreement: bool = False
     directional_tolerance: float = 1.0
+    forecaster_conviction_threshold: float = 2.0
     forecast_horizon: int = 1
     min_bars_warmup: int = 1440
     step_size_seconds: int = 60

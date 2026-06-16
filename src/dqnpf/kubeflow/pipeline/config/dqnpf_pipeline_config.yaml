@@ -16,11 +16,19 @@ forecaster_checkpoint_path: null
 device: "auto"
 grpc_address: "localhost:50051"
 num_episodes: 1
-# Out-of-sample validation window: the calendar month immediately after the
-# DQN training dataset (trained on 2012-01-04..2012-01-31). Unix seconds, UTC.
-# 0/0 would run the full loaded range (all of 2012, ~362k 60s steps).
-episode_start_ts: 1328054400  # 2012-02-01 00:00:00 UTC
-episode_end_ts: 1330560000    # 2012-03-01 00:00:00 UTC
+# Out-of-sample validation window. The DQN models are trained on the 3-year span
+# date_start=2012-01-04 .. date_end=2014-12-31 (hours 23->47, 24h sessions), so a
+# valid OOS test MUST fall after 2014-12-31. We use date-range mode (one hour-bound
+# episode per calendar date), mirroring DQN training so the policy is evaluated on
+# the same kind of session it trained on. January 2015 = first OOS month.
+# (episode_start_ts/episode_end_ts are the legacy fixed-window knobs; left at 0 so
+# date-range mode is authoritative.)
+episode_start_ts: 0
+episode_end_ts: 0
+date_start: "2015-01-02"
+date_end: "2015-01-31"
+hour_of_day_start: 23
+hour_of_day_end: 47
 seed: 0
 
 # --- Pipeline-level fields ---

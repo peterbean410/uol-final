@@ -182,6 +182,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
+        "--forecaster-conviction-threshold",
+        dest="forecaster_conviction_threshold",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
         "--forecast-horizon", dest="forecast_horizon", type=int, default=None
     )
     parser.add_argument(
