@@ -232,7 +232,7 @@ impl Default for Config {
             reward_lambda: 0.5,
             reward_action_penalty: 0.001,
             reward_holding_penalty: 1e-6,
-            reward_clip: 1.5,
+            reward_clip: 150.0,
             disable_hedging: true,
             leverage: 200.0,
             training_date_start: None,
