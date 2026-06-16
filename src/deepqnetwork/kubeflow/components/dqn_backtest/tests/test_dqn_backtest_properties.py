@@ -19,7 +19,59 @@ from deepqnetwork.kubeflow.components.dqn_backtest.component import (
     absolute_floor_gate,
     compute_backtest_metrics,
     degradation_gate,
+    resolve_eval_windows,
 )
+
+
+# ---------------------------------------------------------------------------
+# resolve_eval_windows: date-range (distinct sessions) vs legacy fixed-window
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_eval_windows_date_range_one_per_date() -> None:
+    """Date-range mode yields one distinct window per calendar date."""
+    windows = resolve_eval_windows(
+        date_start="2015-01-02",
+        date_end="2015-01-05",
+        hour_of_day_start=23,
+        hour_of_day_end=47,
+        eval_episode_start_ts=0,
+        eval_episode_end_ts=0,
+        num_eval_episodes=10,
+    )
+    # 4 calendar dates -> 4 windows, all distinct, each a 24h (23->47) session.
+    assert len(windows) == 4
+    assert len(set(windows)) == 4
+    for start_ts, end_ts in windows:
+        assert end_ts - start_ts == 24 * 3600
+
+
+def test_resolve_eval_windows_legacy_repeats_single_window() -> None:
+    """Without a date range, repeat the single fixed window num_eval_episodes×."""
+    windows = resolve_eval_windows(
+        date_start=None,
+        date_end=None,
+        hour_of_day_start=None,
+        hour_of_day_end=None,
+        eval_episode_start_ts=1000,
+        eval_episode_end_ts=2000,
+        num_eval_episodes=3,
+    )
+    assert windows == [(1000, 2000), (1000, 2000), (1000, 2000)]
+
+
+def test_resolve_eval_windows_partial_dates_fall_back_to_legacy() -> None:
+    """Hours unset (only dates) → not enough to slice → legacy single-window."""
+    windows = resolve_eval_windows(
+        date_start="2015-01-02",
+        date_end="2015-01-05",
+        hour_of_day_start=None,
+        hour_of_day_end=None,
+        eval_episode_start_ts=5,
+        eval_episode_end_ts=9,
+        num_eval_episodes=2,
+    )
+    assert windows == [(5, 9), (5, 9)]
 
 
 # ---------------------------------------------------------------------------

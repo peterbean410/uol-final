@@ -39,6 +39,7 @@ import torch
 sys.path.insert(0, "/app")
 
 from deepqnetwork.advisor import DQNAdvisor
+from deepqnetwork.episode_windows import iter_date_episodes
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 from deepqnetwork.swap_rates import resolve_swap_rates
 from probabilisticforecaster.kubeflow.monitoring.metrics import get_logger
@@ -75,6 +76,16 @@ STEP_LOG_INTERVAL = 500  # steps
 GRPC_RESET_TIMEOUT_S = 600
 GRPC_STEP_TIMEOUT_S = 120
 GRPC_REFERENCE_TIMEOUT_S = 120
+
+# ReferenceData carries session_realised_pnl; the real money figure the
+# degradation gate promotes on. On a transient RpcError, retry a few times with
+# linear backoff; if it still fails, FAIL the episode (raise) rather than fall
+# back to a reward-derived proxy. total_reward is a clipped, penalty-laden,
+# reward_scale'd function of PnL that can differ from realised P&L in magnitude
+# AND sign, so substituting it would silently feed the gate a wrong number (the
+# same class of hazard as the gate bug that auto-promoted a degenerate model).
+GRPC_REFERENCE_MAX_ATTEMPTS = 3
+GRPC_REFERENCE_RETRY_BACKOFF_S = 2
 
 # Degradation gate thresholds (from DQNPipelineConfig / thesis)
 DEFAULT_SHARPE_DEGRADATION_THRESHOLD = 0.1
@@ -258,6 +269,48 @@ class BacktestMetrics:
     avg_episode_length: float
 
 
+def resolve_eval_windows(
+    *,
+    date_start: str | None,
+    date_end: str | None,
+    hour_of_day_start: int | None,
+    hour_of_day_end: int | None,
+    eval_episode_start_ts: int,
+    eval_episode_end_ts: int,
+    num_eval_episodes: int,
+) -> list[tuple[int, int]]:
+    """Resolve the list of ``(start_ts, end_ts)`` evaluation episode windows.
+
+    Two modes:
+
+    * **Date-range (preferred):** when ``date_start``/``date_end`` and the
+      hour-of-day bounds are all set, produce one window per calendar date via
+      :func:`iter_date_episodes`, i.e. evaluate the policy on a *series of
+      distinct sessions*, the same windows DQN training and the dqnpf backtest
+      use. This is what makes ``cumulative_pnl = sum(per-episode P&L)`` a genuine
+      cumulative P&L over the eval span, and makes the cross-episode Sharpe
+      finite/meaningful (distinct sessions have real return variance).
+
+    * **Legacy fixed-window:** when the dates are unset, repeat the single
+      ``[eval_episode_start_ts, eval_episode_end_ts]`` window
+      ``num_eval_episodes`` times. NOTE: repeating one window only samples the
+      env's seed noise under a deterministic greedy policy; its near-zero
+      reward variance makes the Sharpe ``mean/std`` blow up (the source of the
+      absurd ~1e16 Sharpe values), and summing the repeats inflates P&L. Kept
+      only for backward compatibility / explicit single-window probes.
+    """
+    if (
+        date_start
+        and date_end
+        and hour_of_day_start is not None
+        and hour_of_day_end is not None
+    ):
+        return iter_date_episodes(
+            date_start, date_end, hour_of_day_start, hour_of_day_end
+        )
+    return [(eval_episode_start_ts, eval_episode_end_ts)] * num_eval_episodes
+
+
 def run_evaluation_episode(
     advisor: DQNAdvisor,
     env_stub: environment_pb2_grpc.EnvironmentStub,
@@ -390,22 +443,55 @@ def run_evaluation_episode(
         if observation_data.done:
             break
 
-    # Get final reference data for realised P&L
-    try:
-        ref_request = environment_pb2.ObserveRequest(symbol=symbol)
-        logger.info(
-            "ReferenceData: calling env_stub.ReferenceData",
-            extra={"seed": episode_seed, "symbol": symbol, "steps": num_steps},
-        )
-        reference = env_stub.ReferenceData(ref_request, timeout=GRPC_REFERENCE_TIMEOUT_S)
-        logger.info(
-            "ReferenceData: env_stub.ReferenceData returned",
-            extra={"seed": episode_seed},
-        )
-        cumulative_pnl = reference.session_realised_pnl
-    except Exception:
-        # Fall back to using total reward as P&L proxy
-        cumulative_pnl = total_reward
+    # Get final reference data for realised P&L. This is the money figure the
+    # degradation gate promotes on, so it MUST be the real session_realised_pnl
+    # from modelenv, never a reward-derived proxy. Retry on transient RpcError;
+    # if it still cannot be read, raise so the component fails and KFP's retry(3)
+    # re-runs the backtest, rather than registering a bogus (reward-as-P&L)
+    # number. (See GRPC_REFERENCE_MAX_ATTEMPTS note above.)
+    ref_request = environment_pb2.ObserveRequest(symbol=symbol)
+    reference = None
+    last_exc: grpc.RpcError | None = None
+    for attempt in range(1, GRPC_REFERENCE_MAX_ATTEMPTS + 1):
+        try:
+            logger.info(
+                "ReferenceData: calling env_stub.ReferenceData",
+                extra={
+                    "seed": episode_seed,
+                    "symbol": symbol,
+                    "steps": num_steps,
+                    "attempt": attempt,
+                },
+            )
+            reference = env_stub.ReferenceData(
+                ref_request, timeout=GRPC_REFERENCE_TIMEOUT_S
+            )
+            logger.info(
+                "ReferenceData: env_stub.ReferenceData returned",
+                extra={"seed": episode_seed},
+            )
+            break
+        except grpc.RpcError as exc:
+            last_exc = exc
+            logger.error(
+                "ReferenceData RPC failed (attempt %d/%d): %s",
+                attempt,
+                GRPC_REFERENCE_MAX_ATTEMPTS,
+                exc,
+                extra={"seed": episode_seed},
+            )
+            if attempt < GRPC_REFERENCE_MAX_ATTEMPTS:
+                time.sleep(GRPC_REFERENCE_RETRY_BACKOFF_S * attempt)
+
+    if reference is None:
+        raise RuntimeError(
+            f"ReferenceData failed after {GRPC_REFERENCE_MAX_ATTEMPTS} attempts "
+            f"(seed={episode_seed}): cannot read session_realised_pnl. Refusing "
+            "to substitute total_reward as P&L; it would corrupt the "
+            "degradation gate. Failing the episode so KFP can retry."
+        ) from last_exc
+
+    cumulative_pnl = reference.session_realised_pnl
 
     return EpisodeResult(
         total_reward=total_reward,
@@ -440,15 +526,20 @@ def compute_backtest_metrics(episode_results: list[EpisodeResult]) -> BacktestMe
     pnl_values = [ep.cumulative_pnl for ep in episode_results]
     cumulative_pnl = sum(pnl_values)
 
-    # Sharpe ratio: mean(episode_rewards) / std(episode_rewards) * sqrt(N_episodes_per_year)
-    # Using episode rewards as the return series
+    # Sharpe ratio across episodes, using per-episode total_reward as the return
+    # series. This is only meaningful when the episodes are DISTINCT sessions
+    # (date-range mode): then std() reflects real session-to-session variation.
+    # In the legacy single-window-repeated mode the rollouts are near-identical
+    # (deterministic greedy policy, one window), std()->~0 and this ratio blows
+    # up, which is exactly why that mode is deprecated (see resolve_eval_windows).
     rewards = np.array([ep.total_reward for ep in episode_results])
     mean_reward = float(np.mean(rewards))
     std_reward = float(np.std(rewards, ddof=1)) if len(rewards) > 1 else 0.0
 
     if std_reward > 0:
-        # Annualise: assume episodes represent trading periods
-        # Scale by sqrt(num_episodes_per_range) as a proxy for annualisation
+        # Scale by sqrt(num sessions) as a proxy for annualisation. (Caveat: a
+        # true daily annualisation would use sqrt(252); kept as-is to preserve
+        # the existing gate-threshold calibration.)
         sharpe_ratio = (mean_reward / std_reward) * math.sqrt(len(episode_results))
     else:
         sharpe_ratio = 0.0 if mean_reward == 0 else math.copysign(float("inf"), mean_reward)
@@ -900,22 +991,55 @@ def main() -> None:
             },
         )
 
+        # Resolve evaluation windows: one episode per calendar date when a date
+        # range is supplied (distinct sessions → true cumulative P&L + finite
+        # cross-session Sharpe), else the legacy single-window-repeated mode.
+        eval_windows = resolve_eval_windows(
+            date_start=args.date_start,
+            date_end=args.date_end,
+            hour_of_day_start=args.hour_of_day_start,
+            hour_of_day_end=args.hour_of_day_end,
+            eval_episode_start_ts=args.eval_episode_start_ts,
+            eval_episode_end_ts=args.eval_episode_end_ts,
+            num_eval_episodes=args.num_eval_episodes,
+        )
+        date_range_mode = bool(
+            args.date_start
+            and args.date_end
+            and args.hour_of_day_start is not None
+            and args.hour_of_day_end is not None
+        )
+        logger.info(
+            "Resolved evaluation windows",
+            extra={
+                "mode": "date-range" if date_range_mode else "fixed-window",
+                "num_windows": len(eval_windows),
+                "date_start": args.date_start,
+                "date_end": args.date_end,
+            },
+        )
+
         episode_results: list[EpisodeResult] = []
 
-        for episode_idx in range(args.num_eval_episodes):
+        for episode_idx, (win_start, win_end) in enumerate(eval_windows):
             episode_seed = 42 + episode_idx  # Deterministic seeds for reproducibility
 
             logger.info(
-                f"Episode {episode_idx + 1}/{args.num_eval_episodes} starting",
-                extra={"episode": episode_idx + 1, "seed": episode_seed},
+                f"Episode {episode_idx + 1}/{len(eval_windows)} starting",
+                extra={
+                    "episode": episode_idx + 1,
+                    "seed": episode_seed,
+                    "episode_start_ts": win_start,
+                    "episode_end_ts": win_end,
+                },
             )
 
             result = run_evaluation_episode(
                 advisor=advisor,
                 env_stub=env_stub,
                 symbol=args.symbol,
-                episode_start_ts=args.eval_episode_start_ts,
-                episode_end_ts=args.eval_episode_end_ts,
+                episode_start_ts=win_start,
+                episode_end_ts=win_end,
                 step_size_seconds=args.step_size_seconds,
                 max_steps=args.max_steps_per_episode,
                 episode_seed=episode_seed,
@@ -924,7 +1048,7 @@ def main() -> None:
             episode_results.append(result)
 
             logger.info(
-                f"Episode {episode_idx + 1}/{args.num_eval_episodes} completed",
+                f"Episode {episode_idx + 1}/{len(eval_windows)} completed",
                 extra={
                     "episode": episode_idx + 1,
                     "reward": round(result.total_reward, 4),
