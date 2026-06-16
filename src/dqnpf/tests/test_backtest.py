@@ -19,12 +19,15 @@ from tradingmodel.intraday.dqnpf.backtest import (
     conditional_pnl,
     count_trades,
     count_trades_in_regime,
+    forecaster_action,
     negative_pnl_proportion,
     negative_raw_pnl_proportion,
     quarterly_pnl,
     suppression_stats,
     validate_thresholds,
 )
+
+_HOLD, _BUY_1, _BUY_2, _SELL_1, _SELL_2 = 0, 1, 2, 3, 4
 
 
 def _ts(year: int, month: int = 1, day: int = 1) -> int:
@@ -474,6 +477,99 @@ def test_compare_results_max_total_margin() -> None:
     cmp = compare_results(combined, baseline)
     assert cmp.max_total_margin_combined == 3.0
     assert cmp.max_total_margin_baseline == 5.0
+
+
+# ---------------------------------------------------------------------------
+# forecaster_action: mu/sigma -> discrete action, scaled by conviction
+# ---------------------------------------------------------------------------
+
+
+def test_forecaster_action_holds_when_sigma_too_high() -> None:
+    assert forecaster_action(
+        5.0, 6.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _HOLD
+
+
+def test_forecaster_action_holds_when_sigma_nonpositive() -> None:
+    assert forecaster_action(
+        5.0, 0.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _HOLD
+
+
+def test_forecaster_action_holds_when_no_directional_edge() -> None:
+    assert forecaster_action(
+        0.5, 2.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _HOLD
+
+
+def test_forecaster_action_low_conviction_sizes_one() -> None:
+    # |mu|/sigma = 2.0 / 2.0 = 1.0 < 2.0 -> size 1
+    assert forecaster_action(
+        2.0, 2.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _BUY_1
+    assert forecaster_action(
+        -2.0, 2.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _SELL_1
+
+
+def test_forecaster_action_high_conviction_sizes_two() -> None:
+    # |mu|/sigma = 4.0 / 2.0 = 2.0 >= 2.0 -> size 2
+    assert forecaster_action(
+        4.0, 2.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _BUY_2
+    assert forecaster_action(
+        -4.0, 2.0, variance_threshold=4.5,
+        directional_tolerance=1.0, conviction_threshold=2.0,
+    ) == _SELL_2
+
+
+# ---------------------------------------------------------------------------
+# compare_results: forecaster-only arm
+# ---------------------------------------------------------------------------
+
+
+def test_compare_results_forecaster_arm_defaults_to_zero_when_absent() -> None:
+    combined = [_rec(reward=1.0)]
+    baseline = [_rec(reward=1.0, reason="baseline")]
+    cmp = compare_results(combined, baseline)
+    assert cmp.forecaster_return == 0.0
+    assert cmp.forecaster_raw_pnl == 0.0
+    assert cmp.trades_forecaster == 0
+    assert cmp.quarterly_raw_pnl_forecaster == {}
+    assert cmp.max_total_margin_forecaster == 0.0
+
+
+def test_compare_results_forecaster_arm_populated() -> None:
+    combined = [_rec(reward=1.0)]
+    baseline = [_rec(reward=1.0, reason="baseline")]
+    forecaster = [
+        _rec(reward=2.0, final_action=_BUY_1, reason="forecaster",
+             max_total_margin=4.0),
+        _rec(reward=-1.0, final_action=_HOLD, reason="forecaster"),
+        _rec(reward=3.0, final_action=_SELL_2, reason="forecaster",
+             max_total_margin=2.0),
+    ]
+    forecaster[0].raw_pnl_delta = 5.0
+    forecaster[1].raw_pnl_delta = -2.0
+    forecaster[2].raw_pnl_delta = 1.0
+
+    cmp = compare_results(combined, baseline, forecaster=forecaster, pip_size=0.01)
+
+    assert cmp.forecaster_return == pytest.approx(4.0)  # 2 - 1 + 3
+    assert cmp.forecaster_raw_pnl == pytest.approx(4.0)  # 5 - 2 + 1
+    assert cmp.forecaster_pnl_pips == pytest.approx(4.0 / 0.01)
+    assert cmp.trades_forecaster == 2  # BUY_1 and SELL_2; HOLD excluded
+    assert cmp.max_total_margin_forecaster == 4.0
+    assert cmp.forecaster_sharpe == pytest.approx(compute_sharpe([2.0, -1.0, 3.0]))
+    assert cmp.forecaster_sharpe_pnl == pytest.approx(
+        compute_sharpe([5.0, -2.0, 1.0])
+    )
 
 
 # Training window the DQN model was trained on (read from the checkpoint).

@@ -112,6 +112,18 @@ class BacktestComparison:
     # largest episode-level peak seen in the run.
     max_total_margin_combined: float = 0.0
     max_total_margin_baseline: float = 0.0
+    # Forecaster-only baseline arm (act on the signal alone; no DQN). Reported
+    # alongside combined and DQN-only baseline so the three approaches are
+    # directly comparable. Populated only when compare_results is given the
+    # forecaster record stream; otherwise these stay at their defaults.
+    forecaster_return: float = 0.0
+    forecaster_sharpe: float = 0.0
+    forecaster_sharpe_pnl: float = 0.0
+    forecaster_raw_pnl: float = 0.0
+    forecaster_pnl_pips: float = 0.0
+    trades_forecaster: int = 0
+    quarterly_raw_pnl_forecaster: dict[str, float] = field(default_factory=dict)
+    max_total_margin_forecaster: float = 0.0
 
 
 @dataclass
@@ -125,6 +137,37 @@ class ThresholdReport:
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+# Action indices (mirror deepqnetwork.advisor.ACTION_NAMES).
+_HOLD, _BUY_1, _BUY_2, _SELL_1, _SELL_2 = 0, 1, 2, 3, 4
+
+
+def forecaster_action(
+    mu: float,
+    sigma: float,
+    *,
+    variance_threshold: float,
+    directional_tolerance: float,
+    conviction_threshold: float,
+) -> int:
+    """Map a forecaster signal (mu, sigma) to a discrete action.
+
+    The forecaster-only baseline: trade on the forecast direction, gated by
+    uncertainty, sized by conviction (signal-to-noise |mu|/sigma):
+
+      * sigma <= 0 or sigma >= variance_threshold → HOLD (too uncertain).
+      * |mu| < directional_tolerance              → HOLD (no directional edge).
+      * else trade sign(mu); BUY_2/SELL_2 when |mu|/sigma >= conviction_threshold
+        (high conviction), else BUY_1/SELL_1.
+    """
+    if sigma <= 0.0 or sigma >= variance_threshold:
+        return _HOLD
+    if abs(mu) < directional_tolerance:
+        return _HOLD
+    high_conviction = (abs(mu) / sigma) >= conviction_threshold
+    if mu > 0.0:
+        return _BUY_2 if high_conviction else _BUY_1
+    return _SELL_2 if high_conviction else _SELL_1
 
 
 def compute_sharpe(rewards: Sequence[float]) -> float:
@@ -256,15 +299,19 @@ def compare_results(
     combined: Sequence[StepRecord],
     baseline: Sequence[StepRecord],
     *,
+    forecaster: Sequence[StepRecord] | None = None,
     pip_size: float = 0.01,
     directional_tolerance: float = 1.0,
 ) -> BacktestComparison:
-    """Aggregate two record streams into a BacktestComparison.
+    """Aggregate two (or three) record streams into a BacktestComparison.
 
     ``pip_size`` converts the raw monetary PnL into pips for the
     ``*_pnl_pips`` fields (0.01 for USDJPY / JPY quote pairs).
     ``directional_tolerance`` is the |mu| deadband used to report how often the
     directional veto's conviction precondition is met.
+    ``forecaster`` is the optional third arm; the forecaster-only baseline that
+    acts on the signal alone (no DQN). When given, the ``forecaster_*`` fields
+    are populated; otherwise they stay at their defaults.
     """
     combined_rewards = [r.reward for r in combined]
     baseline_rewards = [r.reward for r in baseline]
@@ -288,6 +335,13 @@ def compare_results(
     # Episode-level peak of total open position volume.
     combined_max_margin = max((r.max_total_margin for r in combined), default=0.0)
     baseline_max_margin = max((r.max_total_margin for r in baseline), default=0.0)
+
+    forecaster = forecaster or []
+    forecaster_rewards = [r.reward for r in forecaster]
+    forecaster_raw = raw_pnl_total(forecaster)
+    forecaster_max_margin = max(
+        (r.max_total_margin for r in forecaster), default=0.0
+    )
 
     return BacktestComparison(
         combined_return=sum(combined_rewards),
@@ -332,6 +386,14 @@ def compare_results(
         ),
         max_total_margin_combined=combined_max_margin,
         max_total_margin_baseline=baseline_max_margin,
+        forecaster_return=sum(forecaster_rewards),
+        forecaster_sharpe=compute_sharpe(forecaster_rewards),
+        forecaster_sharpe_pnl=compute_sharpe([r.raw_pnl_delta for r in forecaster]),
+        forecaster_raw_pnl=forecaster_raw,
+        forecaster_pnl_pips=forecaster_raw / pip_size,
+        trades_forecaster=count_trades(forecaster),
+        quarterly_raw_pnl_forecaster=quarterly_raw_pnl(forecaster),
+        max_total_margin_forecaster=forecaster_max_margin,
     )
 
 
@@ -435,10 +497,14 @@ def _run_episode(
     config: IntegrationConfig,
     episode_start_ts: int | None = None,
     episode_end_ts: int | None = None,
+    forecaster_only: bool = False,
 ) -> list[StepRecord]:
     """Single-episode loop over ``[episode_start_ts, episode_end_ts]``.
 
-    Pass ``integration=None`` for the DQN-only baseline. The window may be
+    Pass ``integration=None`` for the DQN-only baseline. Pass
+    ``forecaster_only=True`` for the forecaster-only baseline (the DQN is
+    ignored; the action comes from :func:`forecaster_action` on the signal,
+    HOLD during forecaster warm-up). The window may be
     passed explicitly (so the caller can iterate one hour-bound episode per
     calendar date); when left as ``None`` it falls back to the legacy
     ``config.episode_start_ts`` / ``config.episode_end_ts`` fixed window.
@@ -494,7 +560,21 @@ def _run_episode(
 
         high_sigma = forecaster_ready and sigma > config.variance_threshold
 
-        if integration is not None and forecaster_ready:
+        if forecaster_only:
+            # Forecaster-only baseline: ignore the DQN; act on the signal.
+            if forecaster_ready:
+                final_action = forecaster_action(
+                    mu,
+                    sigma,
+                    variance_threshold=config.variance_threshold,
+                    directional_tolerance=config.directional_tolerance,
+                    conviction_threshold=config.forecaster_conviction_threshold,
+                )
+                reason = "forecaster"
+            else:
+                final_action = _HOLD  # cannot fall back to DQN here
+                reason = "warmup"
+        elif integration is not None and forecaster_ready:
             screened = integration.screen(
                 dqn_result,
                 mu,
@@ -633,6 +713,7 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
 
     combined_records: list[StepRecord] = []
     baseline_records: list[StepRecord] = []
+    forecaster_records: list[StepRecord] = []
     for idx, (episode_start_ts, episode_end_ts) in enumerate(episode_windows):
         logger.info(
             "backtest episode %d/%d (combined) [%d, %d]",
@@ -668,10 +749,29 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
                 episode_end_ts=episode_end_ts,
             )
         )
+        logger.info(
+            "backtest episode %d/%d (forecaster-only) [%d, %d]",
+            idx + 1, total, episode_start_ts, episode_end_ts,
+        )
+        forecaster_records.extend(
+            _run_episode(
+                env_client=env_client,
+                dqn=dqn,
+                preprocessor=preprocessor,
+                bridge=bridge,
+                cache=cache,
+                integration=None,
+                config=config,
+                episode_start_ts=episode_start_ts,
+                episode_end_ts=episode_end_ts,
+                forecaster_only=True,
+            )
+        )
 
     comparison = compare_results(
         combined_records,
         baseline_records,
+        forecaster=forecaster_records,
         pip_size=config.pip_size,
         directional_tolerance=config.directional_tolerance,
     )
@@ -696,11 +796,23 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
         comparison.quarterly_pnl_combined,
     )
     logger.info(
-        "monetary PnL: combined=%.4f (%.1f pips) baseline=%.4f (%.1f pips)",
+        "monetary PnL: combined=%.4f (%.1f pips) baseline=%.4f (%.1f pips) "
+        "forecaster=%.4f (%.1f pips)",
         comparison.combined_raw_pnl,
         comparison.combined_pnl_pips,
         comparison.baseline_raw_pnl,
         comparison.baseline_pnl_pips,
+        comparison.forecaster_raw_pnl,
+        comparison.forecaster_pnl_pips,
+    )
+    logger.info(
+        "forecaster-only baseline: return=%.4f sharpe=%.4f sharpe_pnl=%.4f "
+        "trades=%d quarterly=%s",
+        comparison.forecaster_return,
+        comparison.forecaster_sharpe,
+        comparison.forecaster_sharpe_pnl,
+        comparison.trades_forecaster,
+        comparison.quarterly_raw_pnl_forecaster,
     )
     logger.info(
         "signal distributions (combined): sigma=%s vs variance_threshold=%.4f "
