@@ -398,6 +398,6 @@ mod tests {
 
         let environment = build_environment(&config);
 
-        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 0.01));
+        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 1.0));
     }
 }

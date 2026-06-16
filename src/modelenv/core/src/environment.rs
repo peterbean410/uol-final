@@ -171,10 +171,11 @@ pub struct Environment {
     reward_holding_penalty: f64,
     // Fixed scale for the reward denominator. delta_v_t and penalties are divided
     // by this constant so different currency pairs train on comparable reward
-    // magnitudes. For USDJPY one pip = 0.01 price units, so 0.01 is a natural
-    // default (a 1-pip gain → reward ≈ 1). Unlike the old per-regime z-score
-    // normalisation, this preserves the relative scale of large vs small moves
-    // so the agent can distinguish a 50-pip loss from a 1-pip loss.
+    // magnitudes. Default 1.0 = reward in yen (1 pip ≈ 0.01 reward), which keeps
+    // episode returns O(tens) rather than O(thousands) under gamma 0.999 over
+    // ~1440-step episodes, large returns destabilise DQN value learning. It
+    // still preserves the relative scale of large vs small moves (a 50-pip loss
+    // is 50x a 1-pip loss), unlike the old per-regime z-score normalisation.
     reward_scale: f64,
     // Symmetric clamp on the final (post-scale) per-step reward. A defensive
     // rail against data artifacts (synthetic M1-derived ticks with bid=low /
@@ -276,8 +277,10 @@ impl Environment {
             reward_lambda: 0.5, // Linear downside weight: losses weigh (1+λ)=1.5x gains
             reward_action_penalty: 0.001, // Default action penalty (scaled to USD/JPY spread)
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
-            reward_scale: 0.01, // 1 pip = 0.01 price units for USDJPY; tune for other CCYs
-            reward_clip: 150.0, // Artifact rail; bounds a 1-yen (100-pip) step at λ=0.5
+            reward_scale: 1.0, // Reward in yen (1 pip ≈ 0.01), keeps returns O(tens)
+            // not O(thousands) under gamma 0.999 over ~1440-step episodes, for
+            // stable value learning. (Was 0.01 = reward-in-pips, returns ~thousands.)
+            reward_clip: 1.5, // Artifact rail at ±1.5 yen (≈150 pip) single step
             disable_hedging: true,
             leverage: 200.0,
             prev_total_equity: None,
@@ -1361,7 +1364,7 @@ impl Environment {
         };
 
         // Calculate final reward = money PnL divided by a fixed per-symbol
-        // scale, so 1 pip ≈ 1 reward unit (for USDJPY at reward_scale=0.01).
+        // scale (reward in yen at the default reward_scale=1.0; 1 pip ≈ 0.01).
         // Penalties share the scale; they are measured in the same units.
         let raw = delta_v_t - asymmetric_penalty - action_penalty - holding_penalty;
         let reward = raw / self.reward_scale;
@@ -2700,6 +2703,8 @@ mod tests {
         environment.reward_lambda = 0.0;
         environment.reward_holding_penalty = 0.0;
         environment.reward_action_penalty = 0.25;
+        environment.reward_scale = 0.01; // pin scale so the assertion below is explicit
+        environment.reward_clip = 0.0; // disable the clamp (default 1.5 would clip -25.0)
         environment.episode = Some(episode);
 
         let first = environment
@@ -2761,7 +2766,7 @@ mod tests {
         .with_reward_action_penalty(0.05)
         .with_reward_holding_penalty(0.0002);
 
-        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 0.01));
+        assert_eq!(environment.reward_parameters(), (2.5, 0.05, 0.0002, 1.0));
     }
 
     /// Reward is LINEAR in the loss (not squared) and applies the clamp.
