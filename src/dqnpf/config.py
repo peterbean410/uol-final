@@ -71,6 +71,12 @@ class IntegrationConfig:
     # in the bps unit convention (mu, sigma are scaled by BPS_PER_UNIT). Must be
     # > 0. Larger gamma = more risk-averse = smaller positions.
     forecaster_risk_aversion: float = 0.1
+    # Max exposure (base-currency units) the forecaster-only baseline scales its
+    # proportion pi in [-1,1] against; 1-bar PnL = pi * this * forward_return.
+    # Default 10m matches the paper's intraday max exposure (Qian Assumption
+    # 3.1.1). NOTE: larger than the modelenv arms' per-trade volume, so compare
+    # the forecaster arm on Sharpe, not absolute money.
+    forecaster_position_size: float = 10_000_000.0
     forecast_horizon: int = 1
     min_bars_warmup: int = 1440
     step_size_seconds: int = 60
@@ -101,6 +107,8 @@ class IntegrationConfig:
             raise ValueError("directional_tolerance must be non-negative")
         if self.forecaster_risk_aversion <= 0:
             raise ValueError("forecaster_risk_aversion must be positive")
+        if self.forecaster_position_size <= 0:
+            raise ValueError("forecaster_position_size must be positive")
         if self.forecast_horizon not in {1, 3, 6, 12}:
             raise ValueError(
                 "forecast_horizon must be one of {1, 3, 6, 12}, "
@@ -188,6 +196,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--forecaster-risk-aversion",
         dest="forecaster_risk_aversion",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--forecaster-position-size",
+        dest="forecaster_position_size",
         type=float,
         default=None,
     )

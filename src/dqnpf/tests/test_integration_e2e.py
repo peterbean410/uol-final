@@ -171,7 +171,8 @@ def test_first_step_uses_valid_mu_sigma_from_real_pipeline() -> None:
 
     assert isinstance(mu, float)
     assert isinstance(sigma, float)
-    assert (mu, sigma) == (0.42, 2.71)
+    # compute_signal_from_bars returns bps (raw output * BPS_PER_UNIT = 10_000).
+    assert (mu, sigma) == (0.42 * 10_000, 2.71 * 10_000)
 
 
 # ---------------------------------------------------------------------------

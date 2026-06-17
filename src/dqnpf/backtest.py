@@ -142,39 +142,37 @@ class ThresholdReport:
 _HOLD, _BUY_1, _BUY_2, _SELL_1, _SELL_2 = 0, 1, 2, 3, 4
 
 
-# Position proportion |pi*| at/above which the env's larger size (2 units) is
-# used instead of 1 unit. pi* is truncated to [-1, 1] (Qian eq 3.1.8), so 0.5
-# splits that range in half.
-_FORECASTER_SIZE2_THRESHOLD = 0.5
+def forecaster_position(mu: float, sigma: float, *, risk_aversion: float) -> float:
+    """Return the paper's mean-variance position proportion in ``[-1, 1]``.
 
+    Qian (*Transformer-based Probabilistic Forecasting Model for Intraday Forex
+    Rate Trading*) eq 3.1.7-3.1.8: ``pi* = mu / (sigma^2 * gamma)`` truncated to
+    ``[-1, 1]``. Direction is ``sign(mu)`` (long if ``mu >= 0``, short if
+    ``mu < 0``, always in the market), and ``|pi*|`` shrinks as ``sigma`` grows
+    (a noisier forecast takes a smaller position). ``sigma <= 0`` -> ``±1`` (the
+    paper's ``sigma = 0`` directional case).
 
-def forecaster_action(mu: float, sigma: float, *, risk_aversion: float) -> int:
-    """Map a forecaster signal (mu, sigma) to a discrete action; the paper's
-    "directional trading with mean-variance scaling" (Qian, *Transformer-based
-    Probabilistic Forecasting Model for Intraday Forex Rate Trading*, eq 3.1.1 /
-    3.1.7-3.1.8).
-
-    Direction is ``sign(mu)``: long when ``mu >= 0``, short when ``mu < 0``; the
-    strategy is **always in the market**, never flat (there is no uncertainty
-    HOLD). The optimal position proportion under exponential utility is
-
-        pi* = mu / (sigma^2 * gamma)                       (eq 3.1.7)
-
-    truncated to ``[-1, 1]`` for the exposure constraint (eq 3.1.8). ``sigma``
-    therefore **scales** the position: a noisier forecast -> smaller ``|pi*|`` ->
-    smaller size. Mapped onto the env's two discrete sizes:
-    ``|pi*| >= _FORECASTER_SIZE2_THRESHOLD`` -> 2 units, else 1 unit. ``sigma <= 0``
-    falls back to ``|pi*| = 1`` (the paper's sigma=0 directional case).
+    This is the **per-bar target position**: the forecaster-only baseline opens it
+    for one bar and closes it the next (the paper's intraday reposition; every
+    position is held exactly one bar), so positions never carry past one bar. The
+    1-bar PnL is ``pi * forecaster_position_size * (close_{t+1} - close_t)`` (see
+    ``_run_episode``'s ``forecaster_only`` arm).
     """
     if sigma > 0.0:
         pi_star = mu / (sigma * sigma * risk_aversion)
     else:
         pi_star = 1.0 if mu >= 0.0 else -1.0
-    pi_clipped = max(-1.0, min(1.0, pi_star))
-    size2 = abs(pi_clipped) >= _FORECASTER_SIZE2_THRESHOLD
-    if mu >= 0.0:
-        return _BUY_2 if size2 else _BUY_1
-    return _SELL_2 if size2 else _SELL_1
+    return max(-1.0, min(1.0, pi_star))
+
+
+def _latest_m5_close(env_client: Any, symbol: str) -> float | None:
+    """Return the latest completed M5 bar close price, or ``None`` if unavailable."""
+    response = env_client.recent_bars(symbol)
+    bars = getattr(response, "bars", None)
+    if not bars or "M5" not in bars:
+        return None
+    series = bars["M5"].bars
+    return float(series[-1].close) if series else None
 
 
 def compute_sharpe(rewards: Sequence[float]) -> float:
@@ -531,6 +529,11 @@ def _run_episode(
     step_idx = 0
     warmup_logged = False
     forecaster_engaged = False
+    # Forecaster-only arm state: the position opened at the previous bar and the
+    # M5 close it was opened at, so its 1-bar PnL can be booked when the bar moves
+    # (the paper's per-bar reposition: every position is closed one bar later).
+    prev_position = 0.0
+    prev_close: float | None = None
     while not getattr(obs, "done", False):
         state = preprocessor.process(obs)
         dqn_result = dqn.recommend_action(state)
@@ -567,18 +570,43 @@ def _run_episode(
 
         high_sigma = forecaster_ready and sigma > config.variance_threshold
 
+        # `env_action` is what modelenv executes; `record_action` is what the
+        # StepRecord logs (they differ only for the forecaster-only arm, which
+        # keeps modelenv flat and books its PnL analytically). `pnl_override` is
+        # the forecaster-only arm's per-bar PnL (None => use modelenv's).
+        pnl_override: float | None = None
         if forecaster_only:
-            # Forecaster-only baseline: ignore the DQN; act on the signal.
+            # Forecaster-only baseline: the PAPER's strategy, computed per bar,
+            # NOT routed through modelenv (whose orders accumulate and only clear
+            # at session end, which cannot express "close one bar later"). modelenv
+            # is held flat (HOLD); each bar we take position pi = forecaster_position
+            # and CLOSE it the next bar, so PnL = prev_position * position_size *
+            # (close_t - prev_close)/prev_close (booked when the M5 close moves).
             if forecaster_ready:
-                final_action = forecaster_action(
-                    mu,
-                    sigma,
-                    risk_aversion=config.forecaster_risk_aversion,
+                position = forecaster_position(
+                    mu, sigma, risk_aversion=config.forecaster_risk_aversion
                 )
                 reason = "forecaster"
             else:
-                final_action = _HOLD  # cannot fall back to DQN here
+                position = 0.0
                 reason = "warmup"
+            cur_close = _latest_m5_close(env_client, config.symbol)
+            if prev_close is not None and prev_close > 0.0 and cur_close is not None:
+                pnl_override = (
+                    prev_position
+                    * config.forecaster_position_size
+                    * (cur_close - prev_close)
+                    / prev_close
+                )
+            else:
+                pnl_override = 0.0
+            if cur_close is not None:
+                prev_close = cur_close
+            prev_position = position
+            # Logged action encodes the (virtual) position so trade-counting sees a
+            # trade per non-flat bar; modelenv itself only ever gets HOLD here.
+            record_action = _BUY_1 if position > 0 else _SELL_1 if position < 0 else _HOLD
+            env_action = _HOLD
         elif integration is not None and forecaster_ready:
             screened = integration.screen(
                 dqn_result,
@@ -588,29 +616,34 @@ def _run_episode(
                     episode_start_ts, config.step_size_seconds, step_idx
                 ),
             )
-            final_action = screened.action
+            record_action = env_action = screened.action
             reason = screened.reason
         else:
-            final_action = dqn_result.action
+            record_action = env_action = dqn_result.action
             reason = "baseline" if integration is None else "warmup"
 
         order_id = f"{config.symbol}-{step_idx}"
-        step_response = env_client.step(final_action, order_id)
+        step_response = env_client.step(env_action, order_id)
         obs = getattr(step_response, "data", step_response)
 
+        raw_pnl_delta = (
+            pnl_override
+            if pnl_override is not None
+            else float(getattr(obs, "raw_pnl_delta", 0.0))
+        )
         records.append(
             StepRecord(
                 timestamp_ns=_step_timestamp_ns(
                     episode_start_ts, config.step_size_seconds, step_idx
                 ),
                 dqn_action=int(dqn_result.action),
-                final_action=int(final_action),
+                final_action=int(record_action),
                 reason=reason,
                 mu=float(mu),
                 sigma=float(sigma),
                 reward=float(getattr(obs, "reward", 0.0)),
                 high_sigma=high_sigma,
-                raw_pnl_delta=float(getattr(obs, "raw_pnl_delta", 0.0)),
+                raw_pnl_delta=float(raw_pnl_delta),
                 max_total_margin=float(getattr(obs, "max_total_margin", 0.0)),
             )
         )

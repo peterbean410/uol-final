@@ -19,7 +19,7 @@ from tradingmodel.intraday.dqnpf.backtest import (
     conditional_pnl,
     count_trades,
     count_trades_in_regime,
-    forecaster_action,
+    forecaster_position,
     negative_pnl_proportion,
     negative_raw_pnl_proportion,
     quarterly_pnl,
@@ -484,36 +484,36 @@ def test_compare_results_max_total_margin() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_forecaster_action_direction_is_sign_of_mu() -> None:
-    # mu >= 0 -> long (BUY_*), mu < 0 -> short (SELL_*). Always in the market.
-    assert forecaster_action(2.0, 2.0, risk_aversion=0.2) in (_BUY_1, _BUY_2)
-    assert forecaster_action(-2.0, 2.0, risk_aversion=0.2) in (_SELL_1, _SELL_2)
+def test_forecaster_position_direction_is_sign_of_mu() -> None:
+    # mu >= 0 -> long (pi > 0), mu < 0 -> short (pi < 0). Always in the market.
+    assert forecaster_position(2.0, 2.0, risk_aversion=0.2) > 0
+    assert forecaster_position(-2.0, 2.0, risk_aversion=0.2) < 0
 
 
-def test_forecaster_action_never_holds() -> None:
-    # The paper strategy is always in the market, even a tiny mu trades.
-    assert forecaster_action(0.001, 5.0, risk_aversion=1.0) == _BUY_1
+def test_forecaster_position_scales_with_sigma() -> None:
+    # pi* = mu / (sigma^2 * gamma). Same mu, larger sigma -> smaller |pi|.
+    near = forecaster_position(1.0, 6.0, risk_aversion=0.2)
+    far = forecaster_position(1.0, 20.0, risk_aversion=0.2)
+    assert 0 < far < near <= 1.0
 
 
-def test_forecaster_action_scales_size_with_sigma() -> None:
-    # pi* = mu / (sigma^2 * gamma). Same mu, larger sigma -> smaller |pi*| ->
-    # smaller size. mu=1, gamma=0.2:
-    #   sigma=2  -> pi* = 1/(4*0.2)   = 1.25 -> clip 1.0 (>=0.5) -> size 2
-    #   sigma=10 -> pi* = 1/(100*0.2) = 0.05 (<0.5)             -> size 1
-    assert forecaster_action(1.0, 2.0, risk_aversion=0.2) == _BUY_2
-    assert forecaster_action(1.0, 10.0, risk_aversion=0.2) == _BUY_1
+def test_forecaster_position_truncates_to_unit_interval() -> None:
+    # Large |pi*| is truncated to [-1, 1] (eq 3.1.8).
+    assert forecaster_position(4.0, 1.0, risk_aversion=0.1) == 1.0    # pi*=40->1
+    assert forecaster_position(-4.0, 1.0, risk_aversion=0.1) == -1.0  # pi*=-40->-1
 
 
-def test_forecaster_action_truncates_to_unit_interval() -> None:
-    # Large |pi*| is truncated to [-1, 1] (eq 3.1.8) -> size 2.
-    assert forecaster_action(4.0, 1.0, risk_aversion=0.1) == _BUY_2   # pi*=40->1
-    assert forecaster_action(-4.0, 1.0, risk_aversion=0.1) == _SELL_2  # pi*=-40->-1
+def test_forecaster_position_matches_mean_variance_formula() -> None:
+    # pi* = mu / (sigma^2 * gamma), un-truncated case.
+    assert forecaster_position(1.0, 5.0, risk_aversion=0.2) == pytest.approx(
+        1.0 / (25.0 * 0.2)
+    )
 
 
-def test_forecaster_action_sigma_nonpositive_full_position() -> None:
-    # sigma <= 0 -> |pi*| = 1 (paper's sigma=0 directional case) -> size 2.
-    assert forecaster_action(1.0, 0.0, risk_aversion=0.1) == _BUY_2
-    assert forecaster_action(-1.0, 0.0, risk_aversion=0.1) == _SELL_2
+def test_forecaster_position_sigma_nonpositive_full_position() -> None:
+    # sigma <= 0 -> +/-1 (paper's sigma=0 directional case).
+    assert forecaster_position(1.0, 0.0, risk_aversion=0.1) == 1.0
+    assert forecaster_position(-1.0, 0.0, risk_aversion=0.1) == -1.0
 
 
 # ---------------------------------------------------------------------------

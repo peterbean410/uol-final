@@ -40,6 +40,7 @@ class DqnpfPipelineConfig:
     directional_disagreement: bool = False
     directional_tolerance: float = 1.0
     forecaster_risk_aversion: float = 0.1
+    forecaster_position_size: float = 10_000_000.0
     forecast_horizon: int = 1
     min_bars_warmup: int = 1440
     step_size_seconds: int = 60
