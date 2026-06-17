@@ -142,32 +142,39 @@ class ThresholdReport:
 _HOLD, _BUY_1, _BUY_2, _SELL_1, _SELL_2 = 0, 1, 2, 3, 4
 
 
-def forecaster_action(
-    mu: float,
-    sigma: float,
-    *,
-    variance_threshold: float,
-    directional_tolerance: float,
-    conviction_threshold: float,
-) -> int:
-    """Map a forecaster signal (mu, sigma) to a discrete action.
+# Position proportion |pi*| at/above which the env's larger size (2 units) is
+# used instead of 1 unit. pi* is truncated to [-1, 1] (Qian eq 3.1.8), so 0.5
+# splits that range in half.
+_FORECASTER_SIZE2_THRESHOLD = 0.5
 
-    The forecaster-only baseline: trade on the forecast direction, gated by
-    uncertainty, sized by conviction (signal-to-noise |mu|/sigma):
 
-      * sigma <= 0 or sigma >= variance_threshold → HOLD (too uncertain).
-      * |mu| < directional_tolerance              → HOLD (no directional edge).
-      * else trade sign(mu); BUY_2/SELL_2 when |mu|/sigma >= conviction_threshold
-        (high conviction), else BUY_1/SELL_1.
+def forecaster_action(mu: float, sigma: float, *, risk_aversion: float) -> int:
+    """Map a forecaster signal (mu, sigma) to a discrete action; the paper's
+    "directional trading with mean-variance scaling" (Qian, *Transformer-based
+    Probabilistic Forecasting Model for Intraday Forex Rate Trading*, eq 3.1.1 /
+    3.1.7-3.1.8).
+
+    Direction is ``sign(mu)``: long when ``mu >= 0``, short when ``mu < 0``; the
+    strategy is **always in the market**, never flat (there is no uncertainty
+    HOLD). The optimal position proportion under exponential utility is
+
+        pi* = mu / (sigma^2 * gamma)                       (eq 3.1.7)
+
+    truncated to ``[-1, 1]`` for the exposure constraint (eq 3.1.8). ``sigma``
+    therefore **scales** the position: a noisier forecast -> smaller ``|pi*|`` ->
+    smaller size. Mapped onto the env's two discrete sizes:
+    ``|pi*| >= _FORECASTER_SIZE2_THRESHOLD`` -> 2 units, else 1 unit. ``sigma <= 0``
+    falls back to ``|pi*| = 1`` (the paper's sigma=0 directional case).
     """
-    if sigma <= 0.0 or sigma >= variance_threshold:
-        return _HOLD
-    if abs(mu) < directional_tolerance:
-        return _HOLD
-    high_conviction = (abs(mu) / sigma) >= conviction_threshold
-    if mu > 0.0:
-        return _BUY_2 if high_conviction else _BUY_1
-    return _SELL_2 if high_conviction else _SELL_1
+    if sigma > 0.0:
+        pi_star = mu / (sigma * sigma * risk_aversion)
+    else:
+        pi_star = 1.0 if mu >= 0.0 else -1.0
+    pi_clipped = max(-1.0, min(1.0, pi_star))
+    size2 = abs(pi_clipped) >= _FORECASTER_SIZE2_THRESHOLD
+    if mu >= 0.0:
+        return _BUY_2 if size2 else _BUY_1
+    return _SELL_2 if size2 else _SELL_1
 
 
 def compute_sharpe(rewards: Sequence[float]) -> float:
@@ -566,9 +573,7 @@ def _run_episode(
                 final_action = forecaster_action(
                     mu,
                     sigma,
-                    variance_threshold=config.variance_threshold,
-                    directional_tolerance=config.directional_tolerance,
-                    conviction_threshold=config.forecaster_conviction_threshold,
+                    risk_aversion=config.forecaster_risk_aversion,
                 )
                 reason = "forecaster"
             else:

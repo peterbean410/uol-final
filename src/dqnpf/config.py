@@ -66,9 +66,11 @@ class IntegrationConfig:
     max_risk_short_units: int = 1
     directional_disagreement: bool = False
     directional_tolerance: float = 1.0
-    # Conviction (|mu|/sigma) at/above which the forecaster-only backtest
-    # baseline sizes up to 2 units instead of 1.
-    forecaster_conviction_threshold: float = 2.0
+    # Risk-aversion coefficient gamma for the forecaster-only backtest baseline's
+    # mean-variance position sizing pi* = mu / (sigma^2 * gamma) (Qian eq 3.1.7),
+    # in the bps unit convention (mu, sigma are scaled by BPS_PER_UNIT). Must be
+    # > 0. Larger gamma = more risk-averse = smaller positions.
+    forecaster_risk_aversion: float = 0.1
     forecast_horizon: int = 1
     min_bars_warmup: int = 1440
     step_size_seconds: int = 60
@@ -97,6 +99,8 @@ class IntegrationConfig:
             raise ValueError("max_risk_short_units must be non-negative")
         if self.directional_tolerance < 0:
             raise ValueError("directional_tolerance must be non-negative")
+        if self.forecaster_risk_aversion <= 0:
+            raise ValueError("forecaster_risk_aversion must be positive")
         if self.forecast_horizon not in {1, 3, 6, 12}:
             raise ValueError(
                 "forecast_horizon must be one of {1, 3, 6, 12}, "
@@ -182,8 +186,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
-        "--forecaster-conviction-threshold",
-        dest="forecaster_conviction_threshold",
+        "--forecaster-risk-aversion",
+        dest="forecaster_risk_aversion",
         type=float,
         default=None,
     )
