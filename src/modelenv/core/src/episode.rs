@@ -25,6 +25,15 @@ use crate::position::NANOS_PER_DAY;
 
 pub const RECENT_WINDOW: usize = 64;
 pub const LIVE_TICK_WINDOW_NS: i64 = 5_000_000_000;
+/// Bounded M15 lookback for double-bottom/top pattern detection in
+/// `get_observation`. Patterns can span wider than the TA indicator window
+/// (`RECENT_WINDOW`), but detection must NOT scan `bars[0..cursor]` (the full
+/// multi-year history) every step: in date-range training the cursor advances
+/// across years, so that scan is O(history) and grows without bound; the
+/// per-step slowdown. ~21 trading days of M15 bars (24h × 4 × 21 ≈ 2016)
+/// comfortably contains the 12 most-recent patterns we keep, so a fixed window
+/// preserves the output while making detection O(1) per step.
+pub const PATTERN_LOOKBACK_M15: usize = 2048;
 pub const RECENT_TICK_WINDOW_NS: i64 = 60_000_000_000;
 
 /// Nanosecond duration of a single bar for the given interval.
@@ -251,8 +260,16 @@ impl Episode {
                     // Use all bars up to the cursor, patterns can span much wider
                     // than the indicator lookback window.
                     if *interval == "M15" {
+                        // Bounded recent window, NOT bars[0..end_idx]: scanning
+                        // the full multi-year history every step is O(history)
+                        // and grows without bound as the cursor advances across
+                        // years in date-range training (the per-step slowdown).
+                        // PATTERN_LOOKBACK_M15 covers far more than the 12
+                        // most-recent patterns we keep, so the output is
+                        // preserved while detection becomes O(1) per step.
+                        let pattern_start = end_idx.saturating_sub(PATTERN_LOOKBACK_M15);
                         let all_bars: Vec<Bar> = bars
-                            .get(0..end_idx)
+                            .get(pattern_start..end_idx)
                             .map(|slice| slice.to_vec())
                             .unwrap_or_default();
                         let (mut dbs, mut dts) = detect_all_patterns(&all_bars);
