@@ -526,23 +526,34 @@ def compute_backtest_metrics(episode_results: list[EpisodeResult]) -> BacktestMe
     pnl_values = [ep.cumulative_pnl for ep in episode_results]
     cumulative_pnl = sum(pnl_values)
 
-    # Sharpe ratio across episodes, using per-episode total_reward as the return
-    # series. This is only meaningful when the episodes are DISTINCT sessions
-    # (date-range mode): then std() reflects real session-to-session variation.
-    # In the legacy single-window-repeated mode the rollouts are near-identical
-    # (deterministic greedy policy, one window), std()->~0 and this ratio blows
-    # up, which is exactly why that mode is deprecated (see resolve_eval_windows).
-    rewards = np.array([ep.total_reward for ep in episode_results])
-    mean_reward = float(np.mean(rewards))
-    std_reward = float(np.std(rewards, ddof=1)) if len(rewards) > 1 else 0.0
+    # Sharpe ratio across episodes, using per-episode MONEY P&L
+    # (`cumulative_pnl`) as the return series, NOT the shaped reward. The
+    # gate's job is to reject models that lose money out-of-sample, so the
+    # ratio it floors on must be denominated in money. Using `total_reward`
+    # here made the Sharpe penalty-dominated (the reward is ΔV minus loss-
+    # aversion and trade penalties), so a model that was money-profitable
+    # could still show a deeply negative reward-Sharpe (observed: money-Sharpe
+    # +0.76 vs reward-Sharpe −8.41 on the 2012-2015 / OOS-2016 run). The mean/
+    # std are over per-session P&L, which is only meaningful when episodes are
+    # DISTINCT sessions (date-range mode): then std() reflects real session-to-
+    # session variation. In the legacy single-window-repeated mode the rollouts
+    # are near-identical (deterministic greedy policy, one window), std()->~0 and
+    # this ratio blows up, which is why that mode is deprecated (see
+    # resolve_eval_windows).
+    pnl_series = np.array(pnl_values)
+    mean_pnl = float(np.mean(pnl_series))
+    std_pnl = float(np.std(pnl_series, ddof=1)) if len(pnl_series) > 1 else 0.0
 
-    if std_reward > 0:
+    if std_pnl > 0:
         # Scale by sqrt(num sessions) as a proxy for annualisation. (Caveat: a
         # true daily annualisation would use sqrt(252); kept as-is to preserve
         # the existing gate-threshold calibration.)
-        sharpe_ratio = (mean_reward / std_reward) * math.sqrt(len(episode_results))
+        sharpe_ratio = (mean_pnl / std_pnl) * math.sqrt(len(episode_results))
     else:
-        sharpe_ratio = 0.0 if mean_reward == 0 else math.copysign(float("inf"), mean_reward)
+        sharpe_ratio = 0.0 if mean_pnl == 0 else math.copysign(float("inf"), mean_pnl)
+
+    # avg_episode_reward remains the mean shaped reward (a separate diagnostic).
+    mean_reward = float(np.mean([ep.total_reward for ep in episode_results]))
 
     # Ensure Sharpe is finite (requirement DQN-R10: Sharpe ratio is finite)
     if not math.isfinite(sharpe_ratio):
