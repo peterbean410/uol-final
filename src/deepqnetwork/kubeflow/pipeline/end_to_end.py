@@ -533,6 +533,11 @@ def dqn_pipeline_e2e(
     checkpoint: str = "",
     date_start: str = "",
     date_end: str = "",
+    # Out-of-sample eval window for the gate backtest, MUST be disjoint from the
+    # training range [date_start, date_end] so the gate measures generalisation,
+    # not memorisation. Default 2015-Q1 (after the 2012-2014 training span).
+    eval_date_start: str = "2015-01-05",
+    eval_date_end: str = "2015-03-31",
     hour_of_day_start: int = 0,
     hour_of_day_end: int = 23,
     katib_enabled: bool = False,
@@ -672,15 +677,17 @@ def dqn_pipeline_e2e(
         episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
-        date_start=config_task.outputs["date_start"],
-        date_end=config_task.outputs["date_end"],
+        # Evaluate the gate OUT-OF-SAMPLE: the eval_date_* window, NOT the training
+        # range (config_task date_start/date_end). Same trained session hours.
+        date_start=eval_date_start,
+        date_end=eval_date_end,
         hour_of_day_start=config_task.outputs["hour_of_day_start"],
         hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     backtest_task.set_retry(num_retries=1)
     backtest_task.set_caching_options(enable_caching=False)
-    backtest_task.set_memory_request("4Gi")
-    backtest_task.set_memory_limit("4Gi")
+    backtest_task.set_memory_request("8Gi")
+    backtest_task.set_memory_limit("8Gi")
     kubernetes.mount_pvc(
         backtest_task,
         pvc_name=MODELENV_CACHE_PVC,

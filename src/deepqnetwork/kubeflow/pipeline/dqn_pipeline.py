@@ -791,6 +791,9 @@ def dqn_pipeline(
     checkpoint: str = "",
     date_start: str = "",
     date_end: str = "",
+    # Out-of-sample gate-eval window (disjoint from the training range). 2015-Q1.
+    eval_date_start: str = "2015-01-05",
+    eval_date_end: str = "2015-03-31",
     hour_of_day_start: int = 0,
     hour_of_day_end: int = 23,
     model_registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
@@ -897,15 +900,16 @@ def dqn_pipeline(
         episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
-        date_start=config_task.outputs["date_start"],
-        date_end=config_task.outputs["date_end"],
+        # Out-of-sample: the eval_date_* window, NOT the training range.
+        date_start=eval_date_start,
+        date_end=eval_date_end,
         hour_of_day_start=config_task.outputs["hour_of_day_start"],
         hour_of_day_end=config_task.outputs["hour_of_day_end"],
     )
     backtest_task.set_retry(num_retries=1)
     backtest_task.set_caching_options(enable_caching=False)
-    backtest_task.set_memory_request("4Gi")
-    backtest_task.set_memory_limit("4Gi")
+    backtest_task.set_memory_request("8Gi")
+    backtest_task.set_memory_limit("8Gi")
     kubernetes.mount_pvc(
         backtest_task,
         pvc_name=MODELENV_CACHE_PVC,
