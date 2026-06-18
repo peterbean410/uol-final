@@ -5,7 +5,7 @@ use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, TimeZone, Timelike, Utc};
-use log::info;
+use log::{info, warn};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -94,6 +94,12 @@ const CACHE_DOWNLOAD_LOCK_POLL_MS: u64 = 250;
 // Reset RPC and (with no client deadline) the whole backtest, see T-14.1-07.
 // Partitions are small (MBs); 5 min is a generous ceiling that still fails fast.
 const CACHE_DOWNLOAD_TIMEOUT_SECS: u64 = 5 * 60;
+/// Retry `aws s3 cp` on transient failures (urllib3 `IncompleteRead` /
+/// "Connection broken" mid-transfer, invoke error, or timeout). A 404/HeadObject
+/// "not found" is NOT retried (the source legitimately doesn't exist -> Ok(false)).
+/// Without this a single flaky S3 read fails an episode Reset and kills the run.
+const CACHE_DOWNLOAD_MAX_ATTEMPTS: u32 = 3;
+const CACHE_DOWNLOAD_RETRY_BACKOFF_SECS: u64 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartitionTier {
@@ -2170,51 +2176,71 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
         partition,
         local_path.display()
     );
+    // Download with retry on transient failures (see CACHE_DOWNLOAD_MAX_ATTEMPTS).
     // kill_on_drop ensures a child that exceeds the timeout is reaped (the
     // timed-out `output()` future drops the Child, which kills the process)
     // rather than leaking an orphaned `aws` process.
-    let mut cmd = Command::new("aws");
-    cmd.arg("s3")
-        .arg("cp")
-        .arg(source_uri)
-        .arg(&temp_path)
-        .kill_on_drop(true);
-    let output = match timeout(
-        TokioDuration::from_secs(CACHE_DOWNLOAD_TIMEOUT_SECS),
-        cmd.output(),
-    )
-    .await
-    {
-        Ok(result) => {
-            result.map_err(|e| anyhow!("Failed to invoke aws CLI for {}: {}", source_uri, e))?
-        }
-        Err(_elapsed) => {
-            remove_file_if_exists(&temp_path).await?;
-            return Err(anyhow!(
-                "aws s3 cp for {} ({}) timed out after {}s",
-                source_uri,
-                partition,
-                CACHE_DOWNLOAD_TIMEOUT_SECS
-            ));
-        }
-    };
+    let mut attempt: u32 = 1;
+    loop {
+        let mut cmd = Command::new("aws");
+        cmd.arg("s3")
+            .arg("cp")
+            .arg(source_uri)
+            .arg(&temp_path)
+            .kill_on_drop(true);
+        let transient_err = match timeout(
+            TokioDuration::from_secs(CACHE_DOWNLOAD_TIMEOUT_SECS),
+            cmd.output(),
+        )
+        .await
+        {
+            Ok(Ok(output)) if output.status.success() => break,
+            Ok(Ok(output)) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                remove_file_if_exists(&temp_path).await?;
+                // A genuinely missing source is terminal, do not retry.
+                if stderr.contains("404")
+                    || stderr.contains("Not Found")
+                    || stderr.contains("HeadObject")
+                {
+                    info!(
+                        "Parquet cache download source not found for {} ({})",
+                        source_uri, partition
+                    );
+                    return Ok(false);
+                }
+                anyhow!(
+                    "Failed to download file {} to {}: {}",
+                    source_uri,
+                    temp_path.display(),
+                    stderr.trim()
+                )
+            }
+            Ok(Err(e)) => {
+                remove_file_if_exists(&temp_path).await?;
+                anyhow!("Failed to invoke aws CLI for {}: {}", source_uri, e)
+            }
+            Err(_elapsed) => {
+                remove_file_if_exists(&temp_path).await?;
+                anyhow!(
+                    "aws s3 cp for {} ({}) timed out after {}s",
+                    source_uri,
+                    partition,
+                    CACHE_DOWNLOAD_TIMEOUT_SECS
+                )
+            }
+        };
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        remove_file_if_exists(&temp_path).await?;
-        if stderr.contains("404") || stderr.contains("Not Found") || stderr.contains("HeadObject") {
-            info!(
-                "Parquet cache download source not found for {} ({})",
-                source_uri, partition
-            );
-            return Ok(false);
+        if attempt >= CACHE_DOWNLOAD_MAX_ATTEMPTS {
+            return Err(transient_err);
         }
-        return Err(anyhow!(
-            "Failed to download file {} to {}: {}",
-            source_uri,
-            temp_path.display(),
-            stderr.trim()
-        ));
+        let backoff = CACHE_DOWNLOAD_RETRY_BACKOFF_SECS * attempt as u64;
+        warn!(
+            "parquet cache download for {} ({}) failed (attempt {}/{}): {}; retrying in {}s",
+            source_uri, partition, attempt, CACHE_DOWNLOAD_MAX_ATTEMPTS, transient_err, backoff
+        );
+        sleep(TokioDuration::from_secs(backoff)).await;
+        attempt += 1;
     }
 
     if tokio::fs::try_exists(local_path)
