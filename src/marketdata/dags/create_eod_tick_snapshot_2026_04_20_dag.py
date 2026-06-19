@@ -57,6 +57,7 @@ def _branch(data_interval_end, **_):
 
 
 with DAG(
+    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
     dag_id="create_eod_tick_snapshot_2026_04_20",
     default_args=default_args,
     description="Create FX end-of-day tick snapshots starting from 2026-04-20",

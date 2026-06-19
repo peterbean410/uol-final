@@ -30,7 +30,7 @@ with DAG(
     schedule="0 * * * 1-5",
     start_date=datetime(2026, 1, 1),
     catchup=True,
-    max_active_runs=4,
+    max_active_runs=1,
     tags=["marketdata", "pricedata", "tickdata", "download", "2026"],
 ) as dag:
 

@@ -27,6 +27,7 @@ _ECR_IMAGE = (
 _INTERVALS = ["M1", "M5", "M15"]
 
 with DAG(
+    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
     dag_id="download_price_bars_hourly_2012",
     default_args=default_args,
     description="Download FX price bars (M1, M5, M15), 2012 backfill",

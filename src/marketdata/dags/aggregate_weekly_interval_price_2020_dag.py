@@ -43,6 +43,7 @@ def _last_d1_logical_date(_dt, **context):
 
 
 with DAG(
+    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
     dag_id="aggregate_weekly_interval_price_2020",
     default_args=default_args,
     description="Aggregate one Mon–Sun week of D1 bars into a W1 interval-price partition",

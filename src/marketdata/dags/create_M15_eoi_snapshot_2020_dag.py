@@ -49,6 +49,7 @@ def _make_branch(wait_task_id: str, skip_task_id: str):
 
 
 with DAG(
+    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
     dag_id="create_eoh_snapshot_2020",
     default_args=default_args,
     description="Create FX end-of-interval price snapshots (M1, M5, M15) using the marketdata Helm chart image",

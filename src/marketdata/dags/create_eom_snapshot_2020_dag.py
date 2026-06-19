@@ -27,6 +27,7 @@ _ECR_IMAGE = (
 
 
 with DAG(
+    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
     dag_id="create_eom_snapshot_2020",
     default_args=default_args,
     description="Create FX end-of-month price snapshots (MN1) from monthly-aggregated bars",

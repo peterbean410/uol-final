@@ -43,6 +43,7 @@ def _last_m1_hourly_logical_date(_dt, **context):
 
 
 with DAG(
+    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
     dag_id="aggregate_daily_interval_price_2012",
     default_args=default_args,
     description=(

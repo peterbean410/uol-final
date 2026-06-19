@@ -33,7 +33,7 @@ with DAG(
     start_date=datetime(2012, 1, 1),
     end_date=datetime(2020, 12, 31),
     catchup=True,
-    max_active_runs=16,
+    max_active_runs=1,
     tags=["marketdata", "pricedata", "tickdata", "download", "backfill-2012"],
 ) as dag:
 
