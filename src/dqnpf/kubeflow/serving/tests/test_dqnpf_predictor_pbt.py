@@ -269,7 +269,7 @@ def test_predictor_loads_both_checkpoints(symbol: str) -> None:
 # ---------------------------------------------------------------------------
 
 _VALID_ACTIONS = {0, 1, 2, 3, 4}
-_VALID_REASONS = {"pass", "budget_exhausted", "directional_conflict"}
+_VALID_REASONS = {"pass", "budget_exhausted", "directional_conflict", "gate_bypassed"}
 
 
 @given(

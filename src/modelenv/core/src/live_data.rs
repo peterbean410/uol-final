@@ -57,6 +57,9 @@ impl LiveData {
             m15_double_top_low: self.m15_double_top_low,
             sin_hour: self.sin_hour,
             cos_hour: self.cos_hour,
+            // Filled by Environment::reference_data from session_start_cutoff
+            // (this struct has no session-hour config); 0 here is a placeholder.
+            session_start_ts: 0,
         }
     }
 

@@ -1082,14 +1082,18 @@ impl Environment {
                 );
                 live.recent_fills = recent_fills;
                 self.last_observation_timestamp_ns = Some(live.timestamp_ns);
-                Ok(live.into_reference())
+                let mut reference = live.into_reference();
+                reference.session_start_ts = self.session_start_cutoff(reference.timestamp_ns);
+                Ok(reference)
             }
             Mode::Live => {
                 let live = self
                     .build_live_observation(self.symbol.clone())
                     .await?;
                 self.last_observation_timestamp_ns = Some(live.timestamp_ns);
-                Ok(live.into_reference())
+                let mut reference = live.into_reference();
+                reference.session_start_ts = self.session_start_cutoff(reference.timestamp_ns);
+                Ok(reference)
             }
         }
     }

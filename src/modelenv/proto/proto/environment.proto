@@ -254,6 +254,13 @@ message Reference {
   // Cyclical time encodings derived from timestamp_ns, each in [-1, 1].
   double sin_hour = 21;
   double cos_hour = 22;
+  // Start of the trading session containing timestamp_ns: the most recent
+  // instant at or before it where the UTC hour equals the configured
+  // trading_session_start_hour (0h UTC when unset). Authoritative session
+  // boundary, advances exactly when modelenv rolls to a new session (the same
+  // anchor that drives end-of-session liquidation and session_realised_pnl).
+  // Consumers detect a new session by this value increasing.
+  int64 session_start_ts = 23;
   // live_ticks are ticks since the previous observation, sorted latest -> earliest.
   repeated Tick live_ticks = 11;
   bool done = 8;

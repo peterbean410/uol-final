@@ -161,22 +161,14 @@ def _screened_to_infer_response(
     )
 
 
-def _latest_m5_close(env_client: Any, symbol: str) -> float | None:
-    """Return the latest completed M5 bar close, or ``None`` if unavailable.
-
-    Mirrors ``backtest._latest_m5_close``; used by the profit gate's next-bar
-    counterfactual. Inlined here to avoid importing the backtest module into the
-    serving image.
-    """
-    try:
-        response = env_client.recent_bars(symbol)
-    except Exception:  # noqa: BLE001 - price is best-effort for the gate
+def _m5_close_from_reference(reference: Any) -> float | None:
+    """Latest M5 close from a ``Reference``'s live_bars, or ``None``."""
+    live_bars = getattr(reference, "live_bars", None)
+    if not live_bars or "M5" not in live_bars:
         return None
-    bars = getattr(response, "bars", None)
-    if not bars or "M5" not in bars:
-        return None
-    series = bars["M5"].bars
-    return float(series[-1].close) if series else None
+    bar = live_bars["M5"]
+    close = getattr(bar, "close", None)
+    return float(close) if close else None
 
 
 class _ServingEnvClient:
@@ -244,11 +236,12 @@ class DqnpfIntradayPredictor(kserve.Model):
         self._layers: dict[str, IntegrationLayer] = {}
         self._bridges: dict[str, ForecasterBridge] = {}
         self._caches: dict[str, SignalCache] = {}
-        # Profit-gate: last UTC-day index seen per symbol. In live the predictor
-        # is called once per bar with no explicit session marker, so a UTC-day
-        # change is treated as the session boundary (matching the per-day risk
-        # budget reset) and drives IntegrationLayer.begin_session().
-        self._session_day: dict[str, int] = {}
+        # Profit-gate: last modelenv session-start timestamp seen per symbol.
+        # The live session boundary is the authoritative `session_start_ts` that
+        # modelenv surfaces on the Reference (the same anchor that drives
+        # end-of-session liquidation); when it advances we roll the gate via
+        # IntegrationLayer.begin_session().
+        self._session_start_ts: dict[str, int] = {}
 
         # Hot-reload state
         self._model_lock = threading.RLock()
@@ -402,18 +395,22 @@ class DqnpfIntradayPredictor(kserve.Model):
 
             layer = self._layers[symbol]
 
-            # Profit gate (when enabled): a UTC-day change is the live session
-            # boundary, roll the prior session's screen counterfactual and
-            # re-decide whether the screen stays active. Pass the latest M5 close
-            # so the gate can mark its next-bar counterfactual.
+            # Profit gate (when enabled): drive the session boundary off the
+            # authoritative `session_start_ts` modelenv surfaces on the Reference
+            # (the same anchor as end-of-session liquidation) rather than a
+            # client-side heuristic. When it advances, roll the prior session's
+            # screen counterfactual and re-decide whether the screen stays
+            # active; pass the latest M5 close (from the same Reference) so the
+            # gate can mark its next-bar counterfactual.
             screen_price: float | None = None
             cfg = self._configs[symbol]
             if cfg.screen_profit_gate_enabled:
-                day = latest_ts // IntegrationLayer._NANOS_PER_DAY
-                if self._session_day.get(symbol) != day:
+                reference = self._env_client.reference_data(symbol)  # type: ignore[union-attr]
+                sess_ts = int(getattr(reference, "session_start_ts", 0) or 0)
+                if sess_ts and self._session_start_ts.get(symbol) != sess_ts:
                     layer.begin_session()
-                    self._session_day[symbol] = day
-                screen_price = _latest_m5_close(self._env_client, symbol)
+                    self._session_start_ts[symbol] = sess_ts
+                screen_price = _m5_close_from_reference(reference)
 
             # Screen the action through the integration layer. Pass the latest
             # bar timestamp so the risk budget resets per UTC day in production
