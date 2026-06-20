@@ -52,7 +52,7 @@ with DAG(
         external_dag_id="aggregate_weekly_interval_price_2012",
         external_task_id="aggregate_W1_interval_price",
         poke_interval=600,
-        timeout=14400,
+        timeout=86400,
         mode="reschedule",
     )
 

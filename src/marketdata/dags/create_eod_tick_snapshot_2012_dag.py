@@ -78,7 +78,7 @@ with DAG(
         external_task_id="download_tick_data",
         execution_date_fn=_last_tick_hourly_logical_date,
         poke_interval=300,
-        timeout=7200,
+        timeout=86400,
         mode="reschedule",
     )
 

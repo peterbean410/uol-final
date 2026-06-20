@@ -64,7 +64,7 @@ with DAG(
         external_task_id="download_M1_price_bars",
         execution_date_fn=_last_m1_hourly_logical_date,
         poke_interval=300,
-        timeout=7200,
+        timeout=86400,
         mode="reschedule",
     )
 

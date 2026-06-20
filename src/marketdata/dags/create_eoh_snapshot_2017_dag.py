@@ -68,7 +68,7 @@ with DAG(
             external_dag_id="download_price_bars_hourly_2017",
             external_task_id=f"download_{interval}_price_bars",
             poke_interval=60,
-            timeout=3600,
+            timeout=86400,
             mode="reschedule",
         )
 

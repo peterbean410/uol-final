@@ -42,7 +42,7 @@ with DAG(
         external_dag_id="aggregate_monthly_interval_price_2020",
         external_task_id="aggregate_MN1_interval_price",
         poke_interval=600,
-        timeout=14400,
+        timeout=86400,
         mode="reschedule",
     )
 

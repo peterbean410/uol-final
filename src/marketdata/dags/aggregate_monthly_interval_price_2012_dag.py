@@ -72,7 +72,7 @@ with DAG(
         external_task_id="aggregate_D1_interval_price",
         execution_date_fn=_last_d1_logical_date,
         poke_interval=600,
-        timeout=14400,
+        timeout=86400,
         mode="reschedule",
     )
 
