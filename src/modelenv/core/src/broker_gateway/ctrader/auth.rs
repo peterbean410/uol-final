@@ -77,11 +77,24 @@ pub async fn authenticate(
     timeout: Duration,
 ) -> Result<()> {
     app_authenticate(conn, &creds.client_id, &creds.client_secret, timeout).await?;
+    account_authenticate(conn, &creds.access_token, creds.account_id, timeout).await
+}
 
+/// Account-auth stage only: authorize a specific trading account
+/// (`account_id`) with its OAuth `access_token`. Application auth must already
+/// have completed on this connection (cTrader rejects a duplicate app auth), so
+/// call this directly (not [`authenticate`]) when app auth was done earlier
+/// (e.g. after a read-only account-list discovery).
+pub async fn account_authenticate(
+    conn: &Connection,
+    access_token: &str,
+    account_id: i64,
+    timeout: Duration,
+) -> Result<()> {
     let acct_req = ProtoOaAccountAuthReq {
         payload_type: Some(payload_type::ACCOUNT_AUTH_REQ as i32),
-        ctid_trader_account_id: creds.account_id,
-        access_token: creds.access_token.clone(),
+        ctid_trader_account_id: account_id,
+        access_token: access_token.to_string(),
     };
     let resp = conn
         .send_request(
@@ -90,8 +103,7 @@ pub async fn authenticate(
             timeout,
         )
         .await?;
-    expect_payload_type(&resp, payload_type::ACCOUNT_AUTH_RES, "account auth")?;
-    Ok(())
+    expect_payload_type(&resp, payload_type::ACCOUNT_AUTH_RES, "account auth")
 }
 
 /// Verify a response is the expected type; otherwise map an error response to a

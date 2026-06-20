@@ -50,5 +50,24 @@ async fn main() -> anyhow::Result<()> {
             a.ctid_trader_account_id, kind, a.trader_login
         );
     }
+
+    // Pick the first DEMO account and exercise account-auth + symbol resolution
+    // (still read-only). Refuse to proceed on a live account here.
+    let demo = accounts.iter().find(|a| a.is_live == Some(false));
+    let Some(demo) = demo else {
+        eprintln!("[discover] no demo account reachable; stopping (read-only).");
+        return Ok(());
+    };
+    let account_id = demo.ctid_trader_account_id as i64;
+    eprintln!("[discover] account auth on demo account {account_id} ...");
+    // App auth already happened above; do ONLY the account-auth stage (a second
+    // app auth on the same connection would be rejected as a duplicate).
+    auth::account_authenticate(&conn, &access_token, account_id, timeout).await?;
+    eprintln!("[discover] account auth OK");
+
+    let symbol = std::env::var("CTRADER_SYMBOL").unwrap_or_else(|_| "USDJPY".into());
+    eprintln!("[discover] resolving symbol {symbol} ...");
+    let symbol_id = data::get_symbol_id(&conn, account_id, &symbol, timeout).await?;
+    println!("[discover] {symbol} symbol_id={symbol_id} on demo account {account_id}");
     Ok(())
 }
