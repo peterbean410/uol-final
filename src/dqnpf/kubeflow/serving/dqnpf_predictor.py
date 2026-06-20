@@ -161,6 +161,24 @@ def _screened_to_infer_response(
     )
 
 
+def _latest_m5_close(env_client: Any, symbol: str) -> float | None:
+    """Return the latest completed M5 bar close, or ``None`` if unavailable.
+
+    Mirrors ``backtest._latest_m5_close``; used by the profit gate's next-bar
+    counterfactual. Inlined here to avoid importing the backtest module into the
+    serving image.
+    """
+    try:
+        response = env_client.recent_bars(symbol)
+    except Exception:  # noqa: BLE001 - price is best-effort for the gate
+        return None
+    bars = getattr(response, "bars", None)
+    if not bars or "M5" not in bars:
+        return None
+    series = bars["M5"].bars
+    return float(series[-1].close) if series else None
+
+
 class _ServingEnvClient:
     """Thin wrapper around EnvironmentClient adding ``recent_bars`` support.
 
@@ -226,6 +244,11 @@ class DqnpfIntradayPredictor(kserve.Model):
         self._layers: dict[str, IntegrationLayer] = {}
         self._bridges: dict[str, ForecasterBridge] = {}
         self._caches: dict[str, SignalCache] = {}
+        # Profit-gate: last UTC-day index seen per symbol. In live the predictor
+        # is called once per bar with no explicit session marker, so a UTC-day
+        # change is treated as the session boundary (matching the per-day risk
+        # budget reset) and drives IntegrationLayer.begin_session().
+        self._session_day: dict[str, int] = {}
 
         # Hot-reload state
         self._model_lock = threading.RLock()
@@ -377,12 +400,27 @@ class DqnpfIntradayPredictor(kserve.Model):
             latest_ts = self._resolve_latest_bar_ts(payload, symbol)
             mu, sigma = cache.get_or_compute(latest_ts, bridge.compute_signal)
 
+            layer = self._layers[symbol]
+
+            # Profit gate (when enabled): a UTC-day change is the live session
+            # boundary, roll the prior session's screen counterfactual and
+            # re-decide whether the screen stays active. Pass the latest M5 close
+            # so the gate can mark its next-bar counterfactual.
+            screen_price: float | None = None
+            cfg = self._configs[symbol]
+            if cfg.screen_profit_gate_enabled:
+                day = latest_ts // IntegrationLayer._NANOS_PER_DAY
+                if self._session_day.get(symbol) != day:
+                    layer.begin_session()
+                    self._session_day[symbol] = day
+                screen_price = _latest_m5_close(self._env_client, symbol)
+
             # Screen the action through the integration layer. Pass the latest
             # bar timestamp so the risk budget resets per UTC day in production
             # (without it the budget accumulates for the pod lifetime); the same
             # timestamp already keys the signal cache above.
-            screened = self._layers[symbol].screen(
-                dqn_result, mu, sigma, timestamp_ns=latest_ts
+            screened = layer.screen(
+                dqn_result, mu, sigma, timestamp_ns=latest_ts, price=screen_price
             )
 
         # Build response
@@ -500,6 +538,14 @@ class DqnpfIntradayPredictor(kserve.Model):
                     new_layer._risk_long_units = old_layer._risk_long_units
                     new_layer._risk_short_units = old_layer._risk_short_units
                     new_layer._current_day = old_layer._current_day
+                    # Preserve the profit gate's rolling counterfactual memory
+                    # across the swap; otherwise a hot-reload would reset the
+                    # trailing-window history and re-arm the screen from scratch.
+                    new_layer._cf_history = old_layer._cf_history
+                    new_layer._session_cf = old_layer._session_cf
+                    new_layer._pending = old_layer._pending
+                    new_layer._gate_active = old_layer._gate_active
+                    new_layer._session_started = old_layer._session_started
 
                 new_layers[symbol] = new_layer
                 new_bridges[symbol] = new_bridge

@@ -42,7 +42,12 @@ def _config(
     max_short: int = 1,
     step_size_seconds: int = 60,
     episode_start_ts: int = 1_700_000_000,
+    screen_profit_gate_enabled: bool = False,
 ) -> IntegrationConfig:
+    # The profit gate is left OFF by default in these e2e fixtures: it adds a
+    # per-bar `recent_bars` price fetch that the call-counting mocks here would
+    # double-consume (real modelenv's recent_bars is idempotent). Gate behaviour
+    # is covered by test_integration_profit_gate.py.
     return IntegrationConfig(
         symbol=symbol,
         variance_threshold=variance_threshold,
@@ -51,6 +56,7 @@ def _config(
         step_size_seconds=step_size_seconds,
         episode_start_ts=episode_start_ts,
         episode_end_ts=episode_start_ts + 3600,
+        screen_profit_gate_enabled=screen_profit_gate_enabled,
     )
 
 
