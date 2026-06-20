@@ -57,6 +57,8 @@ class DqnpfPipelineConfig:
     hour_of_day_end: int | None = None
     seed: int = 0
     pip_size: float = 0.01
+    screen_profit_gate_enabled: bool = False
+    screen_profit_window_sessions: int = 7
 
     # --- Pipeline-level fields ---
     dqn_model_registry_name: str = "deepqnetwork-usdjpy"

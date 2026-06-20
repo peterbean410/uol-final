@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from deepqnetwork.episode_windows import iter_date_episodes
@@ -525,6 +525,13 @@ def _run_episode(
         episode_end_ts=episode_end_ts,
         step_size_seconds=config.step_size_seconds,
     )
+    # Profitability gate: each episode is one trading session, so mark a session
+    # boundary on the (persistent) integration layer; this rolls the prior
+    # session's screen counterfactual into the trailing window and re-decides
+    # whether the screen stays active. No-op when the gate is disabled.
+    if integration is not None:
+        integration.begin_session()
+
     records: list[StepRecord] = []
     step_idx = 0
     warmup_logged = False
@@ -608,6 +615,13 @@ def _run_episode(
             record_action = _BUY_1 if position > 0 else _SELL_1 if position < 0 else _HOLD
             env_action = _HOLD
         elif integration is not None and forecaster_ready:
+            # The profit gate needs the current M5 close to mark its next-bar
+            # counterfactual; only fetch it when the gate is enabled.
+            screen_price = (
+                _latest_m5_close(env_client, config.symbol)
+                if config.screen_profit_gate_enabled
+                else None
+            )
             screened = integration.screen(
                 dqn_result,
                 mu,
@@ -615,6 +629,7 @@ def _run_episode(
                 timestamp_ns=_step_timestamp_ns(
                     episode_start_ts, config.step_size_seconds, step_idx
                 ),
+                price=screen_price,
             )
             record_action = env_action = screened.action
             reason = screened.reason
@@ -707,6 +722,34 @@ def _resolve_episode_windows(
     )
 
 
+def _preseed_episode_windows(
+    config: IntegrationConfig, training_window: dict[str, object]
+) -> list[tuple[int, int]]:
+    """Episode windows for the sessions immediately PRECEDING the eval range.
+
+    Used to warm the profitability gate's trailing window so it is fully
+    informed from the first scored session ("day 0 via simulation over past
+    data") rather than flying blind for the first
+    ``screen_profit_window_sessions`` sessions. Returns one hour-bound episode
+    per calendar date for the ``screen_profit_window_sessions`` dates before
+    ``date_start``. Empty list when the gate is disabled or not in date-range
+    mode (no well-defined prior sessions).
+    """
+    if not config.screen_profit_gate_enabled or not config.date_start:
+        return []
+    hours = _resolve_session_hours(config, training_window)
+    if hours is None:
+        return []
+    hour_start, hour_end = hours
+    n = config.screen_profit_window_sessions
+    start = date.fromisoformat(config.date_start)
+    preseed_start = start - timedelta(days=n)
+    preseed_end = start - timedelta(days=1)
+    return iter_date_episodes(
+        preseed_start.isoformat(), preseed_end.isoformat(), hour_start, hour_end
+    )
+
+
 def run_backtest(config: IntegrationConfig) -> BacktestComparison:
     """Orchestrate the full backtest. Requires live infra and trained checkpoints.
 
@@ -748,6 +791,36 @@ def run_backtest(config: IntegrationConfig) -> BacktestComparison:
         total,
         "date-range mode" if config.date_start else "fixed-window mode",
     )
+
+    # Profit-gate warm-up: simulate the screen over the sessions immediately
+    # before the eval range so the gate's trailing window is full from the first
+    # scored session. Records are discarded, only the gate's counterfactual
+    # ledger is seeded. A missing prior session (e.g. a market holiday) is
+    # skipped so it cannot fail the eval.
+    preseed_windows = _preseed_episode_windows(config, dqn.training_window)
+    if preseed_windows:
+        logger.info(
+            "profit-gate pre-seed: simulating %d prior session(s) before eval",
+            len(preseed_windows),
+        )
+        for ps_start, ps_end in preseed_windows:
+            try:
+                _run_episode(
+                    env_client=env_client,
+                    dqn=dqn,
+                    preprocessor=preprocessor,
+                    bridge=bridge,
+                    cache=cache,
+                    integration=integration,
+                    config=config,
+                    episode_start_ts=ps_start,
+                    episode_end_ts=ps_end,
+                )
+            except Exception as exc:  # noqa: BLE001 - pre-seed is best-effort
+                logger.warning(
+                    "profit-gate pre-seed session [%d, %d] skipped: %s",
+                    ps_start, ps_end, exc,
+                )
 
     combined_records: list[StepRecord] = []
     baseline_records: list[StepRecord] = []

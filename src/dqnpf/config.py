@@ -58,6 +58,18 @@ class IntegrationConfig:
         pip_size: Price increment of one pip for ``symbol``, used to convert
             the environment's raw monetary PnL into pips for reporting.
             Default 0.01 (USDJPY and other JPY quote pairs).
+        screen_profit_gate_enabled: When True, the PF screen only stays ACTIVE
+            while it has been profitable (net money-saving) over the trailing
+            ``screen_profit_window_sessions`` sessions; otherwise the screen is
+            bypassed and the DQN trades unscreened. The screen's value is always
+            measured in shadow (next-bar counterfactual on the trades it would
+            suppress), so the gate keeps re-evaluating whether to switch the
+            screen back on. Default False (screen always active, legacy
+            behaviour, no change unless explicitly enabled).
+        screen_profit_window_sessions: Rolling window length, in SESSIONS (one
+            episode/trading session each, so 7 daily sessions = ~7 days, 7
+            weekly sessions = ~7 weeks), over which the screen's counterfactual
+            P&L is summed to decide whether it stays active. Default 7.
     """
 
     symbol: str = "USDJPY"
@@ -93,6 +105,8 @@ class IntegrationConfig:
     hour_of_day_end: int | None = None
     seed: int = 0
     pip_size: float = 0.01
+    screen_profit_gate_enabled: bool = False
+    screen_profit_window_sessions: int = 7
 
     def __post_init__(self) -> None:
         if self.pip_size <= 0:
@@ -125,6 +139,8 @@ class IntegrationConfig:
             raise ValueError("hour_of_day_start must be in [0, 23]")
         if self.hour_of_day_end is not None and not 0 <= self.hour_of_day_end <= 47:
             raise ValueError("hour_of_day_end must be in [0, 47] (>=24 = next-day)")
+        if self.screen_profit_window_sessions < 1:
+            raise ValueError("screen_profit_window_sessions must be >= 1")
 
 
 def _load_yaml(path: str) -> dict:
@@ -255,6 +271,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--pip-size", dest="pip_size", type=float, default=None)
+    parser.add_argument(
+        "--screen-profit-gate-enabled",
+        dest="screen_profit_gate_enabled",
+        type=_str2bool,
+        default=None,
+    )
+    parser.add_argument(
+        "--screen-profit-window-sessions",
+        dest="screen_profit_window_sessions",
+        type=int,
+        default=None,
+    )
     return parser
 
 

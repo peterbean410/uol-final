@@ -8,6 +8,7 @@ opened during high-uncertainty regimes (``sigma > variance_threshold``).
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -27,6 +28,24 @@ _HOLD_NAME = "HOLD"
 _REASON_PASS = "pass"
 _REASON_BUDGET = "budget_exhausted"
 _REASON_DIRECTIONAL = "directional_conflict"
+# The profit gate decided the screen has NOT been earning its keep over the
+# trailing window, so the DQN action passes through unscreened even though a
+# screen rule WOULD have suppressed it.
+_REASON_GATE_BYPASS = "gate_bypassed"
+
+
+@dataclass
+class _PendingBlock:
+    """A DQN action the screen suppressed, awaiting next-bar mark-to-market.
+
+    The counterfactual P&L of the blocked trade is computed one bar later in
+    modelenv's money convention ``pnl = (close_next - entry) * volume``, with
+    ``volume = units`` and ``sign`` from the action direction.
+    """
+
+    sign: float  # +1 long, -1 short
+    units: int
+    entry_price: float
 
 
 @dataclass
@@ -50,6 +69,9 @@ class ScreenedAction:
     sigma: float
     risk_long_used: int
     risk_short_used: int
+    # Whether the profit gate currently has the screen ACTIVE. Always True when
+    # the gate is disabled (legacy behaviour). Diagnostic only.
+    gate_active: bool = True
 
 
 class _DQNAdvisorLike(Protocol):
@@ -87,6 +109,20 @@ class IntegrationLayer:
         # one-shot lifetime cap (which would freeze trading after the first few
         # opens when sigma is persistently above variance_threshold).
         self._current_day: int | None = None
+
+        # --- Profitability gate state (active only when enabled in config) ---
+        # The screen's value is measured continuously in SHADOW: each bar, the
+        # next-bar counterfactual P&L of any trade the screen WOULD suppress is
+        # accrued (as money SAVED) into the current session, then rolled into a
+        # trailing window of `screen_profit_window_sessions` sessions at each
+        # `begin_session()`. The gate keeps the screen active only while that
+        # trailing sum is positive; otherwise the DQN trades unscreened.
+        self._gate_window: int = config.screen_profit_window_sessions
+        self._cf_history: deque[float] = deque(maxlen=self._gate_window)
+        self._session_cf: float = 0.0
+        self._pending: _PendingBlock | None = None
+        self._gate_active: bool = True
+        self._session_started: bool = False
 
         logger.info(
             "IntegrationLayer initialised: symbol=%s, variance_threshold=%.4f, "
@@ -137,12 +173,109 @@ class IntegrationLayer:
             self._risk_long_units = 0
             self._risk_short_units = 0
 
+    @property
+    def gate_active(self) -> bool:
+        """Whether the profit gate currently has the screen active.
+
+        Always ``True`` when the gate is disabled in config.
+        """
+        return self._gate_active
+
+    def begin_session(self) -> None:
+        """Mark a session boundary for the profitability gate.
+
+        Rolls the just-finished session's counterfactual P&L into the trailing
+        window and recomputes whether the screen stays active for the new
+        session. Call once at the start of each trading session/episode (and
+        once per pre-seed/warm-up session so the gate is informed from bar 0).
+        No-op when the gate is disabled.
+        """
+        if not self._config.screen_profit_gate_enabled:
+            return
+        if self._session_started:
+            self._cf_history.append(self._session_cf)
+        self._session_cf = 0.0
+        self._pending = None
+        self._session_started = True
+        self._recompute_gate()
+
+    def _recompute_gate(self) -> None:
+        """Set ``_gate_active`` from the trailing-window counterfactual sum.
+
+        Until the window has filled (fewer than ``screen_profit_window_sessions``
+        completed sessions) the screen defaults to ACTIVE; the conservative
+        choice, and the backtest pre-seeds the window so the gate is fully
+        informed from the first scored session.
+        """
+        if len(self._cf_history) < self._gate_window:
+            self._gate_active = True
+        else:
+            self._gate_active = sum(self._cf_history) > 0.0
+
+    def _mark_pending_counterfactual(self, price: float | None) -> None:
+        """Mark the previously-blocked trade to ``price`` (its next bar).
+
+        Adds the money the screen SAVED, i.e. minus the blocked trade's
+        realised next-bar P&L, to the current session's counterfactual.
+        """
+        p = self._pending
+        if p is None or price is None or p.entry_price <= 0.0:
+            return
+        blocked_pnl = p.sign * p.units * (price - p.entry_price)
+        self._session_cf += -blocked_pnl
+        self._pending = None
+
+    def _evaluate_rules(self, unit: Any, mu: float, sigma: float) -> str | None:
+        """Run the screen rules; return a hold-reason or ``None`` (pass).
+
+        Mutates the risk budget exactly as the legacy ``screen`` did (consumes
+        on high-sigma pass-through opens). This is the SHADOW evaluation; it
+        always runs as if the screen were active, so the counterfactual ledger
+        measures the screen's true hypothetical value independent of whether the
+        gate is currently honouring it.
+        """
+        high_sigma = sigma > self._config.variance_threshold
+
+        # Rule 1: Risk budget (high-sigma only)
+        if high_sigma:
+            if unit.direction == Direction.LONG:
+                if (
+                    self._risk_long_units + unit.risk_units
+                    > self._config.max_risk_long_units
+                ):
+                    return _REASON_BUDGET
+            elif unit.direction == Direction.SHORT:
+                if (
+                    self._risk_short_units + unit.risk_units
+                    > self._config.max_risk_short_units
+                ):
+                    return _REASON_BUDGET
+
+        # Rule 2: Directional conflict
+        if (
+            self._config.directional_disagreement
+            and unit.direction != Direction.NONE
+            and abs(mu) > self._config.directional_tolerance
+        ):
+            mu_direction = Direction.LONG if mu > 0 else Direction.SHORT
+            if mu_direction != unit.direction:
+                return _REASON_DIRECTIONAL
+
+        # Rule 3: Pass-through (consume budget only on high-sigma opens)
+        if high_sigma:
+            if unit.direction == Direction.LONG:
+                self._risk_long_units += unit.risk_units
+            elif unit.direction == Direction.SHORT:
+                self._risk_short_units += unit.risk_units
+        return None
+
     def screen(
         self,
         dqn_action: Any,
         mu: float,
         sigma: float,
         timestamp_ns: int | None = None,
+        price: float | None = None,
     ) -> ScreenedAction:
         """Apply risk rules in priority order: budget, directional, pass-through.
 
@@ -153,65 +286,74 @@ class IntegrationLayer:
             timestamp_ns: Decision time in UTC nanoseconds. When provided, the
                 risk budget resets at each UTC day boundary. When ``None`` the
                 budget is never reset (legacy lifetime behaviour).
+            price: Latest M5 close at decision time, in quote-currency price
+                units. Required for the profitability gate's next-bar
+                counterfactual; ignored when the gate is disabled.
 
         Returns:
             ScreenedAction with the final action and reason.
         """
         self._maybe_reset_budget(timestamp_ns)
         unit = map_action(dqn_action.action)
-        high_sigma = sigma > self._config.variance_threshold
+        gate_on = self._config.screen_profit_gate_enabled
 
-        # Rule 1: Risk budget (high-sigma only)
-        if high_sigma:
-            if unit.direction == Direction.LONG:
-                if (
-                    self._risk_long_units + unit.risk_units
-                    > self._config.max_risk_long_units
-                ):
-                    return self._hold(_REASON_BUDGET, sigma)
-            elif unit.direction == Direction.SHORT:
-                if (
-                    self._risk_short_units + unit.risk_units
-                    > self._config.max_risk_short_units
-                ):
-                    return self._hold(_REASON_BUDGET, sigma)
+        # Gate: settle the previous bar's blocked trade against this bar's price
+        # BEFORE evaluating the new bar (next-bar mark-to-market).
+        if gate_on:
+            self._mark_pending_counterfactual(price)
 
-        # Rule 2: Directional conflict
+        # Shadow evaluation of the screen (always run; mutates the hypothetical
+        # budget), gives the would-be hold decision regardless of the gate.
+        hold_reason = self._evaluate_rules(unit, mu, sigma)
+
+        # Gate: register the trade the screen would block for next-bar marking.
         if (
-            self._config.directional_disagreement
+            gate_on
+            and hold_reason is not None
+            and price is not None
             and unit.direction != Direction.NONE
-            and abs(mu) > self._config.directional_tolerance
         ):
-            mu_direction = Direction.LONG if mu > 0 else Direction.SHORT
-            if mu_direction != unit.direction:
-                return self._hold(_REASON_DIRECTIONAL, sigma)
+            self._pending = _PendingBlock(
+                sign=1.0 if unit.direction == Direction.LONG else -1.0,
+                units=unit.risk_units,
+                entry_price=price,
+            )
 
-        # Rule 3: Pass-through (consume budget only on high-sigma opens)
-        if high_sigma:
-            if unit.direction == Direction.LONG:
-                self._risk_long_units += unit.risk_units
-            elif unit.direction == Direction.SHORT:
-                self._risk_short_units += unit.risk_units
+        # Honour the suppression only when the screen is active (gate disabled,
+        # or gate enabled AND currently profitable). Otherwise pass through.
+        if hold_reason is not None and (not gate_on or self._gate_active):
+            held = self._hold(hold_reason, sigma)
+            held.gate_active = self._gate_active
+            return held
+        if hold_reason is not None:
+            return self._passthrough(dqn_action, mu, sigma, _REASON_GATE_BYPASS)
+        return self._passthrough(dqn_action, mu, sigma, _REASON_PASS)
 
+    def _passthrough(
+        self, dqn_action: Any, mu: float, sigma: float, reason: str
+    ) -> ScreenedAction:
         action_name = getattr(dqn_action, "action_name", ACTION_NAMES[dqn_action.action])
         result = ScreenedAction(
             action=dqn_action.action,
             action_name=action_name,
             screened=False,
-            reason=_REASON_PASS,
+            reason=reason,
             sigma=sigma,
             risk_long_used=self._risk_long_units,
             risk_short_used=self._risk_short_units,
+            gate_active=self._gate_active,
         )
         logger.debug(
-            "screen pass: symbol=%s action=%s mu=%.4f sigma=%.4f "
-            "risk_long=%d risk_short=%d",
+            "screen %s: symbol=%s action=%s mu=%.4f sigma=%.4f "
+            "risk_long=%d risk_short=%d gate_active=%s",
+            reason,
             self._symbol,
             action_name,
             mu,
             sigma,
             self._risk_long_units,
             self._risk_short_units,
+            self._gate_active,
         )
         return result
 
