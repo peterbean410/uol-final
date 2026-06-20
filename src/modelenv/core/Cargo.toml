@@ -16,6 +16,13 @@ modelenv-proto = { path = "../proto" }
 libc = "0.2"
 bytes = "1.0"
 log = "0.4"
+prost = "0.13"
+# cTrader Open API transport: protobuf over TLS TCP. rustls is pure-Rust (no
+# OpenSSL) so the arm64 cross-build stays C-dependency-free; webpki-roots
+# supplies the Mozilla root store for verifying *.ctraderapi.com.
+tokio-rustls = "0.26"
+rustls = "0.23"
+webpki-roots = "0.26"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 talib-rs = "=0.1.2"
 thiserror = "1.0"
