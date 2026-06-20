@@ -4,5 +4,6 @@ pub mod client;
 pub mod connection;
 pub mod data;
 pub mod gateway;
+pub mod orders;
 pub mod transport;
 pub mod wire;

@@ -51,6 +51,9 @@ pub mod payload_type {
     pub const RECONCILE_RES: u32 = 2125;
     pub const EXECUTION_EVENT: u32 = 2126;
     pub const CLOSE_POSITION_REQ: u32 = 2111;
+    /// Order-level failure event (e.g. market closed, insufficient funds). cTrader
+    /// reports a bad order via THIS, not an `ORDER_REJECTED` execution event.
+    pub const ORDER_ERROR_EVENT: u32 = 2132;
     pub const OA_ERROR_RES: u32 = 2142;
     pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ: u32 = 2149;
     pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_RES: u32 = 2150;
