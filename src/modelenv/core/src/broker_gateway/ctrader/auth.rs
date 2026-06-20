@@ -43,18 +43,20 @@ pub struct Credentials {
     pub account_id: i64,
 }
 
-/// Run the application-auth then account-auth handshake over `conn`. Returns
-/// `Ok(())` once both are accepted; surfaces the broker error code if cTrader
-/// rejects either stage.
-pub async fn authenticate(
+/// Application-auth stage only: authenticate the Open API *application*
+/// (`client_id`/`client_secret`). Required before any other request, including
+/// the read-only account-list discovery (which does not need a specific
+/// account or account-auth).
+pub async fn app_authenticate(
     conn: &Connection,
-    creds: &Credentials,
+    client_id: &str,
+    client_secret: &str,
     timeout: Duration,
 ) -> Result<()> {
     let app_req = ProtoOaApplicationAuthReq {
         payload_type: Some(payload_type::APPLICATION_AUTH_REQ as i32),
-        client_id: creds.client_id.clone(),
-        client_secret: creds.client_secret.clone(),
+        client_id: client_id.to_string(),
+        client_secret: client_secret.to_string(),
     };
     let resp = conn
         .send_request(
@@ -63,7 +65,18 @@ pub async fn authenticate(
             timeout,
         )
         .await?;
-    expect_payload_type(&resp, payload_type::APPLICATION_AUTH_RES, "application auth")?;
+    expect_payload_type(&resp, payload_type::APPLICATION_AUTH_RES, "application auth")
+}
+
+/// Run the application-auth then account-auth handshake over `conn`. Returns
+/// `Ok(())` once both are accepted; surfaces the broker error code if cTrader
+/// rejects either stage.
+pub async fn authenticate(
+    conn: &Connection,
+    creds: &Credentials,
+    timeout: Duration,
+) -> Result<()> {
+    app_authenticate(conn, &creds.client_id, &creds.client_secret, timeout).await?;
 
     let acct_req = ProtoOaAccountAuthReq {
         payload_type: Some(payload_type::ACCOUNT_AUTH_REQ as i32),

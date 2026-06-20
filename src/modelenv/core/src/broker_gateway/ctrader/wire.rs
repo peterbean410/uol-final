@@ -50,6 +50,8 @@ pub mod payload_type {
     pub const EXECUTION_EVENT: u32 = 2126;
     pub const CLOSE_POSITION_REQ: u32 = 2111;
     pub const OA_ERROR_RES: u32 = 2142;
+    pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ: u32 = 2149;
+    pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_RES: u32 = 2150;
 }
 
 /// Build a [`ProtoMessage`] envelope around an already-encoded application

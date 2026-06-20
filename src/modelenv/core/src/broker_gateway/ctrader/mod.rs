@@ -2,6 +2,7 @@
 pub mod auth;
 pub mod client;
 pub mod connection;
+pub mod data;
 pub mod gateway;
 pub mod transport;
 pub mod wire;

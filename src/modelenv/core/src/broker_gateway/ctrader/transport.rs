@@ -94,6 +94,18 @@ impl Transport {
     pub fn endpoint(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+
+    /// Consume the transport into independent read/write halves, suitable for
+    /// driving a [`super::connection::Connection`] (which reads in a background
+    /// task while callers write).
+    pub fn into_split(
+        self,
+    ) -> (
+        tokio::io::ReadHalf<TlsStream<TcpStream>>,
+        tokio::io::WriteHalf<TlsStream<TcpStream>>,
+    ) {
+        tokio::io::split(self.stream)
+    }
 }
 
 #[cfg(test)]
