@@ -49,6 +49,8 @@ pub mod payload_type {
     pub const SYMBOLS_LIST_RES: u32 = 2115;
     pub const GET_TRENDBARS_REQ: u32 = 2137;
     pub const GET_TRENDBARS_RES: u32 = 2138;
+    pub const DEAL_LIST_REQ: u32 = 2133;
+    pub const DEAL_LIST_RES: u32 = 2134;
     pub const RECONCILE_REQ: u32 = 2124;
     pub const RECONCILE_RES: u32 = 2125;
     pub const EXECUTION_EVENT: u32 = 2126;

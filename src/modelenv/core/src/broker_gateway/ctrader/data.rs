@@ -11,17 +11,18 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use modelenv_proto::ctrader::{
-    ProtoOaCtidTraderAccount, ProtoOaErrorRes, ProtoOaGetAccountListByAccessTokenReq,
-    ProtoOaGetAccountListByAccessTokenRes, ProtoOaGetTrendbarsReq, ProtoOaGetTrendbarsRes,
-    ProtoOaPosition, ProtoOaReconcileReq, ProtoOaReconcileRes, ProtoOaSymbolsListReq,
-    ProtoOaSymbolsListRes, ProtoOaTrendbar,
+    ProtoOaCtidTraderAccount, ProtoOaDeal, ProtoOaDealListReq, ProtoOaDealListRes, ProtoOaErrorRes,
+    ProtoOaGetAccountListByAccessTokenReq, ProtoOaGetAccountListByAccessTokenRes,
+    ProtoOaGetTrendbarsReq, ProtoOaGetTrendbarsRes, ProtoOaPosition, ProtoOaReconcileReq,
+    ProtoOaReconcileRes, ProtoOaSymbolsListReq, ProtoOaSymbolsListRes, ProtoOaTrendbar,
 };
-use modelenv_proto::{Bar, Position};
+use modelenv_proto::{Bar, Fill, Position};
 use prost::Message;
 
 use super::connection::Connection;
 use super::orders::volume_to_lots;
 use super::wire::payload_type;
+use crate::position::{ClosedPosition, Side};
 
 // cTrader money fields (swap, commission) are integers in `money_digits`
 // precision; the default for most accounts is 2 (i.e. hundredths).
@@ -266,11 +267,116 @@ pub async fn get_trendbars(
     ))
 }
 
+/// Map a cTrader [`ProtoOaDeal`] to a modelenv [`Fill`] (lots, side = trade_side
+/// − 1, ms→ns). Shared with the order path.
+fn deal_to_fill(d: &ProtoOaDeal) -> Fill {
+    Fill {
+        order_id: d.order_id.to_string(),
+        timestamp_ns: d.execution_timestamp.saturating_mul(1_000_000),
+        price: d.execution_price.unwrap_or(0.0),
+        size: volume_to_lots(d.filled_volume),
+        side: d.trade_side - 1,
+        partial: d.filled_volume < d.volume,
+    }
+}
+
+/// Map a *closing* deal (one carrying a `close_position_detail`) to a modelenv
+/// [`ClosedPosition`]. The closing deal's `trade_side` is OPPOSITE the
+/// position's (closing a long is a sell deal), so the position side is the
+/// inverse. `realised_pnl`/`swap` are scaled by the detail's `money_digits`.
+/// NOTE: the realised-P&L scaling is mock-verified; confirm against a real
+/// closed demo deal (needs the market open) before relying on it live.
+fn deal_to_closed_position(d: &ProtoOaDeal) -> Option<ClosedPosition> {
+    let detail = d.close_position_detail.as_ref()?;
+    let money_scale = 10f64.powi(detail.money_digits.unwrap_or(2) as i32);
+    let side = if d.trade_side == 1 { Side::Sell } else { Side::Buy };
+    Some(ClosedPosition {
+        position_id: d.position_id.to_string(),
+        entry_price: detail.entry_price,
+        close_price: d.execution_price.unwrap_or(0.0),
+        volume: volume_to_lots(detail.closed_volume.unwrap_or(d.filled_volume)),
+        side,
+        realised_pnl: detail.gross_profit as f64 / money_scale,
+        swap: detail.swap as f64 / money_scale,
+        open_timestamp_ns: 0, // not carried on the close deal
+        close_timestamp_ns: d.execution_timestamp.saturating_mul(1_000_000),
+    })
+}
+
+/// Fetch the account's deal (execution) history in `[from_ms, to_ms]`.
+/// Read-only. Underlies both `recent_fills` and `closed_positions`.
+async fn get_deals(
+    conn: &Connection,
+    account_id: i64,
+    from_ms: i64,
+    to_ms: i64,
+    timeout: Duration,
+) -> Result<Vec<ProtoOaDeal>> {
+    let req = ProtoOaDealListReq {
+        payload_type: Some(payload_type::DEAL_LIST_REQ as i32),
+        ctid_trader_account_id: account_id,
+        from_timestamp: from_ms,
+        to_timestamp: to_ms,
+        ..Default::default()
+    };
+    let resp = conn
+        .send_request(payload_type::DEAL_LIST_REQ, req.encode_to_vec(), timeout)
+        .await?;
+    if resp.payload_type == payload_type::DEAL_LIST_RES {
+        let decoded = ProtoOaDealListRes::decode(resp.payload.as_deref().unwrap_or_default())
+            .map_err(|e| anyhow!("decode ProtoOADealListRes failed: {e}"))?;
+        return Ok(decoded.deal);
+    }
+    if resp.payload_type == payload_type::ERROR_RES
+        || resp.payload_type == payload_type::OA_ERROR_RES
+    {
+        if let Ok(err) = ProtoOaErrorRes::decode(resp.payload.as_deref().unwrap_or_default()) {
+            return Err(anyhow!(
+                "cTrader deal-list rejected: {} ({})",
+                err.error_code,
+                err.description.unwrap_or_default()
+            ));
+        }
+    }
+    Err(anyhow!(
+        "cTrader deal-list: unexpected payload_type {} (expected {})",
+        resp.payload_type,
+        payload_type::DEAL_LIST_RES
+    ))
+}
+
+/// Up to `count` most-recent fills (deals) in `[from_ms, to_ms]`, newest first.
+pub async fn recent_fills(
+    conn: &Connection,
+    account_id: i64,
+    from_ms: i64,
+    to_ms: i64,
+    count: usize,
+    timeout: Duration,
+) -> Result<Vec<Fill>> {
+    let mut deals = get_deals(conn, account_id, from_ms, to_ms, timeout).await?;
+    deals.sort_by_key(|d| std::cmp::Reverse(d.execution_timestamp));
+    Ok(deals.iter().take(count).map(deal_to_fill).collect())
+}
+
+/// Closed positions in `[from_ms, to_ms]` (deals carrying a close detail),
+/// used by live `Reset()` to rebuild the rolling realised-P&L window.
+pub async fn closed_positions(
+    conn: &Connection,
+    account_id: i64,
+    from_ms: i64,
+    to_ms: i64,
+    timeout: Duration,
+) -> Result<Vec<ClosedPosition>> {
+    let deals = get_deals(conn, account_id, from_ms, to_ms, timeout).await?;
+    Ok(deals.iter().filter_map(deal_to_closed_position).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::broker_gateway::ctrader::wire;
-    use modelenv_proto::ctrader::ProtoOaLightSymbol;
+    use modelenv_proto::ctrader::{ProtoOaClosePositionDetail, ProtoOaLightSymbol};
     use tokio::io::{AsyncRead, AsyncWrite};
 
     /// Mock cTrader that returns a two-account list (one demo, one live).
@@ -411,6 +517,122 @@ mod tests {
             );
             let _ = wire::write_frame(&mut s, &env).await;
         }
+    }
+
+    #[test]
+    fn closing_deal_maps_to_closed_position_with_realised_pnl() {
+        // A SELL deal (trade_side=2) that closes a LONG position, with a close
+        // detail: entry 150.00, +1234 gross (money_digits=2 -> 12.34), swap -25.
+        let deal = ProtoOaDeal {
+            deal_id: 1,
+            order_id: 7001,
+            position_id: 5001,
+            volume: 100_000,
+            filled_volume: 100_000,
+            symbol_id: 4,
+            execution_timestamp: 1_700_000_100_000,
+            execution_price: Some(150.50),
+            trade_side: 2, // SELL closes a long
+            close_position_detail: Some(ProtoOaClosePositionDetail {
+                entry_price: 150.00,
+                gross_profit: 1234,
+                swap: -25,
+                commission: 0,
+                balance: 0,
+                closed_volume: Some(100_000),
+                money_digits: Some(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cp = deal_to_closed_position(&deal).unwrap();
+        assert_eq!(cp.position_id, "5001");
+        assert_eq!(cp.side, Side::Buy); // SELL deal closed a BUY (long)
+        assert!((cp.entry_price - 150.00).abs() < 1e-9);
+        assert!((cp.close_price - 150.50).abs() < 1e-9);
+        assert!((cp.realised_pnl - 12.34).abs() < 1e-9);
+        assert!((cp.swap - (-0.25)).abs() < 1e-9);
+        assert!((cp.volume - 0.01).abs() < 1e-9);
+    }
+
+    /// Mock cTrader returning a deal list with one open (no close detail) and
+    /// one closing deal.
+    async fn deal_list_server<S>(mut s: S)
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if let Ok(req) = wire::read_frame(&mut s).await {
+            let open = ProtoOaDeal {
+                order_id: 7001,
+                position_id: 5001,
+                volume: 100_000,
+                filled_volume: 100_000,
+                symbol_id: 4,
+                execution_timestamp: 1_700_000_000_000,
+                execution_price: Some(150.00),
+                trade_side: 1,
+                ..Default::default()
+            };
+            let close = ProtoOaDeal {
+                order_id: 7002,
+                position_id: 5001,
+                volume: 100_000,
+                filled_volume: 100_000,
+                symbol_id: 4,
+                execution_timestamp: 1_700_000_100_000,
+                execution_price: Some(150.50),
+                trade_side: 2,
+                close_position_detail: Some(ProtoOaClosePositionDetail {
+                    entry_price: 150.00,
+                    gross_profit: 1234,
+                    swap: 0,
+                    commission: 0,
+                    balance: 0,
+                    closed_volume: Some(100_000),
+                    money_digits: Some(2),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let res = ProtoOaDealListRes {
+                payload_type: Some(payload_type::DEAL_LIST_RES as i32),
+                ctid_trader_account_id: 47678494,
+                deal: vec![open, close],
+                has_more: false,
+            };
+            let env = wire::envelope(
+                payload_type::DEAL_LIST_RES,
+                res.encode_to_vec(),
+                req.client_msg_id.clone(),
+            );
+            let _ = wire::write_frame(&mut s, &env).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_fills_and_closed_positions_from_deal_list() {
+        let (client_io, server_io) = tokio::io::duplex(8192);
+        tokio::spawn(deal_list_server(server_io));
+        let (cr, cw) = tokio::io::split(client_io);
+        let (conn, _events) = Connection::start(cr, cw);
+
+        let fills = recent_fills(&conn, 47678494, 0, 1_800_000_000_000, 10, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(fills.len(), 2);
+        assert_eq!(fills[0].order_id, "7002"); // newest first
+
+        // closed_positions filters to the one closing deal (fresh connection).
+        let (client_io2, server_io2) = tokio::io::duplex(8192);
+        tokio::spawn(deal_list_server(server_io2));
+        let (cr3, cw3) = tokio::io::split(client_io2);
+        let (conn2, _e2) = Connection::start(cr3, cw3);
+        let closed = closed_positions(&conn2, 47678494, 0, 1_800_000_000_000, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].position_id, "5001");
+        assert!((closed[0].realised_pnl - 12.34).abs() < 1e-9);
     }
 
     #[test]
