@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "git_sha": "2551dd9",
+    "data_source": "cache:usdjpy_m5.parquet",
+    "n_bars": 4320,
+    "span": "2024-01-08 00:00 -> 2024-01-28 23:55 UTC",
+    "seed": 0,
+    "variance_threshold": 3.0,
+    "directional_tolerance": 1.0,
+    "policy": {
+      "type": "inference-only momentum/mean-reversion stand-in (no training)"
+    }
+  },
+  "configs": {
+    "C1 informative + gate": {
+      "regime": "informative",
+      "gate_enabled": true,
+      "combined_sharpe_pnl": 0.0012,
+      "baseline_sharpe_pnl": -0.0063,
+      "forecaster_sharpe_pnl": -0.0136,
+      "combined_pnl_pips": 341000.0,
+      "baseline_pnl_pips": -1910500.0,
+      "forecaster_pnl_pips": -101031.8,
+      "suppression_rate": 0.0706,
+      "suppression_by_reason": {
+        "budget_exhausted": 164,
+        "gate_bypassed": 140
+      },
+      "high_sigma_time_fraction": 0.3441,
+      "trades_combined": 425,
+      "trades_baseline": 564,
+      "high_sigma_neg_pnl_prop_combined": 0.3633,
+      "high_sigma_neg_pnl_prop_baseline": 0.4362,
+      "sigma_distribution_combined": {
+        "min": 1.016,
+        "median": 2.687,
+        "p95": 4.997,
+        "max": 6.897
+      },
+      "final_gate_active": true,
+      "req14_passed": true,
+      "req14_failures": []
+    },
+    "C2 collapsed + gate": {
+      "regime": "collapsed",
+      "gate_enabled": true,
+      "combined_sharpe_pnl": 0.0332,
+      "baseline_sharpe_pnl": -0.0063,
+      "forecaster_sharpe_pnl": -0.019,
+      "combined_pnl_pips": 11748500.0,
+      "baseline_pnl_pips": -1910500.0,
+      "forecaster_pnl_pips": -20424.5,
+      "suppression_rate": 0.1004,
+      "suppression_by_reason": {
+        "budget_exhausted": 271,
+        "gate_bypassed": 161
+      },
+      "high_sigma_time_fraction": 1.0,
+      "trades_combined": 201,
+      "trades_baseline": 564,
+      "high_sigma_neg_pnl_prop_combined": 0.4563,
+      "high_sigma_neg_pnl_prop_baseline": 0.4268,
+      "sigma_distribution_combined": {
+        "min": 5.0,
+        "median": 5.0,
+        "p95": 5.0,
+        "max": 5.0
+      },
+      "final_gate_active": true,
+      "req14_passed": false,
+      "req14_failures": [
+        "14.3 high-sigma neg-PnL proportion (money): combined=0.4563 >= baseline=0.4268"
+      ]
+    },
+    "C3 collapsed + gate OFF": {
+      "regime": "collapsed",
+      "gate_enabled": false,
+      "combined_sharpe_pnl": 0.0233,
+      "baseline_sharpe_pnl": -0.0063,
+      "forecaster_sharpe_pnl": -0.019,
+      "combined_pnl_pips": 8812500.0,
+      "baseline_pnl_pips": -1910500.0,
+      "forecaster_pnl_pips": -20424.5,
+      "suppression_rate": 0.0927,
+      "suppression_by_reason": {
+        "budget_exhausted": 399
+      },
+      "high_sigma_time_fraction": 1.0,
+      "trades_combined": 36,
+      "trades_baseline": 564,
+      "high_sigma_neg_pnl_prop_combined": 0.4886,
+      "high_sigma_neg_pnl_prop_baseline": 0.4268,
+      "sigma_distribution_combined": {
+        "min": 5.0,
+        "median": 5.0,
+        "p95": 5.0,
+        "max": 5.0
+      },
+      "final_gate_active": true,
+      "req14_passed": false,
+      "req14_failures": [
+        "14.3 high-sigma neg-PnL proportion (money): combined=0.4886 >= baseline=0.4268"
+      ]
+    }
+  }
+}

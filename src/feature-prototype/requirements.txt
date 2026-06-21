@@ -1,0 +1,11 @@
+# Feature-prototype dependencies (pinned to the versions used for the report run).
+# The prototype also imports the production packages `deepqnetwork` and
+# `tradingmodel.intraday.dqnpf` from the forex repo root (put it on PYTHONPATH,
+# e.g. run from the repo root: `python finalreport/preliminaryreport/prototype/run.py`).
+numpy==1.26.3
+pandas==2.1.4
+matplotlib==3.8.2
+pyarrow==22.0.0
+PyYAML==6.0.1
+# Inference-only: no torch/training. Real tick data is downloaded from Dukascopy
+# using only the Python standard library (urllib, lzma, struct). See dukascopy.py.

@@ -1,0 +1,4 @@
+# Regenerable artifacts, not committed.
+cache/
+__pycache__/
+*.pyc
