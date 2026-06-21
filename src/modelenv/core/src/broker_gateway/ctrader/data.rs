@@ -12,12 +12,79 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use modelenv_proto::ctrader::{
     ProtoOaCtidTraderAccount, ProtoOaErrorRes, ProtoOaGetAccountListByAccessTokenReq,
-    ProtoOaGetAccountListByAccessTokenRes, ProtoOaSymbolsListReq, ProtoOaSymbolsListRes,
+    ProtoOaGetAccountListByAccessTokenRes, ProtoOaPosition, ProtoOaReconcileReq,
+    ProtoOaReconcileRes, ProtoOaSymbolsListReq, ProtoOaSymbolsListRes,
 };
+use modelenv_proto::Position;
 use prost::Message;
 
 use super::connection::Connection;
+use super::orders::volume_to_lots;
 use super::wire::payload_type;
+
+// cTrader money fields (swap, commission) are integers in `money_digits`
+// precision; the default for most accounts is 2 (i.e. hundredths).
+const MONEY_SCALE: f64 = 100.0;
+
+/// Map a cTrader [`ProtoOaPosition`] to a modelenv [`Position`]. Volume is
+/// converted from cTrader units to lots; `unrealised_pnl` is left 0.0 (modelenv
+/// recomputes it from the current price); side is `trade_side - 1` (0=buy,
+/// 1=sell).
+fn to_modelenv_position(p: &ProtoOaPosition) -> Position {
+    Position {
+        position_id: p.position_id.to_string(),
+        entry_price: p.price.unwrap_or(0.0),
+        unrealised_pnl: 0.0,
+        swap: p.swap as f64 / MONEY_SCALE,
+        open_timestamp_ns: p
+            .trade_data
+            .open_timestamp
+            .unwrap_or(0)
+            .saturating_mul(1_000_000),
+        volume: volume_to_lots(p.trade_data.volume),
+        side: p.trade_data.trade_side - 1,
+    }
+}
+
+/// Reconcile: fetch the account's currently OPEN positions and map them to
+/// modelenv [`Position`]s. Used by live `Reset()` to sync the broker book.
+/// Read-only.
+pub async fn sync_positions(
+    conn: &Connection,
+    account_id: i64,
+    timeout: Duration,
+) -> Result<Vec<Position>> {
+    let req = ProtoOaReconcileReq {
+        payload_type: Some(payload_type::RECONCILE_REQ as i32),
+        ctid_trader_account_id: account_id,
+        ..Default::default()
+    };
+    let resp = conn
+        .send_request(payload_type::RECONCILE_REQ, req.encode_to_vec(), timeout)
+        .await?;
+
+    if resp.payload_type == payload_type::RECONCILE_RES {
+        let decoded = ProtoOaReconcileRes::decode(resp.payload.as_deref().unwrap_or_default())
+            .map_err(|e| anyhow!("decode ProtoOAReconcileRes failed: {e}"))?;
+        return Ok(decoded.position.iter().map(to_modelenv_position).collect());
+    }
+    if resp.payload_type == payload_type::ERROR_RES
+        || resp.payload_type == payload_type::OA_ERROR_RES
+    {
+        if let Ok(err) = ProtoOaErrorRes::decode(resp.payload.as_deref().unwrap_or_default()) {
+            return Err(anyhow!(
+                "cTrader reconcile rejected: {} ({})",
+                err.error_code,
+                err.description.unwrap_or_default()
+            ));
+        }
+    }
+    Err(anyhow!(
+        "cTrader reconcile: unexpected payload_type {} (expected {})",
+        resp.payload_type,
+        payload_type::RECONCILE_RES
+    ))
+}
 
 /// Fetch all trading accounts authorized by `access_token`. Read-only; requires
 /// only prior application auth. Each [`ProtoOaCtidTraderAccount`] carries its
@@ -228,5 +295,59 @@ mod tests {
 
         let res = get_symbol_id(&conn, 47678494, "XAUUSD", Duration::from_secs(5)).await;
         assert!(res.is_err());
+    }
+
+    /// Mock cTrader returning one open long position (0.01 lot USDJPY).
+    async fn reconcile_server<S>(mut s: S)
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        use modelenv_proto::ctrader::ProtoOaTradeData;
+        if let Ok(req) = wire::read_frame(&mut s).await {
+            let res = ProtoOaReconcileRes {
+                payload_type: Some(payload_type::RECONCILE_RES as i32),
+                ctid_trader_account_id: 47678494,
+                position: vec![ProtoOaPosition {
+                    position_id: 5001,
+                    trade_data: ProtoOaTradeData {
+                        symbol_id: 4,
+                        volume: 100_000, // 0.01 lot
+                        trade_side: 1,   // BUY
+                        open_timestamp: Some(1_700_000_000_000),
+                        ..Default::default()
+                    },
+                    price: Some(150.5),
+                    swap: 25, // 0.25 in money units
+                    ..Default::default()
+                }],
+                order: vec![],
+            };
+            let env = wire::envelope(
+                payload_type::RECONCILE_RES,
+                res.encode_to_vec(),
+                req.client_msg_id.clone(),
+            );
+            let _ = wire::write_frame(&mut s, &env).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_positions_maps_ctrader_position_to_modelenv() {
+        let (client_io, server_io) = tokio::io::duplex(4096);
+        tokio::spawn(reconcile_server(server_io));
+        let (cr, cw) = tokio::io::split(client_io);
+        let (conn, _events) = Connection::start(cr, cw);
+
+        let positions = sync_positions(&conn, 47678494, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(positions.len(), 1);
+        let p = &positions[0];
+        assert_eq!(p.position_id, "5001");
+        assert_eq!(p.entry_price, 150.5);
+        assert_eq!(p.volume, 0.01); // 100_000 units -> 0.01 lot
+        assert_eq!(p.side, 0); // buy -> 0
+        assert_eq!(p.swap, 0.25); // 25 / 100
+        assert_eq!(p.open_timestamp_ns, 1_700_000_000_000 * 1_000_000);
     }
 }

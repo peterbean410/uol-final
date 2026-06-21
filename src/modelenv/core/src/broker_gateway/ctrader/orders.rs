@@ -54,6 +54,14 @@ pub fn lots_to_volume(lots: f64) -> i64 {
     (lots * STANDARD_LOT_BASE_UNITS * CENTI_UNITS_PER_BASE_UNIT).round() as i64
 }
 
+/// Inverse of [`lots_to_volume`]: a cTrader API `volume` back to a lot size,
+/// the unit modelenv carries on `Fill.size` / `Position.volume`. 100_000 →
+/// 0.01. (Assumes a 100 000-unit standard lot; validate per-symbol via the
+/// symbol's `lotSize` for non-FX-major instruments.)
+pub fn volume_to_lots(volume: i64) -> f64 {
+    volume as f64 / (STANDARD_LOT_BASE_UNITS * CENTI_UNITS_PER_BASE_UNIT)
+}
+
 /// Order direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
@@ -218,9 +226,8 @@ fn interpret(frame: &ProtoMessage, ctx: &str) -> Result<Exec> {
                 // cTrader timestamps are epoch milliseconds; modelenv uses ns.
                 timestamp_ns: deal.execution_timestamp.saturating_mul(1_000_000),
                 price: deal.execution_price.unwrap_or(0.0),
-                // Raw cTrader filled volume (units; 1000 = 0.01 lot). The gateway
-                // converts to modelenv's lot convention.
-                size: deal.filled_volume as f64,
+                // modelenv carries volume in lots; convert from cTrader units.
+                size: volume_to_lots(deal.filled_volume),
                 // modelenv side: 0 = buy, 1 = sell (cTrader trade_side 1/2 - 1).
                 side: deal.trade_side - 1,
                 partial: deal.filled_volume < deal.volume,
@@ -264,8 +271,8 @@ mod tests {
             deal_id: 9001,
             order_id: 7001,
             position_id: 5001,
-            volume: 1000,
-            filled_volume: 1000,
+            volume: 100_000,        // 0.01 lot in cTrader units
+            filled_volume: 100_000, // fully filled
             symbol_id: 4,
             execution_timestamp: 1_700_000_000_000, // ms
             execution_price: Some(150.123),
@@ -319,7 +326,7 @@ mod tests {
         assert_eq!(res.position_id, 5001);
         assert_eq!(res.fill.order_id, "7001");
         assert_eq!(res.fill.price, 150.123);
-        assert_eq!(res.fill.size, 1000.0);
+        assert_eq!(res.fill.size, 0.01); // 100_000 cTrader units -> 0.01 lot
         assert_eq!(res.fill.side, 0); // buy -> 0
         assert!(!res.fill.partial);
         assert_eq!(res.fill.timestamp_ns, 1_700_000_000_000 * 1_000_000);
