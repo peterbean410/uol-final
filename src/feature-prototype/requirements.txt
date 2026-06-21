@@ -7,5 +7,6 @@ pandas==2.1.4
 matplotlib==3.8.2
 pyarrow==22.0.0
 PyYAML==6.0.1
+requests==2.32.3   # telegram_advisor_bot.py (Telegram Bot HTTP API, long-polling)
 # Inference-only: no torch/training. Real tick data is downloaded from Dukascopy
 # using only the Python standard library (urllib, lzma, struct). See dukascopy.py.

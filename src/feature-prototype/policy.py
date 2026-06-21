@@ -107,6 +107,12 @@ class ReplayTradingEnv:
     def observe(self) -> np.ndarray:
         return self._observe()
 
+    def observe_at(self, t: int, pos: int = 0) -> np.ndarray:
+        """Observation at bar ``t`` with net position ``pos`` (for one-shot advice)."""
+        self._t = int(t)
+        self._pos = int(pos)
+        return self._observe()
+
     def step(self, action: int) -> StepOutcome:
         unit = map_action(action)
         delta = 0

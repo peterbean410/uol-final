@@ -39,6 +39,32 @@ Outputs:
 - `preliminaryreport/figures/fig1..5_*.png`, price/σ, equity curves, suppression-by-σ, gate timeline, σ-calibration.
 - `preliminaryreport/prototype/results/metrics.json`, full metrics + Req-14 gate verdicts per configuration.
 
+## Telegram advisor bot (`telegram_advisor_bot.py`)
+
+A non-technical interface (Template 4.2): message the bot and get the
+recommendation, computed through the **real** `IntegrationLayer` screen + gate.
+Uses Telegram long-polling (`getUpdates` to receive, `sendMessage` to send).
+
+```bash
+cp .env.example .env            # then put your BotFather token in .env
+python telegram_advisor_bot.py            # start the polling bot
+python telegram_advisor_bot.py --dry-run  # print one advice to stdout (no Telegram)
+python telegram_advisor_bot.py --check    # verify the token (getMe) and exit
+```
+
+In Telegram, send `/advice` to get e.g.:
+
+```
+USD/JPY advice, bar 2024-01-28 23:55 UTC
+Recommendation: HOLD
+Forecast: mu=+0.30 bp, sigma=2.16 bp (normal regime)
+Screen: pass | profitability gate: active
+Last price: 148.184
+```
+
+The token is read from env / a gitignored `.env` (never committed). Set
+`TELEGRAM_ALLOWED_CHAT_IDS` to restrict who may use the bot.
+
 ## The three configurations
 - **C1 informative + gate**, feasibility: an informative σ gives the screen something real to act on.
 - **C2 collapsed + gate**, honest failure: a constant (collapsed) σ degenerates the screen into a global on/off switch; the profitability gate detects this and self-deactivates.
