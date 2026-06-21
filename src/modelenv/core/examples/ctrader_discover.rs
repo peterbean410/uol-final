@@ -69,5 +69,23 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("[discover] resolving symbol {symbol} ...");
     let symbol_id = data::get_symbol_id(&conn, account_id, &symbol, timeout).await?;
     println!("[discover] {symbol} symbol_id={symbol_id} on demo account {account_id}");
+
+    // Fetch the last few M1 bars (historical, works even when the market is
+    // closed) to validate the trendbar delta-decoding + price scaling against
+    // real data (USDJPY close should be ~100-160).
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    eprintln!("[discover] fetching last 5 M1 bars ...");
+    let bars = data::get_trendbars(&conn, account_id, symbol_id, data::TRENDBAR_M1, 5, now_ms, timeout)
+        .await?;
+    println!("[discover] {} M1 bars:", bars.len());
+    for b in &bars {
+        println!(
+            "  ts_ns={} O={:.3} H={:.3} L={:.3} C={:.3} V={}",
+            b.timestamp_ns, b.open, b.high, b.low, b.close, b.volume
+        );
+    }
     Ok(())
 }

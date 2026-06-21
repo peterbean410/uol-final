@@ -12,10 +12,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use modelenv_proto::ctrader::{
     ProtoOaCtidTraderAccount, ProtoOaErrorRes, ProtoOaGetAccountListByAccessTokenReq,
-    ProtoOaGetAccountListByAccessTokenRes, ProtoOaPosition, ProtoOaReconcileReq,
-    ProtoOaReconcileRes, ProtoOaSymbolsListReq, ProtoOaSymbolsListRes,
+    ProtoOaGetAccountListByAccessTokenRes, ProtoOaGetTrendbarsReq, ProtoOaGetTrendbarsRes,
+    ProtoOaPosition, ProtoOaReconcileReq, ProtoOaReconcileRes, ProtoOaSymbolsListReq,
+    ProtoOaSymbolsListRes, ProtoOaTrendbar,
 };
-use modelenv_proto::Position;
+use modelenv_proto::{Bar, Position};
 use prost::Message;
 
 use super::connection::Connection;
@@ -25,6 +26,13 @@ use super::wire::payload_type;
 // cTrader money fields (swap, commission) are integers in `money_digits`
 // precision; the default for most accounts is 2 (i.e. hundredths).
 const MONEY_SCALE: f64 = 100.0;
+// cTrader trendbar prices are integers scaled by 10^5 (fixed, regardless of the
+// symbol's display digits), delta-encoded off the bar `low`.
+const TRENDBAR_PRICE_SCALE: f64 = 100_000.0;
+/// cTrader trendbar period discriminants (`ProtoOATrendbarPeriod`).
+pub const TRENDBAR_M1: i32 = 1;
+pub const TRENDBAR_M5: i32 = 5;
+pub const TRENDBAR_M15: i32 = 7;
 
 /// Map a cTrader [`ProtoOaPosition`] to a modelenv [`Position`]. Volume is
 /// converted from cTrader units to lots; `unrealised_pnl` is left 0.0 (modelenv
@@ -184,6 +192,80 @@ pub async fn get_symbol_id(
     ))
 }
 
+/// Decode one cTrader [`ProtoOaTrendbar`] (delta-encoded off `low`, prices ×10⁵,
+/// timestamp in minutes) into a modelenv [`Bar`].
+fn to_modelenv_bar(tb: &ProtoOaTrendbar) -> Bar {
+    let low = tb.low.unwrap_or(0);
+    let price = |delta: u64| (low as f64 + delta as f64) / TRENDBAR_PRICE_SCALE;
+    Bar {
+        // utc_timestamp_in_minutes (minutes since epoch) → ns.
+        timestamp_ns: tb.utc_timestamp_in_minutes.unwrap_or(0) as i64 * 60_000_000_000,
+        open: price(tb.delta_open.unwrap_or(0)),
+        high: price(tb.delta_high.unwrap_or(0)),
+        low: low as f64 / TRENDBAR_PRICE_SCALE,
+        close: price(tb.delta_close.unwrap_or(0)),
+        volume: tb.volume as f64,
+    }
+}
+
+/// Fetch the most recent `count` trendbars of `period` for `symbol_id` on
+/// `account_id`, oldest→newest, as modelenv [`Bar`]s. Read-only; works even
+/// when the market is closed (historical data). `now_ms` is the current epoch
+/// time in milliseconds (the window is `[now - count·period, now]`).
+pub async fn get_trendbars(
+    conn: &Connection,
+    account_id: i64,
+    symbol_id: i64,
+    period: i32,
+    count: u32,
+    now_ms: i64,
+    timeout: Duration,
+) -> Result<Vec<Bar>> {
+    let period_ms: i64 = match period {
+        TRENDBAR_M1 => 60_000,
+        TRENDBAR_M5 => 300_000,
+        TRENDBAR_M15 => 900_000,
+        _ => 60_000,
+    };
+    // Generous window so cTrader returns at least `count` completed bars.
+    let from = now_ms - (count as i64 + 2) * period_ms;
+    let req = ProtoOaGetTrendbarsReq {
+        payload_type: Some(payload_type::GET_TRENDBARS_REQ as i32),
+        ctid_trader_account_id: account_id,
+        from_timestamp: from,
+        to_timestamp: now_ms,
+        period,
+        symbol_id,
+        count: Some(count),
+        ..Default::default()
+    };
+    let resp = conn
+        .send_request(payload_type::GET_TRENDBARS_REQ, req.encode_to_vec(), timeout)
+        .await?;
+
+    if resp.payload_type == payload_type::GET_TRENDBARS_RES {
+        let decoded = ProtoOaGetTrendbarsRes::decode(resp.payload.as_deref().unwrap_or_default())
+            .map_err(|e| anyhow!("decode ProtoOAGetTrendbarsRes failed: {e}"))?;
+        return Ok(decoded.trendbar.iter().map(to_modelenv_bar).collect());
+    }
+    if resp.payload_type == payload_type::ERROR_RES
+        || resp.payload_type == payload_type::OA_ERROR_RES
+    {
+        if let Ok(err) = ProtoOaErrorRes::decode(resp.payload.as_deref().unwrap_or_default()) {
+            return Err(anyhow!(
+                "cTrader trendbars rejected: {} ({})",
+                err.error_code,
+                err.description.unwrap_or_default()
+            ));
+        }
+    }
+    Err(anyhow!(
+        "cTrader trendbars: unexpected payload_type {} (expected {})",
+        resp.payload_type,
+        payload_type::GET_TRENDBARS_RES
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +411,27 @@ mod tests {
             );
             let _ = wire::write_frame(&mut s, &env).await;
         }
+    }
+
+    #[test]
+    fn trendbar_delta_decoding_reconstructs_ohlc() {
+        // low=15010000 (=150.10 at x10^5); deltas give O=150.105 H=150.123 C=150.118.
+        let tb = ProtoOaTrendbar {
+            volume: 42,
+            low: Some(15_010_000),
+            delta_open: Some(500),   // 150.105
+            delta_high: Some(2_300), // 150.123
+            delta_close: Some(1_800),// 150.118
+            utc_timestamp_in_minutes: Some(28_350_000),
+            ..Default::default()
+        };
+        let bar = to_modelenv_bar(&tb);
+        assert!((bar.low - 150.10).abs() < 1e-6);
+        assert!((bar.open - 150.105).abs() < 1e-6);
+        assert!((bar.high - 150.123).abs() < 1e-6);
+        assert!((bar.close - 150.118).abs() < 1e-6);
+        assert_eq!(bar.volume, 42.0);
+        assert_eq!(bar.timestamp_ns, 28_350_000i64 * 60_000_000_000);
     }
 
     #[tokio::test]
