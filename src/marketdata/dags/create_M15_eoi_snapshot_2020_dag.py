@@ -19,9 +19,11 @@ from kubernetes.client import models as k8s
 
 default_args = {
     "owner": "fintech",
-    "retries": 3,
-    "retry_delay": timedelta(minutes=5),
-    "depends_on_past": False,
+    "retries": 5,
+    "retry_delay": timedelta(minutes=2),
+    "retry_exponential_backoff": True,
+    "max_retry_delay": timedelta(minutes=30),
+    "depends_on_past": True,
 }
 
 _ECR_IMAGE = (
@@ -49,7 +51,7 @@ def _make_branch(wait_task_id: str, skip_task_id: str):
 
 
 with DAG(
-    max_active_runs=1,  # serial, rate-limited catchup; depends_on_past=False so one failure no longer cascades
+    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
     dag_id="create_eoh_snapshot_2020",
     default_args=default_args,
     description="Create FX end-of-interval price snapshots (M1, M5, M15) using the marketdata Helm chart image",
