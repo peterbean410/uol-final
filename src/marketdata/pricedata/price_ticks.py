@@ -31,6 +31,13 @@ PRICE_DIVISOR = 100_000
 QUOTE_TYPE_BID = 1
 QUOTE_TYPE_ASK = 2
 
+# cTrader Open API per-request response timeout. The library default is 5s, which
+# is too aggressive for a busy/slow broker endpoint and caused transient
+# `twisted.internet.defer.TimeoutError: (5, 'Deferred')` download failures.
+RESPONSE_TIMEOUT_SECONDS = 30
+# Overall cap on the full auth -> tick fetch (ticks are higher-volume than bars).
+FETCH_TIMEOUT_SECONDS = 180
+
 
 class _PriceTickFetcher:
     """Internal class that connects, authenticates, and fetches tick data.
@@ -72,7 +79,7 @@ class _PriceTickFetcher:
         reactor.run(installSignalHandlers=False)
 
     def _send(self, msg):
-        d = self.client.send(msg)
+        d = self.client.send(msg, responseTimeoutInSeconds=RESPONSE_TIMEOUT_SECONDS)
         d.addErrback(lambda f: self._fail(f"Send error: {f}"))
         return d
 
@@ -264,7 +271,7 @@ def get_price_ticks(
 
     thread = threading.Thread(target=fetcher.run, daemon=True)
     thread.start()
-    thread.join(timeout=60)
+    thread.join(timeout=FETCH_TIMEOUT_SECONDS)
 
     if fetcher.error:
         raise RuntimeError(fetcher.error)

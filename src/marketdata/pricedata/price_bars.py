@@ -31,6 +31,14 @@ INTERVAL_TO_PERIOD = {
 
 DEFAULT_PRICE_SCALE = 5
 
+# cTrader Open API per-request response timeout. The library default is 5s, which
+# is too aggressive for a busy/slow broker endpoint and was the dominant cause of
+# transient `twisted.internet.defer.TimeoutError: (5, 'Deferred')` download
+# failures (one slow auth/trendbars reply failed the whole task).
+RESPONSE_TIMEOUT_SECONDS = 30
+# Overall cap on the full auth -> trendbars fetch (several sequential requests).
+FETCH_TIMEOUT_SECONDS = 120
+
 
 def _symbol_price_scale(symbol) -> int:
     """Return number of decimal places for a cTrader symbol."""
@@ -85,7 +93,7 @@ class _PriceBarFetcher:
         reactor.run(installSignalHandlers=False)
 
     def _send(self, msg):
-        d = self.client.send(msg)
+        d = self.client.send(msg, responseTimeoutInSeconds=RESPONSE_TIMEOUT_SECONDS)
         d.addErrback(lambda f: self._fail(f"Send error: {f}"))
         return d
 
@@ -235,7 +243,7 @@ def get_price_bars(
 
     thread = threading.Thread(target=fetcher.run, daemon=True)
     thread.start()
-    thread.join(timeout=30)
+    thread.join(timeout=FETCH_TIMEOUT_SECONDS)
 
     if fetcher.error:
         raise RuntimeError(fetcher.error)
