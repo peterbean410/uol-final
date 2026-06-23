@@ -72,7 +72,7 @@ with DAG(
             name=f"create-eod-news-snapshot-{slug.replace('_', '-')}",
             namespace="airflow",
             image=_ECR_IMAGE,
-            image_pull_policy="IfNotPresent",
+            image_pull_policy="Always",
             image_pull_secrets=[
                 k8s.V1LocalObjectReference(name="ecr-registry-credentials")
             ],

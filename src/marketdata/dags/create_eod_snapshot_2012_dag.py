@@ -94,7 +94,7 @@ with DAG(
             name=f"create-{interval.lower()}-eod-snapshot",
             namespace="airflow",
             image=_ECR_IMAGE,
-            image_pull_policy="IfNotPresent",
+            image_pull_policy="Always",
             image_pull_secrets=[k8s.V1LocalObjectReference(name="ecr-registry-credentials")],
             service_account_name="airflow-worker",
             cmds=["python", "marketdata/usecases/create-eoi-price-snapshot.py"],
