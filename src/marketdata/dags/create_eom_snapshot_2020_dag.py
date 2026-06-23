@@ -15,10 +15,10 @@ from kubernetes.client import models as k8s
 
 default_args = {
     "owner": "fintech",
-    "retries": 5,
+    "retries": 12,
     "retry_delay": timedelta(minutes=2),
     "retry_exponential_backoff": True,
-    "max_retry_delay": timedelta(minutes=30),
+    "max_retry_delay": timedelta(hours=4),
     "depends_on_past": True,
 }
 
