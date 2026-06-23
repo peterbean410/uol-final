@@ -16,7 +16,7 @@ default_args = {
     "owner": "fintech",
     "retries": 2,
     "retry_delay": timedelta(minutes=10),
-    "depends_on_past": True,
+    "depends_on_past": False,
 }
 
 _ECR_IMAGE = (

@@ -14,9 +14,9 @@ from kubernetes.client import models as k8s
 
 default_args = {
     "owner": "fintech",
-    "retries": 1,
+    "retries": 3,
     "retry_delay": timedelta(minutes=5),
-    "depends_on_past": True,
+    "depends_on_past": False,
 }
 
 _ECR_IMAGE = (
@@ -26,7 +26,7 @@ _ECR_IMAGE = (
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past: serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,  # serial, rate-limited catchup; depends_on_past=False so one failure no longer cascades
     dag_id="create_eow_snapshot_2020",
     default_args=default_args,
     description="Create FX end-of-week price snapshots (W1) from weekly-aggregated bars",

@@ -15,9 +15,9 @@ from kubernetes.client import models as k8s
 
 default_args = {
     "owner": "fintech",
-    "retries": 1,
+    "retries": 3,
     "retry_delay": timedelta(minutes=5),
-    "depends_on_past": True,
+    "depends_on_past": False,
 }
 
 _ECR_IMAGE = (
