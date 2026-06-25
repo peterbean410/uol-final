@@ -12,86 +12,76 @@ in the wrongly-active later run just sits in ``NONE`` (blocked), and the earlier
 run's tasks never schedule. We hit this repeatedly on the 2012 aggregate/snapshot
 backfill chains after clearing runs.
 
-This guard runs every 10 minutes and heals it deterministically: for any unpaused
-``max_active_runs=1`` DAG whose ``running`` run is NOT its earliest non-success
-run, it demotes the later run(s) back to ``queued`` and activates the earliest,
-so the slot always goes to the run that is actually runnable. In steady state
-(one run in flight) it is a no-op.
+This guard runs every 10 minutes and heals it deterministically with one atomic
+SQL statement: for any unpaused ``max_active_runs=1`` DAG whose running run is
+NOT its earliest non-success run, it demotes the later run(s) back to ``queued``
+and activates the earliest, scoping the activation to only the DAGs it actually
+fixed. In steady state (one run in flight) it is a no-op.
+
+Implemented as a KubernetesPodOperator running ``psql`` (the executor pattern the
+rest of this pipeline uses) rather than a TaskFlow ``@task``, whose worker pod
+fails to load the DAG bundle in this KubernetesExecutor + GitDagBundle setup.
 """
 
 import pendulum
-from airflow.decorators import dag, task
+from airflow import DAG
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from kubernetes.client import models as k8s
 
+# One atomic statement. The CTE demotes every 'running' run on a serial unpaused
+# DAG that is LATER than that DAG's earliest non-success run; the outer UPDATE
+# then activates the earliest non-success queued run, but only for DAGs that the
+# CTE just demoted (so idle DAGs are never touched).
+_HEAL_SQL = (
+    "WITH demoted AS ("
+    " UPDATE dag_run dr SET state='queued' FROM dag d"
+    " WHERE d.dag_id=dr.dag_id AND d.is_paused=false AND d.max_active_runs=1"
+    " AND dr.state='running'"
+    " AND dr.logical_date > (SELECT min(e.logical_date) FROM dag_run e"
+    " WHERE e.dag_id=dr.dag_id AND e.state<>'success')"
+    " RETURNING dr.dag_id)"
+    " UPDATE dag_run dr SET state='running', start_date=COALESCE(dr.start_date, now())"
+    " FROM dag d"
+    " WHERE d.dag_id=dr.dag_id AND dr.dag_id IN (SELECT DISTINCT dag_id FROM demoted)"
+    " AND dr.state='queued'"
+    " AND dr.logical_date=(SELECT min(e.logical_date) FROM dag_run e"
+    " WHERE e.dag_id=dr.dag_id AND e.state<>'success')"
+    " AND NOT EXISTS (SELECT 1 FROM dag_run x WHERE x.dag_id=dr.dag_id AND x.state='running');"
+)
 
-@dag(
+with DAG(
     dag_id="anti_starvation_guard",
     schedule="*/10 * * * *",
     start_date=pendulum.datetime(2026, 6, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
     tags=["maintenance", "scheduler"],
-)
-def anti_starvation_guard():
-    @task
-    def heal() -> int:
-        from airflow.models.dag import DagModel
-        from airflow.models.dagrun import DagRun
-        from airflow.utils.session import create_session
-        from airflow.utils.state import DagRunState
-        from sqlalchemy import select
-
-        healed = []
-        with create_session() as session:
-            serial_dag_ids = list(
-                session.scalars(
-                    select(DagModel.dag_id).where(
-                        DagModel.is_paused.is_(False),
-                        DagModel.max_active_runs == 1,
+) as dag:
+    KubernetesPodOperator(
+        task_id="heal",
+        name="anti-starvation-heal",
+        namespace="airflow",
+        image="postgres:16-alpine",
+        image_pull_policy="IfNotPresent",
+        cmds=["sh", "-c"],
+        arguments=[
+            'PGPASSWORD="$POSTGRES_PASSWORD" psql -h airflow-postgresql -U postgres '
+            '-d postgres -v ON_ERROR_STOP=1 -c "' + _HEAL_SQL + '"'
+        ],
+        env_vars=[
+            k8s.V1EnvVar(
+                name="POSTGRES_PASSWORD",
+                value_from=k8s.V1EnvVarSource(
+                    secret_key_ref=k8s.V1SecretKeySelector(
+                        name="airflow-postgresql", key="postgres-password"
                     )
-                )
+                ),
             )
-            for dag_id in serial_dag_ids:
-                try:
-                    runs = list(
-                        session.scalars(
-                            select(DagRun)
-                            .where(
-                                DagRun.dag_id == dag_id,
-                                DagRun.state != DagRunState.SUCCESS,
-                            )
-                            .order_by(DagRun.logical_date)
-                        )
-                    )
-                    if len(runs) < 2:
-                        continue  # at most one run in flight -> cannot starve
-                    earliest = runs[0]
-                    later_running = [
-                        r for r in runs[1:] if r.state == DagRunState.RUNNING
-                    ]
-                    if not later_running or earliest.state == DagRunState.RUNNING:
-                        continue  # the running run already IS the earliest -> healthy
-                    for r in later_running:
-                        r.state = DagRunState.QUEUED
-                    earliest.state = DagRunState.RUNNING
-                    if earliest.start_date is None:
-                        earliest.start_date = pendulum.now("UTC")
-                    healed.append(
-                        f"{dag_id}: activated {earliest.run_id}; demoted "
-                        + ", ".join(r.run_id for r in later_running)
-                    )
-                except Exception as exc:  # never let one bad DAG break the sweep
-                    print(f"anti-starvation: skipped {dag_id}: {exc}")
-            session.commit()
-
-        if healed:
-            print(f"anti-starvation: healed {len(healed)} starved DAG(s):")
-            for line in healed:
-                print("  ", line)
-        else:
-            print("anti-starvation: nothing to heal")
-        return len(healed)
-
-    heal()
-
-
-anti_starvation_guard()
+        ],
+        container_resources=k8s.V1ResourceRequirements(
+            requests={"cpu": "50m", "memory": "64Mi"},
+            limits={"cpu": "250m", "memory": "128Mi"},
+        ),
+        is_delete_operator_pod=True,
+        get_logs=True,
+    )
