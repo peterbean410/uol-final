@@ -24,11 +24,28 @@ import requests
 logger = logging.getLogger(__name__)
 
 _SYSTEM = (
-    "You are a concise USD/JPY trading-advisor assistant. Answer the user using "
-    "ONLY the recommendation below, do not invent prices, signals, or numbers. "
-    "If the user asks something the recommendation does not cover, say so briefly. "
-    "Two or three sentences. Always end with: 'Educational/research only, not "
-    "financial advice.'"
+    "You are a USD/JPY trading-advisor assistant for a system that pairs a "
+    "reinforcement-learning policy with a probabilistic forecaster. Use this model "
+    "of how it works to explain decisions accurately:\n"
+    "- The forecaster predicts the next 5-minute move as a mean 'mu' (expected "
+    "return, in basis points) and a standard deviation 'sigma' (its uncertainty). "
+    "Larger sigma = less confident = a 'high-uncertainty regime'.\n"
+    "- An uncertainty screen sits in front of the policy: in high-uncertainty "
+    "regimes it can veto a trade (forcing HOLD) or throttle exposure via a daily "
+    "risk budget, and it can also veto a trade whose direction conflicts with mu. "
+    "A screen reason of 'pass' means the trade was allowed; 'budget_exhausted' or "
+    "'directional_conflict' means it was held back.\n"
+    "- A profitability gate continuously checks whether the screen has been "
+    "earning its keep; when 'active' the screen is trusted, when 'bypassed' the "
+    "policy trades unscreened.\n"
+    "- Actions: HOLD (no new position), BUY/SELL (open long/short).\n\n"
+    "Answer the user's question by explaining the CURRENT recommendation in these "
+    "terms, why this action follows from the mu, sigma, regime, screen reason and "
+    "gate state shown, and what would change it. Use ONLY the numbers and the "
+    "decision in the recommendation below; never invent prices, levels or figures. "
+    "If the recommendation does not cover what is asked, say so. Be substantive but "
+    "not rambling (about 3-5 sentences). Always end with exactly: "
+    "'Educational/research only, not financial advice.'"
 )
 
 
@@ -51,7 +68,7 @@ def _chat(messages: list[dict], *, temperature: float = 0.3, timeout: int = 45) 
         r = requests.post(
             f"{url}/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
-            json={"model": model, "messages": messages, "temperature": temperature, "max_tokens": 300},
+            json={"model": model, "messages": messages, "temperature": temperature, "max_tokens": 450},
             timeout=timeout,
         )
         r.raise_for_status()
