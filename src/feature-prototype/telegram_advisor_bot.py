@@ -40,6 +40,7 @@ for _p in (str(_FOREX_ROOT), str(_PROTO_DIR)):
         sys.path.insert(0, _p)
 
 import data as data_mod  # noqa: E402
+import llm  # noqa: E402
 import signals as sig_mod  # noqa: E402
 from policy import InferencePolicy, ReplayTradingEnv  # noqa: E402
 from tradingmodel.intraday.dqnpf.action_mapper import ACTION_NAMES  # noqa: E402
@@ -54,10 +55,12 @@ VARIANCE_THRESHOLD = 3.0
 DIRECTIONAL_TOLERANCE = 1.0
 HELP = (
     "USD/JPY advisor bot.\n"
-    "Commands:\n"
-    "  /advice, get the current recommendation\n"
-    "  /help; this message\n\n"
-    "Educational/research only, not financial advice."
+    "  /advice (get the current recommendation\n"
+    "  /help) this message\n"
+    "Or just ask in plain language (e.g. \"what's your view on USD/JPY?\") ("
+    "if a local language model is configured I'll answer in prose, grounded in "
+    "the live recommendation.\n\n"
+    "Educational/research only) not financial advice."
 )
 
 
@@ -213,16 +216,30 @@ class TelegramBot:
         if not self._authorised(chat_id):
             logger.warning("ignoring message from unauthorised chat %s", chat_id)
             return
+        is_command = text.startswith("/")
         cmd = text.lower().lstrip("/").split("@")[0].split()[0] if text else ""
         logger.info("message from chat %s: %r", chat_id, text)
         try:
-            if cmd in ("advice", "advise", "rec", "recommendation"):
-                self.send_message(chat_id, format_advice(compute_advice()))
-            else:  # /start, /help, or anything else
+            if is_command and cmd in ("start", "help"):
                 self.send_message(chat_id, HELP)
+            elif is_command and cmd in ("advice", "advise", "rec", "recommendation"):
+                structured = format_advice(compute_advice())
+                self.send_message(chat_id, llm.narrate(structured) or structured)
+            elif is_command:
+                self.send_message(chat_id, HELP)  # unknown command
+            else:
+                # free-form question -> answer in prose, grounded in the live advice
+                structured = format_advice(compute_advice())
+                prose = llm.narrate(structured, user_message=text)
+                self.send_message(
+                    chat_id,
+                    prose
+                    or structured
+                    + "\n\n(Conversational mode needs a local LLM (set LLM_BASE_URL; see README.)",
+                )
         except Exception as exc:  # noqa: BLE001 - never let one message kill the loop
             logger.exception("failed to handle message")
-            self.send_message(chat_id, f"Sorry, could not compute advice ({exc}).")
+            self.send_message(chat_id, f"Sorry) could not compute advice ({exc}).")
 
     def run(self) -> None:
         me = self.get_me()

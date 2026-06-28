@@ -41,9 +41,12 @@ Outputs:
 
 ## Telegram advisor bot (`telegram_advisor_bot.py`)
 
-A non-technical interface (Template 4.2): message the bot and get the
-recommendation, computed through the **real** `IntegrationLayer` screen + gate.
+A non-technical conversational interface (Template 4.2): message the bot and get
+the recommendation, computed through the **real** `IntegrationLayer` screen + gate.
 Uses Telegram long-polling (`getUpdates` to receive, `sendMessage` to send).
+Send `/advice` for the structured recommendation, or **ask in plain language**,
+when a local LLM is configured the bot answers in prose, *grounded in the live
+recommendation* (it cannot invent signals).
 
 ```bash
 cp .env.example .env            # then put your BotFather token in .env
@@ -63,7 +66,11 @@ Last price: 148.184
 ```
 
 The token is read from env / a gitignored `.env` (never committed). Set
-`TELEGRAM_ALLOWED_CHAT_IDS` to restrict who may use the bot.
+`TELEGRAM_ALLOWED_CHAT_IDS` to restrict who may use the bot. For conversational
+(LLM) replies, point `LLM_BASE_URL` at any OpenAI-compatible endpoint, e.g. the
+served Gemma-4 vLLM (`bash scripts/port-forward-gemma4.sh 8080`, then
+`LLM_BASE_URL=http://localhost:8080/v1`, `LLM_MODEL=google/gemma-4-31b-it`) or a
+local Ollama; without it the bot stays command-only (`llm.py`).
 
 ## The three configurations
 - **C1 informative + gate**, feasibility: an informative σ gives the screen something real to act on.
