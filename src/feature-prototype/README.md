@@ -68,9 +68,14 @@ Last price: 148.184
 The token is read from env / a gitignored `.env` (never committed). Set
 `TELEGRAM_ALLOWED_CHAT_IDS` to restrict who may use the bot. For conversational
 (LLM) replies, point `LLM_BASE_URL` at any OpenAI-compatible endpoint, e.g. the
-served Gemma-4 vLLM (`bash scripts/port-forward-gemma4.sh 8080`, then
-`LLM_BASE_URL=http://localhost:8080/v1`, `LLM_MODEL=google/gemma-4-31b-it`) or a
-local Ollama; without it the bot stays command-only (`llm.py`).
+served Gemma-4 vLLM or a local Ollama; without it the bot stays command-only
+(`llm.py`). The convenience launcher does the whole thing, port-forwards the
+served Gemma-4, auto-discovers the model, points the bot at it, and runs it
+(tearing the port-forward down on exit):
+
+```bash
+./start_advisor_bot.sh        # needs cluster access via <forex>/kubeconfig
+```
 
 ## The three configurations
 - **C1 informative + gate**, feasibility: an informative σ gives the screen something real to act on.
