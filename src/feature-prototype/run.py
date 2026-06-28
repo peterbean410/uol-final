@@ -38,6 +38,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 import data as data_mod  # noqa: E402
 import signals as sig_mod  # noqa: E402
+import stats_tests  # noqa: E402
 from policy import InferencePolicy, ReplayTradingEnv  # noqa: E402
 from engine import run_arms  # noqa: E402
 from tradingmodel.intraday.dqnpf.config import IntegrationConfig  # noqa: E402
@@ -290,6 +291,23 @@ def main() -> None:
     )
     fig_sigma_calibration(close, info_sig, coll_sig, warmup, FIG_DIR / "fig5_sigma_calibration.png")
 
+    # --- formal evaluation tests on the prototype's own outputs -----------
+    nbar = len(close)
+    fwd = np.zeros(nbar)
+    fwd[:-1] = (close[1:] - close[:-1]) / close[:-1]
+    sl = slice(warmup, nbar - 1)
+    headline = "C1 informative + gate"
+    head_pnl = [r.raw_pnl_delta for r in results[headline].combined]
+    trial_sharpes = [v.comparison.combined_sharpe_pnl for v in results.values()]
+    eval_tests = {
+        "forecaster_pesaran_timmermann": stats_tests.pesaran_timmermann(
+            info_sig.mu_bps[sl], fwd[sl]
+        ),
+        "headline_arm": headline,
+        "headline_psr_vs_zero": stats_tests.probabilistic_sharpe_ratio(head_pnl, 0.0),
+        "headline_dsr_over_n_trials": stats_tests.deflated_sharpe_ratio(head_pnl, trial_sharpes),
+    }
+
     # --- metrics JSON -----------------------------------------------------
     out = {
         "meta": {
@@ -301,6 +319,7 @@ def main() -> None:
             "variance_threshold": VARIANCE_THRESHOLD,
             "directional_tolerance": DIRECTIONAL_TOLERANCE,
             "policy": policy_info,
+            "evaluation_tests": eval_tests,
         },
         "configs": {label: _summarise(arm) for label, arm in results.items()},
     }
@@ -320,6 +339,14 @@ def main() -> None:
         print(f"{label:26s} {s['combined_sharpe_pnl']:>11.4f} {s['baseline_sharpe_pnl']:>11.4f} "
               f"{s['suppression_rate']*100:>6.1f}% {str(s['final_gate_active']):>8s} "
               f"{'PASS' if s['req14_passed'] else 'FAIL':>6s}")
+    pt = eval_tests["forecaster_pesaran_timmermann"]
+    psr = eval_tests["headline_psr_vs_zero"]
+    dsr = eval_tests["headline_dsr_over_n_trials"]
+    print("--- formal tests ---")
+    print(f"Pesaran-Timmermann (forecaster): DA={pt['directional_accuracy']} "
+          f"stat={pt['statistic']} p={pt['p_value_one_sided']}")
+    print(f"{headline}: PSR(>0)={psr['psr']}  "
+          f"DSR(N={dsr['n_trials']})={dsr['dsr']}")
     print("==================================================\n")
 
 

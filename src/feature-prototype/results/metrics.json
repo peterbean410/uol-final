@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_sha": "2551dd9",
+    "git_sha": "59705c2",
     "data_source": "cache:usdjpy_m5.parquet",
     "n_bars": 4320,
     "span": "2024-01-08 00:00 -> 2024-01-28 23:55 UTC",
@@ -9,6 +9,34 @@
     "directional_tolerance": 1.0,
     "policy": {
       "type": "inference-only momentum/mean-reversion stand-in (no training)"
+    },
+    "evaluation_tests": {
+      "forecaster_pesaran_timmermann": {
+        "n": 4261,
+        "directional_accuracy": 0.4957,
+        "expected_under_chance": 0.5002,
+        "statistic": -0.5958,
+        "p_value_one_sided": 0.7243
+      },
+      "headline_arm": "C1 informative + gate",
+      "headline_psr_vs_zero": {
+        "sharpe_per_bar": 0.00117,
+        "skew": -0.516,
+        "kurtosis": 15.9,
+        "n": 4304,
+        "sr_benchmark": 0.0,
+        "psr": 0.5306
+      },
+      "headline_dsr_over_n_trials": {
+        "sharpe_per_bar": 0.00117,
+        "skew": -0.516,
+        "kurtosis": 15.9,
+        "n": 4304,
+        "sr_benchmark": 0.014,
+        "n_trials": 3,
+        "dsr": 0.2002,
+        "trial_sharpe_var": 0.0002694
+      }
     }
   },
   "configs": {
