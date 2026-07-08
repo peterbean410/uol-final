@@ -46,7 +46,7 @@ with DAG(
     ),
     schedule="0 0 1 * *",
     start_date=datetime(2012, 2, 1),
-    end_date=datetime(2020, 1, 1, 23, 59, 59),
+    end_date=datetime(2019, 12, 1, 23, 59, 59),
     catchup=True,
     tags=["marketdata", "pricedata", "snapshot", "eom", "backfill"],
 ) as dag:

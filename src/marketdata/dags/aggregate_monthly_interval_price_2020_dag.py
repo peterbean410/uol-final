@@ -53,7 +53,7 @@ with DAG(
     default_args=default_args,
     description="Aggregate one calendar month of D1 bars into an MN1 interval-price partition",
     schedule="0 0 1 * *",
-    start_date=datetime(2020, 2, 1),
+    start_date=datetime(2020, 1, 1),
     catchup=True,
     tags=["marketdata", "pricedata", "aggregation", "bardata"],
 ) as dag:

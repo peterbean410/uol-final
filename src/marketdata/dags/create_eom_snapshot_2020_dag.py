@@ -34,7 +34,7 @@ with DAG(
     default_args=default_args,
     description="Create FX end-of-month price snapshots (MN1) from monthly-aggregated bars",
     schedule="0 0 1 * *",
-    start_date=datetime(2020, 2, 1),
+    start_date=datetime(2020, 1, 1),
     catchup=True,
     tags=["marketdata", "pricedata", "snapshot", "eom"],
 ) as dag:
