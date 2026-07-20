@@ -94,6 +94,7 @@ with DAG(
             requests={"cpu": "50m", "memory": "64Mi"},
             limits={"cpu": "250m", "memory": "128Mi"},
         ),
+        startup_timeout_seconds=300,  # tolerate node "Too many pods" scheduling delay
         is_delete_operator_pod=True,
         get_logs=True,
     )
@@ -126,8 +127,14 @@ with DAG(
         ],
         container_resources=k8s.V1ResourceRequirements(
             requests={"cpu": "250m", "memory": "1Gi"},
-            limits={"cpu": "1", "memory": "4Gi"},
+            # M1's full 2012->2026 union is the largest frame; node has ~125Gi, so
+            # give generous head-room rather than risk an OOM-kill mid-combine.
+            limits={"cpu": "1", "memory": "8Gi"},
         ),
+        # image_pull_policy=Always re-pulls the ~177MB :latest; on a congested
+        # node a first pull took ~4m, past the 120s default -> the operator gave
+        # up before the script ran. Allow ample time to schedule + pull + start.
+        startup_timeout_seconds=600,
         is_delete_operator_pod=True,
         get_logs=True,
     )
