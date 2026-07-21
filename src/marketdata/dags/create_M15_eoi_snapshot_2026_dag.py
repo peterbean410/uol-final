@@ -100,8 +100,13 @@ with DAG(
                 ),
             ],
             container_resources=k8s.V1ResourceRequirements(
-                requests={"cpu": "100m", "memory": "256Mi"},
-                limits={"cpu": "500m", "memory": "512Mi"},
+                # Since the eoh consolidation (T-5.1-06) this lane's previous
+                # snapshot is the full 2012->now history (M1 ~82MB parquet,
+                # ~5.3M rows): loading + concat in pandas needs well over the
+                # old 512Mi limit (create_M1 OOMKilled, exit 137). 2Gi gives
+                # ample head-room as the file keeps growing.
+                requests={"cpu": "100m", "memory": "512Mi"},
+                limits={"cpu": "500m", "memory": "2Gi"},
             ),
             is_delete_operator_pod=True,
             get_logs=True,
