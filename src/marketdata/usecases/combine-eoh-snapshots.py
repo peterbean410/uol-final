@@ -38,6 +38,13 @@ Environment variables:
                        by the upstream `resolve_frontiers` task from the Airflow
                        metadata DB; null values (a lane with no success) are
                        skipped.
+    EXTRA_SOURCES:     Optional JSON object of additional snapshot timestamps to
+                       include, keyed by a free-form label (e.g.
+                       {"eod_2012_pre_reset": "2018-11-03T00:00:00"}). Used to
+                       pull in pre-reset accumulation segments: a lane's rolling
+                       accumulation restarts whenever a previous-snapshot key is
+                       missing, orphaning older history in earlier partitions;
+                       the last snapshot of each orphaned segment goes here.
 """
 
 import gc
@@ -171,6 +178,11 @@ def main() -> None:
     frontiers = {dag: _parse_frontier(ts) for dag, ts in frontiers_raw.items() if ts}
     if target_dag not in frontiers:
         raise SystemExit(f"Target lane {target_dag} has no resolved frontier; cannot pick write partition.")
+
+    extra_raw = json.loads(os.environ.get("EXTRA_SOURCES") or "{}")
+    for label, ts in extra_raw.items():
+        if ts:
+            frontiers[label] = _parse_frontier(ts)
 
     target_dt = frontiers[target_dag]
     # Oldest frontier first so the newest lane wins ties under keep='last'.

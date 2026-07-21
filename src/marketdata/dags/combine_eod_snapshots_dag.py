@@ -107,6 +107,14 @@ with DAG(
                 name="SOURCE_FRONTIERS",
                 value="{{ ti.xcom_pull(task_ids='resolve_frontiers') | tojson }}",
             ),
+            # Extra pre-reset segment snapshots (label -> ISO ts), passed at
+            # trigger time via `--conf '{"extra_sources": {...}}'`. The eod
+            # 2012 lane's accumulation reset over the 2018-11-03/04 weekend,
+            # so its 2012->2018-11-02 history lives in the 2018-11-03 files.
+            k8s.V1EnvVar(
+                name="EXTRA_SOURCES",
+                value="{{ dag_run.conf.get('extra_sources', {}) | tojson }}",
+            ),
         ],
         env_from=[
             k8s.V1EnvFromSource(
