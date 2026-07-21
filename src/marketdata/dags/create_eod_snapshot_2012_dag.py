@@ -7,16 +7,18 @@ backfilled. The 2020 DAG continues to own 2020-01-02 onward, so this DAG
 declares ``end_date=2019-12-31`` to avoid double-running the same days.
 
 Runs daily at 00:00 UTC. On Tue–Sat the run waits for the matching daily-
-aggregate task in ``aggregate_daily_interval_price_2012`` (the 2012-side
-aggregate DAG must exist, same way the 2020 DAG depends on its 2020 sibling).
-On Sun and Mon (no aggregate fires) the wait is bypassed so the snapshot
-chain stays unbroken, ``create_snapshot`` then re-emits the prior snapshot's
-contents under the weekend key.
+aggregate task: ``aggregate_daily_interval_price_2012`` for days through
+2019-12-31, and ``aggregate_daily_interval_price_2020`` for the 2020-2021
+extension window (the 2012 aggregate lane ends 2019-12-31; the 2020 lane owns
+2020 onward, waiting on the 2012 lane past its end would stall forever, the
+same trap the monthly lanes hit). On Sun and Mon (no aggregate fires) the wait
+is bypassed so the snapshot chain stays unbroken, ``create_snapshot`` then
+re-emits the prior snapshot's contents under the weekend key.
 
 Snapshots land under ``marketdata/eod-snapshot/...``.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from airflow.sdk import DAG
 from airflow.operators.empty import EmptyOperator
@@ -45,12 +47,19 @@ _INTERVALS = ["H1", "H4", "D1"]
 # Python weekday(): Mon=0…Sun=6. Skip the wait on Sun and Mon.
 _NO_UPSTREAM_WEEKDAYS = {6, 0}
 
+# First data_interval_end owned by the 2020 aggregate lane: the run covering
+# day 2020-01-01 (logical 2020-01-01, interval end 2020-01-02). Runs at or
+# past this wait on aggregate_daily_interval_price_2020 instead of _2012.
+_AGG_2020_FIRST_INTERVAL_END = datetime(2020, 1, 2, tzinfo=timezone.utc)
 
-def _make_branch(wait_task_id: str, skip_task_id: str):
+
+def _make_branch(wait_2012_task_id: str, wait_2020_task_id: str, skip_task_id: str):
     def _branch(data_interval_end, **_):
         if data_interval_end.weekday() in _NO_UPSTREAM_WEEKDAYS:
             return skip_task_id
-        return wait_task_id
+        if data_interval_end >= _AGG_2020_FIRST_INTERVAL_END:
+            return wait_2020_task_id
+        return wait_2012_task_id
     return _branch
 
 
@@ -71,16 +80,26 @@ with DAG(
 
     for interval in _INTERVALS:
         wait_id = f"wait_for_aggregate_{interval}"
+        wait_2020_id = f"wait_for_aggregate_2020_{interval}"
         skip_id = f"skip_wait_{interval}"
 
         branch = BranchPythonOperator(
             task_id=f"branch_{interval}",
-            python_callable=_make_branch(wait_id, skip_id),
+            python_callable=_make_branch(wait_id, wait_2020_id, skip_id),
         )
 
         wait_for_aggregate = ExternalTaskSensor(
             task_id=wait_id,
             external_dag_id="aggregate_daily_interval_price_2012",
+            external_task_id=f"aggregate_{interval}_interval_price",
+            poke_interval=300,
+            timeout=86400,
+            mode="reschedule",
+        )
+
+        wait_for_aggregate_2020 = ExternalTaskSensor(
+            task_id=wait_2020_id,
+            external_dag_id="aggregate_daily_interval_price_2020",
             external_task_id=f"aggregate_{interval}_interval_price",
             poke_interval=300,
             timeout=86400,
@@ -121,4 +140,4 @@ with DAG(
             trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
         )
 
-        branch >> [wait_for_aggregate, skip_wait] >> create_snapshot
+        branch >> [wait_for_aggregate, wait_for_aggregate_2020, skip_wait] >> create_snapshot
