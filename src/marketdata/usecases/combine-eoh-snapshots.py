@@ -61,6 +61,7 @@ from commons.python.appconfig import AppConfig
 
 HOUR_MINUTES = 60
 DAILY_MINUTES = 1440
+WEEK_MINUTES = 10080
 
 # Dedup key, MUST match create-eoi-price-snapshot.py so consolidated snapshots
 # stay drop-in compatible with what the scheduled lanes write.
@@ -78,7 +79,9 @@ def _snapshot_root(time_window_minutes: int) -> str:
         return "marketdata/eoh-snapshot"
     if time_window_minutes == DAILY_MINUTES:
         return "marketdata/eod-snapshot"
-    raise ValueError(f"Unsupported time_window_minutes={time_window_minutes} for EOH combine.")
+    if time_window_minutes == WEEK_MINUTES:
+        return "marketdata/eow-snapshot"
+    raise ValueError(f"Unsupported time_window_minutes={time_window_minutes} for combine.")
 
 
 def _build_snapshot_key(fx_symbol: str, interval: str, dt: datetime, time_window_minutes: int) -> str:
@@ -86,6 +89,8 @@ def _build_snapshot_key(fx_symbol: str, interval: str, dt: datetime, time_window
     ts = dt.strftime("%Y%m%dT%H%M%SZ")
     base = f"{_snapshot_root(time_window_minutes)}/symbol={fx_symbol}/interval={interval}"
     key = f"{base}/year={dt.year}/month={dt.month:02d}"
+    if time_window_minutes > DAILY_MINUTES:
+        return f"{key}/{ts}.parquet"  # eow/eom: year/month tier only
     key += f"/day={dt.day:02d}"
     if time_window_minutes < DAILY_MINUTES:
         key += f"/hour={dt.hour:02d}"
@@ -164,8 +169,9 @@ def main() -> None:
     config = AppConfig()
     fx_symbol = os.environ.get("FX_SYMBOL", "USDJPY")
     time_window = int(os.environ.get("TIME_WINDOW_IN_MINUTES", str(HOUR_MINUTES)))
-    if time_window not in (HOUR_MINUTES, DAILY_MINUTES):
-        raise SystemExit(f"TIME_WINDOW_IN_MINUTES must be {HOUR_MINUTES} or {DAILY_MINUTES}, got {time_window}")
+    if time_window not in (HOUR_MINUTES, DAILY_MINUTES, WEEK_MINUTES):
+        raise SystemExit(
+            f"TIME_WINDOW_IN_MINUTES must be {HOUR_MINUTES}, {DAILY_MINUTES} or {WEEK_MINUTES}, got {time_window}")
     intervals = [s.strip() for s in os.environ.get("INTERVALS", ",".join(DEFAULT_INTERVALS)).split(",") if s.strip()]
     target_dag = os.environ.get("TARGET_DAG", DEFAULT_TARGET_DAG)
 
