@@ -1,7 +1,9 @@
 """
-Combine and deduplicate the latest end-of-hour (EOH) price snapshots from
+Combine and deduplicate the latest end-of-interval price snapshots from
 several open-ended backfill lanes into a single consolidated snapshot, and
-overwrite the target lane's latest snapshot with the result.
+overwrite the target lane's latest snapshot with the result. Supports the
+end-of-hour tree (TIME_WINDOW_IN_MINUTES=60, the default; M1/M5/M15) and the
+end-of-day tree (TIME_WINDOW_IN_MINUTES=1440; H1/H4/D1).
 
 Why this exists
 ---------------
@@ -23,6 +25,8 @@ byte-compatible with what the scheduled lanes produce.
 
 Environment variables:
     FX_SYMBOL:         The FX symbol (e.g. 'USDJPY'). Default 'USDJPY'.
+    TIME_WINDOW_IN_MINUTES: Partition granularity: 60 (eoh tree) or 1440 (eod
+                       tree). Default 60.
     INTERVALS:         Comma-separated intervals to consolidate (e.g. 'M1,M5,M15').
                        Default 'M1,M5,M15'.
     TARGET_DAG:        The lane whose latest snapshot is overwritten with the
@@ -113,7 +117,8 @@ def _parse_frontier(value: str) -> datetime:
 
 
 def combine_interval(fx_symbol: str, interval: str, sources: list[tuple[str, datetime]],
-                     target_dt: datetime, s3, bucket: str) -> pd.DataFrame:
+                     target_dt: datetime, s3, bucket: str,
+                     time_window_minutes: int = HOUR_MINUTES) -> pd.DataFrame:
     """Combine one interval's per-lane frontier snapshots and overwrite the target.
 
     `sources` is a list of (dag_id, frontier_dt) ordered oldest-frontier-first, so
@@ -122,7 +127,7 @@ def combine_interval(fx_symbol: str, interval: str, sources: list[tuple[str, dat
     print(f"[{interval}] combining {len(sources)} lane snapshots")
     frames = []
     for dag_id, dt in sources:
-        key = _build_snapshot_key(fx_symbol, interval, dt, HOUR_MINUTES)
+        key = _build_snapshot_key(fx_symbol, interval, dt, time_window_minutes)
         df = _load_snapshot_file(s3, bucket, key)
         if not df.empty:
             print(f"  {dag_id}: {len(df)} rows from {key}")
@@ -143,7 +148,7 @@ def combine_interval(fx_symbol: str, interval: str, sources: list[tuple[str, dat
     print(f"[{interval}] {before} rows -> {len(combined)} after dedup "
           f"(span {combined['Timestamp'].min()} .. {combined['Timestamp'].max()})")
 
-    target_key = _build_snapshot_key(fx_symbol, interval, target_dt, HOUR_MINUTES)
+    target_key = _build_snapshot_key(fx_symbol, interval, target_dt, time_window_minutes)
     _upload_to_s3(combined, bucket, target_key, s3)
     return combined
 
@@ -151,6 +156,9 @@ def combine_interval(fx_symbol: str, interval: str, sources: list[tuple[str, dat
 def main() -> None:
     config = AppConfig()
     fx_symbol = os.environ.get("FX_SYMBOL", "USDJPY")
+    time_window = int(os.environ.get("TIME_WINDOW_IN_MINUTES", str(HOUR_MINUTES)))
+    if time_window not in (HOUR_MINUTES, DAILY_MINUTES):
+        raise SystemExit(f"TIME_WINDOW_IN_MINUTES must be {HOUR_MINUTES} or {DAILY_MINUTES}, got {time_window}")
     intervals = [s.strip() for s in os.environ.get("INTERVALS", ",".join(DEFAULT_INTERVALS)).split(",") if s.strip()]
     target_dag = os.environ.get("TARGET_DAG", DEFAULT_TARGET_DAG)
 
@@ -171,14 +179,14 @@ def main() -> None:
     s3 = boto3.client("s3")
     bucket = config.s3_bucket
 
-    print(f"Symbol={fx_symbol}  intervals={intervals}")
+    print(f"Symbol={fx_symbol}  intervals={intervals}  window={time_window}min")
     print(f"Target lane={target_dag}  frontier={target_dt.isoformat()}")
     print("Source lanes (oldest->newest frontier):")
     for dag, dt in sources:
         print(f"  {dag}: {dt.isoformat()}")
 
     for interval in intervals:
-        combine_interval(fx_symbol, interval, sources, target_dt, s3, bucket)
+        combine_interval(fx_symbol, interval, sources, target_dt, s3, bucket, time_window)
         gc.collect()
 
     print("Combine complete.")
