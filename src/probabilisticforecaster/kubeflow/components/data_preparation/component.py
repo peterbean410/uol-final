@@ -37,18 +37,24 @@ def load_data_from_s3(
     start_date: datetime,
     end_date: datetime,
     bucket: str = S3_BUCKET,
+    snapshot_date: datetime | None = None,
 ) -> pd.DataFrame:
-    """Load 5-minute OHLC data from S3 by reading the hour=23 snapshot of end_date.
+    """Load 5-minute OHLC data from S3 by reading one cumulative hour=23 snapshot.
 
-    EOH snapshots are fully cumulative; the hour=23 snapshot of end_date
+    EOH snapshots are fully cumulative; the hour=23 snapshot of a given day
     contains ALL bars from the start of the chain through that day. We read
-    that one file and filter to [start_date, end_date].
+    that one file and filter to [start_date, end_date]. By default the file is
+    the snapshot of end_date; pass ``snapshot_date`` to read a different
+    (typically later) snapshot, needed when end_date's own snapshot predates
+    a history consolidation and so does not actually hold the full chain.
 
     Args:
         symbol: Currency pair (e.g., "USDJPY", "AUDJPY").
         start_date: Start of the date range (inclusive).
         end_date: End of the date range (inclusive).
         bucket: S3 bucket name.
+        snapshot_date: Day whose hour=23 snapshot file to read (defaults to
+            end_date). Must be >= end_date to cover the requested range.
 
     Returns:
         DataFrame with columns [Timestamp, Symbol, Open, High, Low, Close, Volume]
@@ -60,7 +66,7 @@ def load_data_from_s3(
     """
     s3 = boto3.client("s3")
 
-    key = _build_eoh_snapshot_key(symbol, end_date)
+    key = _build_eoh_snapshot_key(symbol, snapshot_date or end_date)
 
     logger.info(
         "Loading data from S3",
@@ -261,6 +267,9 @@ def parse_args() -> argparse.Namespace:
         help="S3 key path for the output test dataset artifact",
     )
     parser.add_argument("--bucket", type=str, default=S3_BUCKET, help="S3 bucket name")
+    parser.add_argument(
+        "--data-snapshot-date", type=str, default="",
+        help="Day whose hour=23 EOH snapshot file to read (ISO; defaults to test-end)")
     return parser.parse_args()
 
 
@@ -287,12 +296,18 @@ def main() -> None:
     # The EOH snapshot of test_end contains all historical data
     start_date = datetime.fromisoformat(args.train_start).replace(tzinfo=timezone.utc)
     end_date = datetime.fromisoformat(args.test_end).replace(tzinfo=timezone.utc)
+    snapshot_date = (
+        datetime.fromisoformat(args.data_snapshot_date).replace(tzinfo=timezone.utc)
+        if args.data_snapshot_date
+        else None
+    )
 
     data = load_data_from_s3(
         symbol=args.symbol,
         start_date=start_date,
         end_date=end_date,
         bucket=args.bucket,
+        snapshot_date=snapshot_date,
     )
 
     # Step 2: Compute features and build train/test datasets

@@ -104,10 +104,14 @@ def data_preparation(
     historical_window: int,
     train_dataset: Output[Dataset],
     test_dataset: Output[Dataset],
+    data_snapshot_date: str = "",
 ):
     """Load S3 parquet data, compute 16 features, build train/test splits.
 
     Outputs train and test datasets as KFP artifacts to S3.
+    ``data_snapshot_date`` selects which cumulative hour=23 EOH snapshot file
+    is read (defaults to test_end's), pass a later date when test_end's own
+    snapshot predates a history consolidation.
     """
     return dsl.ContainerSpec(
         image=f"{ECR_BASE}/forecaster/data-preparation:latest",
@@ -123,6 +127,7 @@ def data_preparation(
             "--historical-window", str(historical_window),
             "--train-dataset-path", train_dataset.uri,
             "--test-dataset-path", test_dataset.uri,
+            "--data-snapshot-date", data_snapshot_date,
         ],
     )
 
@@ -220,6 +225,10 @@ def resolve_config(
     snapshot_date: str,
     training_mode: str,
     katib_best_params_json: str = "",
+    train_start: str = "",
+    train_end: str = "",
+    test_start: str = "",
+    test_end: str = "",
 ) -> NamedTuple(
     "ConfigOutputs",
     [
@@ -339,6 +348,18 @@ def resolve_config(
         cfg.train_end = train_end_d.isoformat()
         cfg.test_start = test_start_d.isoformat()
         cfg.test_end = test_end_d.isoformat()
+
+    # Explicit window overrides win over both the rolling split and the static
+    # defaults (e.g. train through 2026-04-17 with the last quarter held out,
+    # mirroring the DQN adhoc convention).
+    if train_start:
+        cfg.train_start = train_start
+    if train_end:
+        cfg.train_end = train_end
+    if test_start:
+        cfg.test_start = test_start
+    if test_end:
+        cfg.test_end = test_end
 
     # Validate
     errors: list = []
@@ -866,6 +887,10 @@ def forecaster_pipeline(
     training_mode: str = "scratch",
     katib_best_params_json: str = "",
     model_registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
+    train_start: str = "",
+    train_end: str = "",
+    test_start: str = "",
+    test_end: str = "",
 ):
     """Forecaster Pipeline: data → train → evaluate → register → backtest.
 
@@ -905,6 +930,12 @@ def forecaster_pipeline(
             (learning_rate, num_layers, num_heads, d_ff, dropout, batch_size,
             lookback_window).
         model_registry_url: URL of the Kubeflow Model Registry server.
+        train_start/train_end/test_start/test_end: optional explicit window
+            overrides (ISO dates). When set they win over the snapshot_date
+            rolling split. data_preparation still reads the cumulative EOH
+            snapshot file of ``snapshot_date`` (falling back to test_end),
+            so explicit windows can end before the snapshot without losing
+            the consolidated full history.
     """
     # -----------------------------------------------------------------------
     # Step 0: Config resolution and validation (lightweight Python component)
@@ -918,6 +949,10 @@ def forecaster_pipeline(
         snapshot_date=snapshot_date,
         training_mode=training_mode,
         katib_best_params_json=katib_best_params_json,
+        train_start=train_start,
+        train_end=train_end,
+        test_start=test_start,
+        test_end=test_end,
     )
 
     # -----------------------------------------------------------------------
@@ -932,6 +967,7 @@ def forecaster_pipeline(
         lookback_window=config_task.outputs["lookback_window"],
         forecast_horizon=forecast_horizon,
         historical_window=config_task.outputs["historical_window"],
+        data_snapshot_date=snapshot_date,
     )
     dp_task.set_retry(num_retries=3)
     dp_task.set_caching_options(enable_caching=True)
