@@ -875,8 +875,13 @@ def dqn_pipeline(
     )
     training_task.set_retry(num_retries=2)
     training_task.set_caching_options(enable_caching=False)
-    training_task.set_memory_request("16Gi")
-    training_task.set_memory_limit("16Gi")
+    # modelenv preloads the WHOLE training window's bars/ticks/news into RAM:
+    # a 3-year window fit under 16Gi, but the adhoc20260720 full-history window
+    # (2012->2026-04, ~5x the data) OOMKilled at 16Gi ~22min into the preload.
+    # spark-5790 has ~121Gi allocatable and nothing else pinned to it; 96Gi
+    # request==limit keeps Guaranteed QoS with scheduling headroom.
+    training_task.set_memory_request("96Gi")
+    training_task.set_memory_limit("96Gi")
     if GPU_ENABLED:
         _enable_gpu(training_task)
     kubernetes.mount_pvc(
