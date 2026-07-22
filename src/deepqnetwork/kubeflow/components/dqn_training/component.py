@@ -50,9 +50,14 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "prod-fintech-forex-sg-731833471586")
 MODELENV_BINARY = "/usr/local/bin/modelenv-server"
 MODELENV_HOST = "localhost"
 MODELENV_PORT = 50051
-MODELENV_HEALTH_CHECK_TIMEOUT = 600  # seconds, modelenv preloads market data
-                                     # from S3 on startup; cold M1 USDJPY pulls
-                                     # can take several minutes.
+# Seconds to wait for modelenv's startup data preload. It downloads the full
+# training window's bars + per-day news snapshots from S3 (~1 file/s cold);
+# a 14-year window (adhoc20260720: 2012->2026) is thousands of files, so a
+# cold/partially-cold cache PVC can legitimately take over an hour, 600s
+# killed a healthy sidecar mid-preload. Overridable via env for odd cases.
+MODELENV_HEALTH_CHECK_TIMEOUT = int(
+    os.environ.get("MODELENV_HEALTH_CHECK_TIMEOUT", "7200")
+)
 MODELENV_HEALTH_CHECK_INTERVAL = 1   # seconds
 MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
 
