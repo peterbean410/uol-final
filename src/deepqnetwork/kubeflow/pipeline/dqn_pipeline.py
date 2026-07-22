@@ -217,6 +217,7 @@ def dqn_training(
     hour_of_day_start: int,
     hour_of_day_end: int,
     model_checkpoint: Output[Model],
+    price_snapshot_date: str = "",
 ):
     """Train DQN agent against modelenv gRPC sidecar.
 
@@ -245,6 +246,7 @@ def dqn_training(
             "--date-end", date_end,
             "--hour-start", str(hour_of_day_start),
             "--hour-end", str(hour_of_day_end),
+            "--price-snapshot-date", price_snapshot_date,
         ],
     )
 
@@ -797,6 +799,7 @@ def dqn_pipeline(
     hour_of_day_start: int = 0,
     hour_of_day_end: int = 23,
     model_registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
+    price_snapshot_date: str = "",
 ):
     """DQN Pipeline: config → train → backtest.
 
@@ -872,6 +875,9 @@ def dqn_pipeline(
         date_end=config_task.outputs["date_end"],
         hour_of_day_start=config_task.outputs["hour_of_day_start"],
         hour_of_day_end=config_task.outputs["hour_of_day_end"],
+        # Pin modelenv's snapshot resolution to a post-consolidation instant
+        # (empty = legacy behavior: resolve at the training window's date_end).
+        price_snapshot_date=price_snapshot_date,
     )
     training_task.set_retry(num_retries=2)
     training_task.set_caching_options(enable_caching=False)

@@ -76,6 +76,7 @@ class ModelenvSidecar:
         date_end: str | None = None,
         hour_start: int | None = None,
         hour_end: int | None = None,
+        price_snapshot_date: str | None = None,
     ) -> None:
         self._process: subprocess.Popen | None = None
         self._stderr_lines: list[str] = []
@@ -89,6 +90,13 @@ class ModelenvSidecar:
         self._date_end = date_end
         self._hour_start = hour_start
         self._hour_end = hour_end
+        # When set (ISO date/datetime, UTC assumed if naive), passed to modelenv
+        # as --price-snapshot-ts so ALL interval snapshots resolve "latest at or
+        # before" this instant instead of at the training window's date_end.
+        # Needed when date_end's own snapshot partitions predate a history
+        # consolidation and hold only lane-local bars (adhoc20260720: the
+        # 2026-04-17 partitions were 2026-only, so 2012 episodes found no bars).
+        self._price_snapshot_date = price_snapshot_date
 
     def start(self) -> None:
         """Start the modelenv-server subprocess.
@@ -113,6 +121,15 @@ class ModelenvSidecar:
                     "--training-hour-start", str(self._hour_start),
                     "--training-hour-end",   str(self._hour_end),
                 ]
+            )
+        if self._price_snapshot_date:
+            from datetime import datetime, timezone
+
+            dt = datetime.fromisoformat(self._price_snapshot_date)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            cli_args.extend(
+                ["--price-snapshot-ts", str(int(dt.timestamp() * 1_000_000_000))]
             )
 
         logger.info(
@@ -538,6 +555,17 @@ def parse_args() -> argparse.Namespace:
         default=S3_BUCKET,
         help="S3 bucket name",
     )
+    parser.add_argument(
+        "--price-snapshot-date",
+        type=str,
+        default="",
+        help=(
+            "ISO date/datetime (UTC if naive) at which modelenv resolves ALL "
+            "interval snapshots (latest at-or-before), instead of the training "
+            "window's date_end. Use a post-consolidation instant when date_end's "
+            "own snapshot partitions predate a history consolidation."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -703,6 +731,7 @@ def main() -> None:
         date_end=dqn_config.date_end or None,
         hour_start=dqn_config.hour_of_day_start,
         hour_end=dqn_config.hour_of_day_end,
+        price_snapshot_date=args.price_snapshot_date or None,
     )
     try:
         sidecar.start()
