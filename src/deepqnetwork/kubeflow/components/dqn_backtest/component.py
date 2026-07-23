@@ -57,7 +57,14 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "prod-fintech-forex-sg-731833471586")
 MODELENV_BINARY = "/usr/local/bin/modelenv-server"
 MODELENV_HOST = "localhost"
 MODELENV_PORT = 50051
-MODELENV_HEALTH_CHECK_TIMEOUT = 60  # seconds
+# Seconds to wait for modelenv's startup preload. Must cover a cold tick
+# download for the whole eval window (~1 file/s): a one-quarter eval window is
+# ~1,500 hourly files, and 60s killed a healthy sidecar mid-preload right after
+# the adhoc20260720 15h training run finished (run efacd8c9). Mirrors the
+# training component's fix; env-overridable.
+MODELENV_HEALTH_CHECK_TIMEOUT = int(
+    os.environ.get("MODELENV_HEALTH_CHECK_TIMEOUT", "3600")
+)
 MODELENV_HEALTH_CHECK_INTERVAL = 1  # seconds
 MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
 
