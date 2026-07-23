@@ -919,8 +919,11 @@ def dqn_pipeline(
     )
     backtest_task.set_retry(num_retries=1)
     backtest_task.set_caching_options(enable_caching=False)
-    backtest_task.set_memory_request("8Gi")
-    backtest_task.set_memory_limit("8Gi")
+    # The adhoc20260720 eval (one recent quarter) OOMKilled the backtest twice
+    # at 8Gi while its sidecar decoded the window's ~1,500 hourly tick files
+    # into RAM. 24Gi gives the same headroom ratio that fixed training.
+    backtest_task.set_memory_request("24Gi")
+    backtest_task.set_memory_limit("24Gi")
     kubernetes.mount_pvc(
         backtest_task,
         pvc_name=MODELENV_CACHE_PVC,
