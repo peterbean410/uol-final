@@ -57,7 +57,13 @@ _MODELENV_BINARY = os.environ.get(
 # modelenv runs in Training mode (its default) and preloads market data before
 # binding the gRPC port. Even reading from the warm cache PVC this takes longer
 # than 30s, so allow the same headroom the DQN backtest component uses.
-_MODELENV_HEALTHCHECK_TIMEOUT_S = 60.0
+# Seconds to wait for the modelenv sidecar's port. Its startup preload can take
+# minutes on a cold cache; 60s killed it after the eoh/eod/eow/eom consolidation
+# made the "latest" snapshots full-history. Env-overridable; mirrors the DQN
+# train/backtest components' fix.
+_MODELENV_HEALTHCHECK_TIMEOUT_S = float(
+    os.environ.get("MODELENV_HEALTH_CHECK_TIMEOUT", "3600")
+)
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +110,8 @@ def _start_modelenv_sidecar(
     no_swap: bool = False,
     trading_session_hour_start: int | None = None,
     trading_session_hour_end: int | None = None,
+    training_date_start: str | None = None,
+    training_date_end: str | None = None,
 ) -> subprocess.Popen:
     """Launch modelenv as a subprocess and wait for the port to open.
 
@@ -189,6 +197,15 @@ def _start_modelenv_sidecar(
         cmd += ["--trading-session-hour-start", str(trading_session_hour_start)]
     if trading_session_hour_end is not None:
         cmd += ["--trading-session-hour-end", str(trading_session_hour_end)]
+    # Scope modelenv's startup preload to the backtest window. Without this,
+    # modelenv preloads the full M1 reference span = the LATEST snapshot, which
+    # since the snapshot consolidation is the full 2012->now history (5.3M M1
+    # rows); that OOMs the 8Gi pod and blows the readiness timeout. Passing the
+    # window makes the preload resolve/load only the eval range.
+    if training_date_start:
+        cmd += ["--training-date-start", training_date_start]
+    if training_date_end:
+        cmd += ["--training-date-end", training_date_end]
     proc = subprocess.Popen(cmd)
     _wait_for_port("localhost", port, _MODELENV_HEALTHCHECK_TIMEOUT_S, proc)
     logger.info(json.dumps({"event": "modelenv.ready", "port": port}))
@@ -520,6 +537,8 @@ def run_dqnpf_backtest(
             swap_rate_short=swap_rate_short,
             trading_session_hour_start=session_hour_start,
             trading_session_hour_end=session_hour_end,
+            training_date_start=integration_cfg.date_start or None,
+            training_date_end=integration_cfg.date_end or None,
         )
         if start_sidecar
         else None

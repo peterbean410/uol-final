@@ -25,8 +25,11 @@ num_episodes: 1
 # date-range mode is authoritative.)
 episode_start_ts: 0
 episode_end_ts: 0
-date_start: "2015-01-02"
-date_end: "2015-01-31"
+# OOS window = the adhoc20260720 held-out quarter (same as the DQN full-history
+# eval), so the combined DQN(prod)+PF(prod) screen is measured on the freshest
+# unseen data. Genuinely OOS for both production models.
+date_start: "2026-04-20"
+date_end: "2026-07-17"
 hour_of_day_start: 23
 hour_of_day_end: 47
 seed: 0
