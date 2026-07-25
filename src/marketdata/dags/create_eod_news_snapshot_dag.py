@@ -34,6 +34,9 @@ _ECR_IMAGE = (
 # forexnewsapi.com uses dash-separated pairs.
 FX_PAIRS = ["USD-JPY", "EUR-USD", "XAU-USD"]
 
+_LLM_ENDPOINT = "http://litellm.default.svc.cluster.local:4000"
+_LLM_MODEL = "gemma-4-31b-it"
+
 
 def _slug(pair: str) -> str:
     return pair.lower().replace("-", "_")
@@ -84,6 +87,21 @@ with DAG(
                     name="EXECUTION_TS",
                     value="{{ data_interval_end.to_iso8601_string() }}",
                 ),
+                # News labelling. LiteLLM proxies to the Gemma vLLM services in
+                # the peterbean namespace; the mesh denies airflow -> peterbean
+                # directly but permits airflow -> litellm.
+                k8s.V1EnvVar(name="LLM_ENDPOINT", value=_LLM_ENDPOINT),
+                k8s.V1EnvVar(name="LLM_MODEL", value=_LLM_MODEL),
+                k8s.V1EnvVar(
+                    name="LLM_API_KEY",
+                    value_from=k8s.V1EnvVarSource(
+                        secret_key_ref=k8s.V1SecretKeySelector(
+                            name="litellm-credentials",
+                            key="LITELLM_API_KEY",
+                            optional=True,
+                        )
+                    ),
+                ),
             ],
             env_from=[
                 k8s.V1EnvFromSource(
@@ -97,6 +115,9 @@ with DAG(
                 requests={"cpu": "200m", "memory": "512Mi"},
                 limits={"cpu": "1000m", "memory": "2Gi"},
             ),
+            # The first run labels the whole accumulated history (~11 min for
+            # USD-JPY); later runs label only that day's articles.
+            execution_timeout=timedelta(hours=1),
             is_delete_operator_pod=True,
             get_logs=True,
         )

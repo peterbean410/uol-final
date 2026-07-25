@@ -78,7 +78,7 @@ def test_request_targets_expected_endpoint_and_params(mock_get):
     args, kwargs = mock_get.call_args
     assert args[0] == fxnews.NEWS_API_URL
     params = kwargs["params"]
-    assert params["fx_currency_pair"] == "EUR-USD"
+    assert params["currencypair"] == "EUR-USD"
     assert params["token"] == "SECRET"
     assert params["date"] == "04162026-04172026"
     assert params["items"] == fxnews.DEFAULT_ITEMS

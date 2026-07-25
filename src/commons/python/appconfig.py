@@ -52,6 +52,13 @@ class AppConfig:
         self.token_expiry: float = float(os.getenv("TOKEN_EXPIRY", "0"))
         self.fxnews_api_key: str = os.getenv("FXNEWS_API_KEY", "")
 
+        # OpenAI-compatible LLM endpoint used to enrich news with topic labels.
+        # In-cluster this is the LiteLLM proxy, which routes to the Gemma vLLM
+        # services in the peterbean namespace. Unset disables labelling.
+        self.llm_endpoint: str = os.getenv("LLM_ENDPOINT", "")
+        self.llm_model: str = os.getenv("LLM_MODEL", "gemma-4-31b-it")
+        self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
+
         self._env_path = env_path
 
     @staticmethod
