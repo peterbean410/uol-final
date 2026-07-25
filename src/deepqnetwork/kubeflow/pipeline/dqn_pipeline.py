@@ -218,6 +218,9 @@ def dqn_training(
     hour_of_day_end: int,
     model_checkpoint: Output[Model],
     price_snapshot_date: str = "",
+    reward_action_penalty: str = "",
+    reward_holding_penalty: str = "",
+    reward_lambda: str = "",
 ):
     """Train DQN agent against modelenv gRPC sidecar.
 
@@ -226,6 +229,8 @@ def dqn_training(
 
     Supports scratch (random init, full episodes) and finetune
     (load production checkpoint, reduced LR, fewer episodes) modes.
+    reward_* are empty-string-default overrides for the decision-persistence
+    experiments (turnover/holding/loss-aversion reward shaping).
     """
     return dsl.ContainerSpec(
         image=f"{ECR_BASE}/dqn/training:latest",
@@ -247,6 +252,9 @@ def dqn_training(
             "--hour-start", str(hour_of_day_start),
             "--hour-end", str(hour_of_day_end),
             "--price-snapshot-date", price_snapshot_date,
+            "--reward-action-penalty", reward_action_penalty,
+            "--reward-holding-penalty", reward_holding_penalty,
+            "--reward-lambda", reward_lambda,
         ],
     )
 
@@ -800,6 +808,9 @@ def dqn_pipeline(
     hour_of_day_end: int = 23,
     model_registry_url: str = "http://model-registry-service.kubeflow.svc.cluster.local:8080",
     price_snapshot_date: str = "",
+    reward_action_penalty: str = "",
+    reward_holding_penalty: str = "",
+    reward_lambda: str = "",
 ):
     """DQN Pipeline: config → train → backtest.
 
@@ -878,6 +889,11 @@ def dqn_pipeline(
         # Pin modelenv's snapshot resolution to a post-consolidation instant
         # (empty = legacy behavior: resolve at the training window's date_end).
         price_snapshot_date=price_snapshot_date,
+        # Reward-shaping overrides for the decision-persistence experiments
+        # (empty = modelenv defaults). Shape training only; backtest PnL unaffected.
+        reward_action_penalty=reward_action_penalty,
+        reward_holding_penalty=reward_holding_penalty,
+        reward_lambda=reward_lambda,
     )
     training_task.set_retry(num_retries=2)
     training_task.set_caching_options(enable_caching=False)

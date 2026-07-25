@@ -566,6 +566,17 @@ def parse_args() -> argparse.Namespace:
             "own snapshot partitions predate a history consolidation."
         ),
     )
+    # Reward-shaping overrides for the decision-persistence experiments
+    # (specs/experiments/dqn-decision-persistence.md). Empty = modelenv default
+    # (action_penalty 0.001, holding_penalty 1e-6, lambda 0.5). Set as env before
+    # the sidecar starts; modelenv reads MODELENV_REWARD_* and the sidecar Popen
+    # inherits os.environ. These shape TRAINING only, backtest PnL is fill-based.
+    parser.add_argument("--reward-action-penalty", type=str, default="",
+                        help="Override MODELENV_REWARD_ACTION_PENALTY (turnover penalty)")
+    parser.add_argument("--reward-holding-penalty", type=str, default="",
+                        help="Override MODELENV_REWARD_HOLDING_PENALTY")
+    parser.add_argument("--reward-lambda", type=str, default="",
+                        help="Override MODELENV_REWARD_LAMBDA (loss-aversion)")
     return parser.parse_args()
 
 
@@ -609,6 +620,17 @@ def download_production_checkpoint(s3_key: str, bucket: str = S3_BUCKET) -> str:
 def main() -> None:
     """Main entry point for the DQN training component."""
     args = parse_args()
+
+    # Apply reward-shaping overrides as env BEFORE the sidecar starts (it inherits
+    # os.environ). modelenv reads these; empty string = keep modelenv's default.
+    for cli_val, env_key in (
+        (args.reward_action_penalty, "MODELENV_REWARD_ACTION_PENALTY"),
+        (args.reward_holding_penalty, "MODELENV_REWARD_HOLDING_PENALTY"),
+        (args.reward_lambda, "MODELENV_REWARD_LAMBDA"),
+    ):
+        if cli_val:
+            os.environ[env_key] = cli_val
+            logger.info("Reward-shaping override", extra={env_key: cli_val})
 
     logger.info(
         "DQN training component started",
