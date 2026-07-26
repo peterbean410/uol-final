@@ -34,8 +34,20 @@ _ECR_IMAGE = (
 # forexnewsapi.com uses dash-separated pairs.
 FX_PAIRS = ["USD-JPY", "EUR-USD", "XAU-USD"]
 
-_LLM_ENDPOINT = "http://litellm.default.svc.cluster.local:4000"
+# Gemma is called directly, the same way the chatbot does from the injected
+# chatbox namespace. The task pod opts into the mesh with the
+# sidecar.istio.io/inject label below; peterbean's allow-airflow-to-gemma
+# AuthorizationPolicy matches the resulting airflow-worker identity. vLLM itself
+# has no auth, so no credential is involved.
+_LLM_ENDPOINT = "http://gemma-4-31b-predictor.peterbean.svc.cluster.local"
 _LLM_MODEL = "gemma-4-31b-it"
+
+# The airflow namespace is not labelled for injection, so pods opt in
+# individually. This label (not an annotation) is what the
+# object.sidecar-injector.istio.io webhook selects on. Istio injects native
+# sidecars here, so the proxy exits with the task and the pod still reaches
+# Succeeded rather than hanging.
+_ISTIO_INJECT_LABELS = {"sidecar.istio.io/inject": "true"}
 
 
 def _slug(pair: str) -> str:
@@ -87,22 +99,10 @@ with DAG(
                     name="EXECUTION_TS",
                     value="{{ data_interval_end.to_iso8601_string() }}",
                 ),
-                # News labelling. LiteLLM proxies to the Gemma vLLM services in
-                # the peterbean namespace; the mesh denies airflow -> peterbean
-                # directly but permits airflow -> litellm.
                 k8s.V1EnvVar(name="LLM_ENDPOINT", value=_LLM_ENDPOINT),
                 k8s.V1EnvVar(name="LLM_MODEL", value=_LLM_MODEL),
-                k8s.V1EnvVar(
-                    name="LLM_API_KEY",
-                    value_from=k8s.V1EnvVarSource(
-                        secret_key_ref=k8s.V1SecretKeySelector(
-                            name="litellm-credentials",
-                            key="LITELLM_API_KEY",
-                            optional=True,
-                        )
-                    ),
-                ),
             ],
+            labels=_ISTIO_INJECT_LABELS,
             env_from=[
                 k8s.V1EnvFromSource(
                     secret_ref=k8s.V1SecretEnvSource(name="marketdata-credentials")
