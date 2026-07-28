@@ -4,7 +4,7 @@ use anyhow::Result;
 use modelenv_core::{
     broker_gateway::create_broker_gateway_instance, config::Mode, environment::Environment,
 };
-use modelenv_proto::{Action, ActionType, FillSide, ResetRequest};
+use modelenv_proto::{Action, ActionType, ResetRequest};
 
 fn create_mock_ctrader_gateway(
 ) -> Result<Arc<dyn modelenv_core::broker_gateway::BrokerGateway + Send + Sync>> {
@@ -16,35 +16,32 @@ fn create_mock_ctrader_gateway(
         Some("refresh-token".to_string()),
         Some("account".to_string()),
         "USDJPY",
+        false, // demo endpoint
+        0.01,  // lots per unit
     )?;
 
     Ok(Arc::from(gateway))
 }
 
+/// The real client must NOT fabricate broker data: without a reachable broker
+/// (here the account id is non-numeric, so connect fails before any network),
+/// every trading operation surfaces an error rather than returning a synthetic
+/// value. (The old simulation returned fake positions/bars/ticks/fills; that is
+/// gone by design, real wiring is unit-tested in `ctrader::client`.)
 #[tokio::test]
-async fn ctrader_gateway_trait_returns_mock_api_responses() -> Result<()> {
+async fn ctrader_gateway_refuses_to_fabricate_without_broker() -> Result<()> {
     let gateway = create_mock_ctrader_gateway()?;
 
-    let positions = gateway.sync_positions("USDJPY").await?;
-    let bar = gateway.current_bar("USDJPY").await?;
-    let ticks = gateway.current_ticks("USDJPY").await?;
-    let fill = gateway
+    assert!(gateway.sync_positions("USDJPY").await.is_err());
+    assert!(gateway.current_bar("USDJPY").await.is_err());
+    assert!(gateway.current_ticks("USDJPY").await.is_err());
+    assert!(gateway
         .submit(&Action {
             action: ActionType::ActionBuy1 as i32,
             client_order_id: "integration-order".to_string(),
         })
-        .await?;
-
-    assert!(positions.is_empty());
-    assert!(bar.close > 100.0);
-    assert!(bar.high >= bar.close);
-    assert!(!ticks.is_empty());
-    assert!(ticks
-        .windows(2)
-        .all(|window| window[0].timestamp_ns < window[1].timestamp_ns));
-    assert_eq!(fill.order_id, "order-USDJPY-integration-order");
-    assert_eq!(fill.side, FillSide::Buy as i32);
-    assert_eq!(fill.size, 1.0);
+        .await
+        .is_err());
 
     Ok(())
 }
@@ -57,6 +54,10 @@ fn first_row_value(columns: &[String], values: &[f64], name: &str) -> f64 {
     values[col_index(columns, name)]
 }
 
+// Needs a reachable broker (demo/live) or a pub MockBrokerGateway to drive the
+// live Reset/Step arms; the old version relied on the removed in-client
+// simulation. Tracked as T-9.2-06 (env integration test with a mock gateway).
+#[ignore = "needs a reachable demo/live broker or a pub MockBrokerGateway (T-9.2-06)"]
 #[tokio::test]
 async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Result<()> {
     let broker_gateway = create_mock_ctrader_gateway()?;

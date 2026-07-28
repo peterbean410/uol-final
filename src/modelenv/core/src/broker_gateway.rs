@@ -127,6 +127,10 @@ pub fn create_broker_gateway_instance(
     refresh_token: Option<String>,
     account_id: Option<String>,
     symbol: &str,
+    // false = demo endpoint (default), true = live (real money).
+    live: bool,
+    // cTrader lots per modelenv position unit (default 0.01 if <= 0).
+    lot_size_per_unit: f64,
 ) -> Result<Box<dyn BrokerGateway + Send + Sync>> {
     match broker_type.to_lowercase().as_str() {
         "ctrader" => {
@@ -146,6 +150,14 @@ pub fn create_broker_gateway_instance(
                 refresh_token,
                 account_id,
                 symbol.to_string(),
+            )
+            .with_live(live)
+            .with_lot_size_per_unit(lot_size_per_unit);
+            log::warn!(
+                "cTrader broker gateway: endpoint={}, lot/unit={} (symbol {})",
+                if live { "LIVE (real money)" } else { "demo" },
+                client.lot_size_per_unit(),
+                symbol
             );
             let gateway = ctrader::gateway::CtraderBrokerGateway::new(client, symbol.to_string());
             Ok(Box::new(gateway))

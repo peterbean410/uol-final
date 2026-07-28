@@ -342,6 +342,8 @@ async fn main() -> Result<()> {
             config.broker_gateway.ctrader_refresh_token.as_deref(),
             config.broker_gateway.ctrader_account.as_deref(),
             config.symbol.as_str(),
+            config.broker_gateway.ctrader_live,
+            config.broker_gateway.ctrader_lot_size_per_unit,
         )
         .await
         .map_err(|err| {

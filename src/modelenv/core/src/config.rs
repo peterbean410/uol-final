@@ -63,7 +63,15 @@ pub struct BrokerGatewayConfig {
     pub ctrader_refresh_token: Option<String>,
     /// cTrader trader account ID
     pub ctrader_account: Option<String>,
+    /// cTrader endpoint select: false = demo (default), true = live (real money).
+    pub ctrader_live: bool,
+    /// cTrader lots submitted per one modelenv position unit (default 0.01).
+    pub ctrader_lot_size_per_unit: f64,
 }
+
+/// Default cTrader lots per modelenv unit (0.01 = USDJPY minimum). Kept in sync
+/// with `broker_gateway::ctrader::client::DEFAULT_LOT_SIZE_PER_UNIT`.
+pub const DEFAULT_CTRADER_LOT_SIZE_PER_UNIT: f64 = 0.01;
 
 impl Default for BrokerGatewayConfig {
     fn default() -> Self {
@@ -75,6 +83,8 @@ impl Default for BrokerGatewayConfig {
             ctrader_access_token: None,
             ctrader_refresh_token: None,
             ctrader_account: None,
+            ctrader_live: false,
+            ctrader_lot_size_per_unit: DEFAULT_CTRADER_LOT_SIZE_PER_UNIT,
         }
     }
 }
@@ -601,6 +611,29 @@ impl Config {
 
         if let Some(ctrader_account) = Self::non_empty_env(env_get, "CTRADER_ACCOUNT") {
             self.broker_gateway.ctrader_account = Some(ctrader_account);
+        }
+
+        // Endpoint select: CTRADER_LIVE=true|1|yes|on|live → live (real money).
+        // Default (unset / anything else) stays demo.
+        if let Some(live) = Self::non_empty_env(env_get, "CTRADER_LIVE") {
+            self.broker_gateway.ctrader_live = matches!(
+                live.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "live"
+            );
+        }
+
+        // cTrader lots per modelenv position unit; invalid values keep the default.
+        if let Some(lot) = Self::non_empty_env(env_get, "CTRADER_LOT_SIZE_PER_UNIT") {
+            match lot.trim().parse::<f64>() {
+                Ok(v) if v.is_finite() && v > 0.0 => {
+                    self.broker_gateway.ctrader_lot_size_per_unit = v
+                }
+                _ => log::warn!(
+                    "ignoring invalid CTRADER_LOT_SIZE_PER_UNIT={:?}; keeping {}",
+                    lot,
+                    self.broker_gateway.ctrader_lot_size_per_unit
+                ),
+            }
         }
 
         if Self::first_non_empty_env(

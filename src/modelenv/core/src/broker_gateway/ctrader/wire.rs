@@ -61,6 +61,10 @@ pub mod payload_type {
     pub const OA_ERROR_RES: u32 = 2142;
     pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ: u32 = 2149;
     pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_RES: u32 = 2150;
+    // Spot (streaming bid/ask) subscription + unsolicited spot events.
+    pub const SUBSCRIBE_SPOTS_REQ: u32 = 2127;
+    pub const SUBSCRIBE_SPOTS_RES: u32 = 2128;
+    pub const SPOT_EVENT: u32 = 2131;
 }
 
 /// Build a [`ProtoMessage`] envelope around an already-encoded application

@@ -14,7 +14,8 @@ use modelenv_proto::ctrader::{
     ProtoOaCtidTraderAccount, ProtoOaDeal, ProtoOaDealListReq, ProtoOaDealListRes, ProtoOaErrorRes,
     ProtoOaGetAccountListByAccessTokenReq, ProtoOaGetAccountListByAccessTokenRes,
     ProtoOaGetTrendbarsReq, ProtoOaGetTrendbarsRes, ProtoOaPosition, ProtoOaReconcileReq,
-    ProtoOaReconcileRes, ProtoOaSymbolsListReq, ProtoOaSymbolsListRes, ProtoOaTrendbar,
+    ProtoOaReconcileRes, ProtoOaSpotEvent, ProtoOaSubscribeSpotsReq, ProtoOaSubscribeSpotsRes,
+    ProtoOaSymbolsListReq, ProtoOaSymbolsListRes, ProtoOaTrendbar,
 };
 use modelenv_proto::{Bar, Fill, Position};
 use prost::Message;
@@ -265,6 +266,61 @@ pub async fn get_trendbars(
         resp.payload_type,
         payload_type::GET_TRENDBARS_RES
     ))
+}
+
+/// cTrader spot (bid/ask) prices are integers scaled by 10^5, like trendbars.
+const SPOT_PRICE_SCALE: f64 = 100_000.0;
+
+/// Subscribe to streaming spot (bid/ask) events for `symbol_id` on `account_id`.
+/// Once this returns Ok, cTrader pushes unsolicited `ProtoOASpotEvent`s over the
+/// connection (delivered on its events channel). Required for live tick data.
+pub async fn subscribe_spots(
+    conn: &Connection,
+    account_id: i64,
+    symbol_id: i64,
+    timeout: Duration,
+) -> Result<()> {
+    let req = ProtoOaSubscribeSpotsReq {
+        payload_type: Some(payload_type::SUBSCRIBE_SPOTS_REQ as i32),
+        ctid_trader_account_id: account_id,
+        symbol_id: vec![symbol_id],
+        subscribe_to_spot_timestamp: Some(true),
+    };
+    let resp = conn
+        .send_request(payload_type::SUBSCRIBE_SPOTS_REQ, req.encode_to_vec(), timeout)
+        .await?;
+    if resp.payload_type == payload_type::SUBSCRIBE_SPOTS_RES {
+        // Validate the account echo (defensive; the RES only carries the account).
+        let _ = ProtoOaSubscribeSpotsRes::decode(resp.payload.as_deref().unwrap_or_default());
+        return Ok(());
+    }
+    if resp.payload_type == payload_type::ERROR_RES
+        || resp.payload_type == payload_type::OA_ERROR_RES
+    {
+        if let Ok(err) = ProtoOaErrorRes::decode(resp.payload.as_deref().unwrap_or_default()) {
+            return Err(anyhow!(
+                "cTrader subscribe-spots rejected: {} ({})",
+                err.error_code,
+                err.description.unwrap_or_default()
+            ));
+        }
+    }
+    Err(anyhow!(
+        "cTrader subscribe-spots: unexpected payload_type {} (expected {})",
+        resp.payload_type,
+        payload_type::SUBSCRIBE_SPOTS_RES
+    ))
+}
+
+/// Decode a [`ProtoOaSpotEvent`]'s bid/ask (each optional, ×10^5) and timestamp
+/// (ms→ns). Returns `(bid, ask, ts_ns)`; a spot event updates only the side(s)
+/// that changed, so either price may be `None`. `ts_ns` is 0 when absent (the
+/// caller substitutes the receive time).
+pub fn spot_bid_ask(evt: &ProtoOaSpotEvent) -> (Option<f64>, Option<f64>, i64) {
+    let bid = evt.bid.map(|b| b as f64 / SPOT_PRICE_SCALE);
+    let ask = evt.ask.map(|a| a as f64 / SPOT_PRICE_SCALE);
+    let ts_ns = evt.timestamp.unwrap_or(0).saturating_mul(1_000_000);
+    (bid, ask, ts_ns)
 }
 
 /// Map a cTrader [`ProtoOaDeal`] to a modelenv [`Fill`] (lots, side = trade_side

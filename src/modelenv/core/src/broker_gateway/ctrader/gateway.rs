@@ -534,7 +534,7 @@ impl BrokerGateway for CtraderBrokerGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelenv_proto::{Action, FillSide};
+    use modelenv_proto::Action;
 
     fn test_gateway(symbol: &str) -> CtraderBrokerGateway {
         CtraderBrokerGateway::new(
@@ -551,13 +551,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_positions_connects_client_lazily() {
+    async fn sync_positions_errors_without_reachable_broker() {
+        // Real client: connect fails (no broker reachable in a unit test), so the
+        // operation surfaces an error rather than fabricating positions.
         let gateway = test_gateway("USDJPY");
-
-        let positions = gateway.sync_positions("USDJPY").await.unwrap();
-
-        assert!(positions.is_empty());
-        assert!(gateway.client.lock().await.is_connected());
+        assert!(gateway.sync_positions("USDJPY").await.is_err());
     }
 
     #[tokio::test]
@@ -570,20 +568,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_connects_client_and_returns_fill() {
+    async fn submit_errors_without_reachable_broker() {
         let gateway = test_gateway("USDJPY");
-
-        let fill = gateway
+        assert!(gateway
             .submit(&Action {
                 action: ActionType::ActionBuy1 as i32,
                 client_order_id: "order-1".to_string(),
             })
             .await
-            .unwrap();
-
-        assert_eq!(fill.side, FillSide::Buy as i32);
-        assert!(fill.price > 100.0);
-        assert!(gateway.client.lock().await.is_connected());
+            .is_err());
     }
 
     #[tokio::test]
@@ -602,14 +595,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn current_bar_connects_client_lazily() {
+    async fn current_bar_errors_without_reachable_broker() {
         let gateway = test_gateway("USDJPY");
-
-        let bar = gateway.current_bar("USDJPY").await.unwrap();
-
-        assert!(bar.close > 100.0);
-        assert_eq!(bar.volume, 100.0);
-        assert!(gateway.client.lock().await.is_connected());
+        assert!(gateway.current_bar("USDJPY").await.is_err());
     }
 
     #[tokio::test]

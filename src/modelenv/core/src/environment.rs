@@ -981,9 +981,34 @@ impl Environment {
                     broker.sync_positions(&self.symbol).await?
                 };
 
-                // Reconcile internal positions against broker positions
-                let broker_realised_pnl = 0.0;
+                // Reconcile internal positions against broker positions.
+                // Broker-reported realised P/L over the current session (T-9.2-07):
+                // fetched independently of the internal window and summed through
+                // the SAME window logic so it is a genuine apples-to-apples drift
+                // check. Falls back to the internal figure on a transient fetch
+                // error so it never spuriously warns.
+                let cutoff_ns = self.session_start_cutoff(self.current_timestamp());
                 let session_realised_pnl = self.session_realised_pnl();
+                let broker_realised_pnl = {
+                    let symbol = self.symbol.clone();
+                    let broker = self.get_broker_gateway()?;
+                    match broker.closed_positions(&symbol, cutoff_ns).await {
+                        Ok(closed) => {
+                            let mut window = crate::position::ClosedPositionWindow::new();
+                            for cp in closed {
+                                window.add_closed_position(cp);
+                            }
+                            window.total_realised_pnl_since(cutoff_ns)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "reconcile: broker realised-P/L fetch failed ({e}); \
+                                 using internal figure (no realised-P/L drift check this step)"
+                            );
+                            session_realised_pnl
+                        }
+                    }
+                };
                 reconcile_positions(
                     &self
                         .positions
