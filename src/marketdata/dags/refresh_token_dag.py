@@ -91,3 +91,31 @@ with DAG(
         is_delete_operator_pod=True,
         get_logs=True,
     )
+
+    # Demo account token (ctrader-secrets-demo), used by the modelenv-demo
+    # deployment. Same refresh flow as the live secret, pointed at the demo
+    # credentials; the demo token was previously not refreshed and expired.
+    refresh_ctrader_demo_secret = KubernetesPodOperator(
+        task_id="refresh_ctrader_demo_secret",
+        name="refresh-ctrader-demo-secret",
+        namespace="modelenv",
+        image="731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-marketdata-download-interval-price-data:latest",
+        image_pull_policy="IfNotPresent",
+        image_pull_secrets=[k8s.V1LocalObjectReference(name="ecr-registry-credentials")],
+        service_account_name="ctrader-secret-refresher",
+        cmds=["python", "-c", _REFRESH_SCRIPT],
+        env_from=[
+            k8s.V1EnvFromSource(
+                secret_ref=k8s.V1SecretEnvSource(name="ctrader-secrets-demo")
+            )
+        ],
+        env_vars=[
+            k8s.V1EnvVar(name="K8S_CREDENTIALS_SECRET", value="ctrader-secrets-demo"),
+        ],
+        container_resources=k8s.V1ResourceRequirements(
+            requests={"cpu": "100m", "memory": "128Mi"},
+            limits={"cpu": "250m", "memory": "256Mi"},
+        ),
+        is_delete_operator_pod=True,
+        get_logs=True,
+    )
