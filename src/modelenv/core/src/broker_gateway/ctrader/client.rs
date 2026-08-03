@@ -495,12 +495,17 @@ impl CtraderClient {
         let account = self.account_id_num;
         let timeout = self.timeout;
         let conn = self.require_conn()?;
+        // Request a wider window and take the most recent completed bar. A
+        // count=1 / few-minute window can come back empty (the current minute is
+        // in-progress and the window is too tight), so fetch ~30 M1 bars and use
+        // the last, robust to the in-progress minute and brief gaps.
         let bars =
-            data::get_trendbars(conn, account, sid, data::TRENDBAR_M1, 1, Self::now_ms(), timeout)
+            data::get_trendbars(conn, account, sid, data::TRENDBAR_M1, 30, Self::now_ms(), timeout)
                 .await?;
+        debug!("current_bar: {} M1 bars returned for {symbol}", bars.len());
         bars.into_iter()
             .last()
-            .ok_or_else(|| anyhow!("cTrader returned no M1 bar for {symbol}"))
+            .ok_or_else(|| anyhow!("cTrader returned no M1 bar for {symbol} (empty trendbars over ~30m window)"))
     }
 
     /// Retrieve up to `count` recent bars at `interval` (ascending timestamp).
