@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Export the project's source into this public repository.
+#
+# This repository is CODE ONLY - no report, specifications or other documents.
+# The working repository is private and contains credentials (.env files, a
+# kubeconfig, broker tokens) and multi-gigabyte Rust/Python build trees. This
+# script copies ONLY first-party source, and refuses to run if the secret scan
+# in tools/scan_secrets.sh finds anything afterwards. This repository's git history
+# is the real development history of those paths, brought across with git-filter-repo;
+# this script only refreshes the working tree to the latest state.
+#
+#   ./tools/export_public.sh /path/to/private/forex
+set -euo pipefail
+
+SRC="${1:?usage: export_public.sh <path-to-private-forex-repo>}"
+DEST="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="$DEST/src"
+
+EXCLUDES=(
+  --exclude 'target/'            # Rust build output (14 GB)
+  --exclude '__pycache__/'  --exclude '*.pyc'  --exclude '*.pyo'
+  --exclude '.env'               # credentials, .env.example is kept
+  --exclude '.idea/'  --exclude '.vscode/'  --exclude '.DS_Store'
+  --exclude '.pytest_cache/'  --exclude '.hypothesis/'  --exclude '.ruff_cache/'
+  --exclude 'cache/'             # downloaded market-data caches
+  --exclude '*.parquet'          # market-data files (fetched, not source)
+  --exclude '*.mov'  --exclude '*.mp4'        # screen recordings
+  --exclude '*.log'
+  --exclude '/service/'          # ta/service: uncommitted scaffolding, not part of the report
+)
+
+rm -rf "$OUT"; mkdir -p "$OUT"
+
+copy() { # copy <relative-src> <dest-name>
+  echo "  $1 -> src/$2"
+  rsync -a "${EXCLUDES[@]}" "$SRC/$1/" "$OUT/$2/"
+}
+
+echo "exporting source ..."
+copy modelenv                    modelenv
+copy ta                          ta
+copy deepqnetwork                deepqnetwork
+copy probabilisticforecaster     probabilisticforecaster
+copy tradingmodel/intraday/dqnpf dqnpf
+copy marketdata                  marketdata
+copy commons                     commons
+
+echo "exporting the feature prototype ..."
+rsync -a "${EXCLUDES[@]}" \
+  "$SRC/finalreport/preliminaryreport/prototype/" "$OUT/feature-prototype/"
+
+echo
+echo "sizes:"; du -sh "$OUT"/* | sed 's/^/  /'
+echo
+"$DEST/tools/scan_secrets.sh" "$DEST"
