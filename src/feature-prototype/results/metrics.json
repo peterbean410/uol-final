@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_sha": "59705c2",
+    "git_sha": "00452b7",
     "data_source": "cache:usdjpy_m5.parquet",
     "n_bars": 4320,
     "span": "2024-01-08 00:00 -> 2024-01-28 23:55 UTC",

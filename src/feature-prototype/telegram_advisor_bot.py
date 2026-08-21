@@ -174,6 +174,82 @@ def format_advice(a: Advice) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Price chart, rendered on demand, sent via the LLM `send_price_chart` tool
+# --------------------------------------------------------------------------- #
+def render_price_chart(lookback_bars: int = 72) -> tuple[bytes, float, int, str]:
+    """Render recent USD/JPY M5 price movement to a PNG. Returns
+    (png_bytes, last_price, n_bars, data_source)."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    price = data_mod.load_usdjpy_m5(cache_path=_PROTO_DIR / "cache" / "usdjpy_m5.parquet")
+    close = price.frame["close"].to_numpy()
+    ts = price.frame["timestamp_ns"].to_numpy()
+    try:
+        want = int(lookback_bars)
+    except (TypeError, ValueError):
+        want = 72
+    n = max(12, min(want or 72, len(close), 288))
+    close = close[-n:]
+    stamps = pd.to_datetime(ts[-n:], utc=True)
+    # Plot bar-by-bar (index x) so weekend/session gaps don't draw a false
+    # diagonal; label a handful of x-ticks with the real bar time.
+    x = range(n)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(x, close, color="#3a86ff", linewidth=1.5)
+    ax.scatter([n - 1], [close[-1]], color="#ef476f", s=28, zorder=5)
+    ax.annotate(
+        f"{close[-1]:.3f}", (n - 1, close[-1]),
+        textcoords="offset points", xytext=(6, 0),
+        color="#ef476f", fontsize=10, fontweight="bold",
+    )
+    n_ticks = min(6, n)
+    tick_pos = [int(round(i * (n - 1) / (n_ticks - 1))) for i in range(n_ticks)]
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels([stamps[p].strftime("%m-%d %H:%M") for p in tick_pos],
+                       rotation=30, ha="right")
+    ax.set_title(f"USD/JPY, last {n} × 5-min bars (UTC)")
+    ax.set_ylabel("price")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130)
+    plt.close(fig)
+    return buf.getvalue(), float(close[-1]), n, price.source
+
+
+# OpenAI-style function the LLM can call to send the user a chart.
+CHART_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "send_price_chart",
+        "description": (
+            "Render and send the user a chart (PNG) of recent USD/JPY price movement "
+            "from 5-minute bars. Call this whenever the user wants to SEE the price, a "
+            "chart, a graph, the trend, or how USD/JPY is moving."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lookback_bars": {
+                    "type": "integer",
+                    "description": "How many recent 5-minute bars to plot (default 72 ≈ 6 hours).",
+                    "minimum": 12,
+                    "maximum": 288,
+                }
+            },
+        },
+    },
+}
+
+
+# --------------------------------------------------------------------------- #
 # Telegram Bot HTTP API, long-polling
 # --------------------------------------------------------------------------- #
 class TelegramBot:
@@ -197,6 +273,17 @@ class TelegramBot:
             f"{self._base}/sendMessage",
             json={"chat_id": chat_id, "text": text},
             timeout=15,
+        ).raise_for_status()
+
+    def send_photo(self, chat_id: int, image_bytes: bytes, caption: str | None = None) -> None:
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        requests.post(
+            f"{self._base}/sendPhoto",
+            data=data,
+            files={"photo": ("usdjpy.png", image_bytes, "image/png")},
+            timeout=30,
         ).raise_for_status()
 
     def get_updates(self, offset: int | None, long_poll: int = 30):
@@ -228,9 +315,25 @@ class TelegramBot:
             elif is_command:
                 self.send_message(chat_id, HELP)  # unknown command
             else:
-                # free-form question -> answer in prose, grounded in the live advice
+                # free-form question -> answer in prose, grounded in the live advice.
+                # The LLM may call the send_price_chart tool, which renders a chart
+                # and sends it to this chat.
                 structured = format_advice(compute_advice())
-                prose = llm.narrate(structured, user_message=text)
+
+                def _execute_tool(name: str, args: dict) -> str:
+                    if name == "send_price_chart":
+                        png, last, n, src = render_price_chart(args.get("lookback_bars", 72))
+                        self.send_photo(
+                            chat_id, png,
+                            caption=f"USD/JPY, last {n} × 5-min bars (last {last:.3f}, {src})",
+                        )
+                        return f"Chart sent to the user: last {n} 5-minute bars, latest price {last:.3f}."
+                    return f"unknown tool {name}"
+
+                prose = llm.narrate(
+                    structured, user_message=text,
+                    tools=[CHART_TOOL], execute_tool=_execute_tool,
+                )
                 self.send_message(
                     chat_id,
                     prose
