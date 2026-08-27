@@ -5,7 +5,12 @@ three configurations and writes a metrics JSON + figures:
 
   C1  informative sigma, gate ON   -> feasibility: the screen can help
   C2  collapsed   sigma, gate ON   -> honest failure + the gate self-deactivates
-  C3  collapsed   sigma, gate OFF  -> what the gate prevents (screen strictly worse)
+
+This prototype also ran a C3 arm (collapsed sigma, gate OFF) as the control
+that showed what the gate prevents. The gate is no longer switchable, so that
+arm cannot be produced here; its result is published in the preliminary report
+and stands as written there, including the deflated Sharpe ratio, which was
+deflated over the three trials run then, not the two run here.
 
 Usage (from the forex repo root, so deepqnetwork/tradingmodel import):
     python -m preliminaryreport.prototype.run            # or:
@@ -65,7 +70,7 @@ def _cum_pips(records, pip_size: float) -> np.ndarray:
     return np.cumsum([r.raw_pnl_delta for r in records]) / pip_size
 
 
-def _make_config(*, gate_enabled: bool, directional: bool) -> IntegrationConfig:
+def _make_config() -> IntegrationConfig:
     return IntegrationConfig(
         symbol="USDJPY",
         variance_threshold=VARIANCE_THRESHOLD,
@@ -254,9 +259,8 @@ def main() -> None:
     coll_sig = sig_mod.collapsed_signals(close)
 
     configs = {
-        "C1 informative + gate": (_make_config(gate_enabled=True, directional=True), info_sig),
-        "C2 collapsed + gate": (_make_config(gate_enabled=True, directional=True), coll_sig),
-        "C3 collapsed + gate OFF": (_make_config(gate_enabled=False, directional=True), coll_sig),
+        "C1 informative + gate": (_make_config(), info_sig),
+        "C2 collapsed + gate": (_make_config(), coll_sig),
     }
 
     results = {}
