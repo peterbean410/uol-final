@@ -18,23 +18,6 @@ def _a(idx: int) -> FakeActionResult:
 # --- legacy parity: gate disabled => identical to pre-gate behaviour ----------
 
 
-def test_gate_disabled_preserves_legacy_suppression() -> None:
-    layer = make_layer(variance_threshold=1.0, max_risk_long_units=0)
-    # high-sigma long with zero budget -> suppressed (budget_exhausted), as before
-    r = layer.screen(_a(1), mu=0.0, sigma=5.0)
-    assert r.reason == "budget_exhausted"
-    assert r.action == 0  # HOLD
-    assert r.gate_active is True  # always-active sentinel when gate off
-
-
-def test_gate_disabled_ignores_price_arg() -> None:
-    layer = make_layer(variance_threshold=1.0, max_risk_long_units=5)
-    r = layer.screen(_a(1), mu=0.0, sigma=5.0, price=100.0)
-    assert r.reason == "pass" and r.action == 1
-    assert layer.risk_long_used == 1  # budget still consumed on pass
-
-
-# --- gate enabled: activation / deactivation by trailing counterfactual --------
 
 
 def _blocking_layer(window: int) -> object:
@@ -43,7 +26,6 @@ def _blocking_layer(window: int) -> object:
         variance_threshold=1.0,
         max_risk_long_units=0,
         max_risk_short_units=0,
-        screen_profit_gate_enabled=True,
         screen_profit_window_sessions=window,
     )
 

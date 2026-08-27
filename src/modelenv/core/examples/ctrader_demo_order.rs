@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let timeout = Duration::from_secs(20);
 
     eprintln!("[demo-order] connecting to cTrader demo ...");
-    let (r, w) = Transport::connect_env(false).await?.into_split();
+    let (r, w) = Transport::connect_env().await?.into_split();
     let (conn, mut events) = Connection::start(r, w);
 
     auth::app_authenticate(&conn, &client_id, &client_secret, timeout).await?;

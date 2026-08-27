@@ -50,12 +50,10 @@ class PipelineConfig:
     #   train_start = data_start
 
     # Infrastructure
-    gpu_enabled: bool = True
     num_workers: int = 1  # DDP workers (1-4)
     max_wall_time_hours: int = 8
 
     # Katib
-    katib_enabled: bool = False
     katib_max_trials: int = 30
     katib_parallel_trials: int = 5
     katib_trial_timeout_hours: int = 2

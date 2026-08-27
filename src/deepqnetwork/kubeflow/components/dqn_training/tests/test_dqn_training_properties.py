@@ -76,11 +76,9 @@ def valid_dqn_pipeline_configs_for_training(draw):
         ),
         hidden_dims=hidden_dims,
         activation=draw(st.sampled_from(VALID_ACTIVATIONS)),
-        layer_norm=draw(st.booleans()),
         dropout=draw(
             st.floats(min_value=0.0, max_value=0.5, allow_nan=False, allow_infinity=False)
         ),
-        dueling=draw(st.booleans()),
         learning_rate=draw(
             st.floats(min_value=1e-6, max_value=0.01, allow_nan=False, allow_infinity=False)
         ),
@@ -97,10 +95,8 @@ def valid_dqn_pipeline_configs_for_training(draw):
         num_episodes_per_range=draw(st.integers(min_value=1, max_value=5)),
         max_steps_per_episode=draw(st.integers(min_value=1, max_value=100)),
         checkpoint_interval=draw(st.integers(min_value=1, max_value=10)),
-        gpu_enabled=False,
         num_workers=1,
         max_wall_time_hours=1,
-        katib_enabled=False,
         training_mode=training_mode,
         finetune_learning_rate=draw(
             st.floats(min_value=1e-6, max_value=0.01, allow_nan=False, allow_infinity=False)

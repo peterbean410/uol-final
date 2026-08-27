@@ -39,23 +39,15 @@ def _action(idx: int) -> FakeActionResult:
     variance_threshold=st.floats(
         min_value=0.0, max_value=20.0, allow_nan=False, allow_infinity=False
     ),
-    directional_disagreement=st.booleans(),
-    directional_tolerance=st.floats(
-        min_value=0.0, max_value=20.0, allow_nan=False, allow_infinity=False
-    ),
 )
 def test_screened_action_validity(
     action_index: int,
     mu: float,
     sigma: float,
     variance_threshold: float,
-    directional_disagreement: bool,
-    directional_tolerance: float,
 ) -> None:
     layer = make_layer(
         variance_threshold=variance_threshold,
-        directional_disagreement=directional_disagreement,
-        directional_tolerance=directional_tolerance,
     )
     result = layer.screen(_action(action_index), mu, sigma)
     assert result.action in _VALID_ACTIONS
@@ -84,11 +76,9 @@ def test_low_sigma_pass_through(
     variance_threshold: float,
     sigma_offset: float,
 ) -> None:
-    # sigma <= threshold, directional_disagreement disabled.
+    # sigma <= threshold
     sigma = max(0.0, variance_threshold - sigma_offset)
-    layer = make_layer(
-        variance_threshold=variance_threshold, directional_disagreement=False
-    )
+    layer = make_layer(variance_threshold=variance_threshold)
     result = layer.screen(_action(action_index), mu, sigma)
     assert result.action == action_index
     assert result.reason == "pass"
@@ -122,7 +112,6 @@ def test_high_sigma_budget_consumption(
         variance_threshold=variance_threshold,
         max_risk_long_units=10,
         max_risk_short_units=10,
-        directional_disagreement=False,
     )
     sigma = variance_threshold + sigma_excess
     unit = map_action(action_index)
@@ -154,7 +143,6 @@ def test_budget_exhaustion_triggers_hold(action_index: int, mu: float) -> None:
         variance_threshold=1.0,
         max_risk_long_units=unit.risk_units,
         max_risk_short_units=unit.risk_units,
-        directional_disagreement=False,
     )
     # Force budget to be (cap - risk_units + 1) so action would overflow.
     if unit.direction == Direction.LONG:
@@ -195,7 +183,6 @@ def test_budget_never_exceeded(
         variance_threshold=0.5,
         max_risk_long_units=max_long,
         max_risk_short_units=max_short,
-        directional_disagreement=False,
     )
     # Truncate to common length so we always have both inputs.
     n = min(len(actions), len(sigmas))
@@ -219,7 +206,6 @@ def test_budget_release(side: str, units_to_release: int) -> None:
         variance_threshold=1.0,
         max_risk_long_units=2,
         max_risk_short_units=2,
-        directional_disagreement=False,
     )
     # Fill both budgets to the cap via high-sigma actions.
     layer.screen(_action(2), 0.0, 5.0)  # BUY_2 → long=2
@@ -247,84 +233,6 @@ def test_budget_release(side: str, units_to_release: int) -> None:
         result = layer.screen(_action(action_idx), 0.0, 5.0)
         assert result.reason == "pass"
         assert result.screened is False
-
-
-# ---------------------------------------------------------------------------
-# Property 8: Directional conflict rule
-# ---------------------------------------------------------------------------
-
-
-@given(
-    action_index=st.sampled_from([1, 2, 3, 4]),
-    abs_mu=st.floats(
-        min_value=1e-3, max_value=10.0, allow_nan=False, allow_infinity=False
-    ),
-    tolerance=st.floats(
-        min_value=0.0, max_value=5.0, allow_nan=False, allow_infinity=False
-    ),
-    enabled=st.booleans(),
-)
-def test_directional_conflict_rule(
-    action_index: int, abs_mu: float, tolerance: float, enabled: bool
-) -> None:
-    unit = map_action(action_index)
-    # Build a mu whose sign opposes the action's direction.
-    mu = -abs_mu if unit.direction == Direction.LONG else abs_mu
-    sigma = 0.1  # low sigma so budget rule cannot trigger
-
-    layer = make_layer(
-        variance_threshold=10.0,  # high → low-sigma path
-        max_risk_long_units=10,
-        max_risk_short_units=10,
-        directional_disagreement=enabled,
-        directional_tolerance=tolerance,
-    )
-    result = layer.screen(_action(action_index), mu, sigma)
-
-    if enabled and abs_mu > tolerance:
-        assert result.action == 0
-        assert result.reason == "directional_conflict"
-        assert result.screened is True
-    else:
-        assert result.action == action_index
-        assert result.reason == "pass"
-
-
-# ---------------------------------------------------------------------------
-# Property 9: Rule priority order, budget beats directional conflict
-# ---------------------------------------------------------------------------
-
-
-@given(
-    action_index=st.sampled_from([1, 2]),  # LONG actions
-    abs_mu=st.floats(
-        min_value=2.0, max_value=10.0, allow_nan=False, allow_infinity=False
-    ),
-)
-def test_rule_priority_budget_beats_directional(
-    action_index: int, abs_mu: float
-) -> None:
-    # Configure so both rules would otherwise trigger for a LONG action:
-    # - budget already at cap (LONG buy will exceed)
-    # - directional_disagreement on, mu < 0 (opposes LONG), |mu| > tolerance
-    layer = make_layer(
-        variance_threshold=1.0,
-        max_risk_long_units=ACTION_MAP[action_index].risk_units,
-        directional_disagreement=True,
-        directional_tolerance=1.0,
-    )
-    layer._risk_long_units = layer._config.max_risk_long_units  # type: ignore[attr-defined]
-    sigma = 5.0  # high-sigma
-    mu = -abs_mu
-
-    result = layer.screen(_action(action_index), mu, sigma)
-    assert result.action == 0
-    assert result.reason == "budget_exhausted"
-
-
-# ---------------------------------------------------------------------------
-# Property 13: Single-symbol isolation
-# ---------------------------------------------------------------------------
 
 
 @given(

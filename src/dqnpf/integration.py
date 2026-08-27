@@ -27,7 +27,6 @@ _HOLD_ACTION = 0
 _HOLD_NAME = "HOLD"
 _REASON_PASS = "pass"
 _REASON_BUDGET = "budget_exhausted"
-_REASON_DIRECTIONAL = "directional_conflict"
 # The profit gate decided the screen has NOT been earning its keep over the
 # trailing window, so the DQN action passes through unscreened even though a
 # screen rule WOULD have suppressed it.
@@ -56,7 +55,7 @@ class ScreenedAction:
         action: Final action index (0-4), potentially overridden to HOLD.
         action_name: Human-readable action name.
         screened: True if a risk rule modified the action.
-        reason: One of ``"pass"``, ``"budget_exhausted"``, ``"directional_conflict"``.
+        reason: One of ``"pass"``, ``"budget_exhausted"``, ``"gate_bypassed"``.
         sigma: Sigma value at decision time, for downstream logging.
         risk_long_used: Cumulative long budget units after this action.
         risk_short_used: Cumulative short budget units after this action.
@@ -126,15 +125,12 @@ class IntegrationLayer:
 
         logger.info(
             "IntegrationLayer initialised: symbol=%s, variance_threshold=%.4f, "
-            "max_risk_long=%d, max_risk_short=%d, directional_disagreement=%s, "
-            "directional_tolerance=%.4f, forecast_horizon=%d, "
+            "max_risk_long=%d, max_risk_short=%d, forecast_horizon=%d, "
             "min_bars_warmup=%d, step_size_seconds=%d",
             self._symbol,
             config.variance_threshold,
             config.max_risk_long_units,
             config.max_risk_short_units,
-            config.directional_disagreement,
-            config.directional_tolerance,
             config.forecast_horizon,
             config.min_bars_warmup,
             config.step_size_seconds,
@@ -188,10 +184,7 @@ class IntegrationLayer:
         window and recomputes whether the screen stays active for the new
         session. Call once at the start of each trading session/episode (and
         once per pre-seed/warm-up session so the gate is informed from bar 0).
-        No-op when the gate is disabled.
         """
-        if not self._config.screen_profit_gate_enabled:
-            return
         if self._session_started:
             self._cf_history.append(self._session_cf)
         self._session_cf = 0.0
@@ -251,17 +244,7 @@ class IntegrationLayer:
                 ):
                     return _REASON_BUDGET
 
-        # Rule 2: Directional conflict
-        if (
-            self._config.directional_disagreement
-            and unit.direction != Direction.NONE
-            and abs(mu) > self._config.directional_tolerance
-        ):
-            mu_direction = Direction.LONG if mu > 0 else Direction.SHORT
-            if mu_direction != unit.direction:
-                return _REASON_DIRECTIONAL
-
-        # Rule 3: Pass-through (consume budget only on high-sigma opens)
+        # Rule 2: Pass-through (consume budget only on high-sigma opens)
         if high_sigma:
             if unit.direction == Direction.LONG:
                 self._risk_long_units += unit.risk_units
@@ -297,12 +280,10 @@ class IntegrationLayer:
         """
         self._maybe_reset_budget(timestamp_ns)
         unit = map_action(dqn_action.action)
-        gate_on = self._config.screen_profit_gate_enabled
 
         # Gate: settle the previous bar's blocked trade against this bar's price
         # BEFORE evaluating the new bar (next-bar mark-to-market).
-        if gate_on:
-            self._mark_pending_counterfactual(price)
+        self._mark_pending_counterfactual(price)
 
         # Shadow evaluation of the screen (always run; mutates the hypothetical
         # budget), gives the would-be hold decision regardless of the gate.
@@ -310,8 +291,7 @@ class IntegrationLayer:
 
         # Gate: register the trade the screen would block for next-bar marking.
         if (
-            gate_on
-            and hold_reason is not None
+            hold_reason is not None
             and price is not None
             and unit.direction != Direction.NONE
         ):
@@ -321,9 +301,9 @@ class IntegrationLayer:
                 entry_price=price,
             )
 
-        # Honour the suppression only when the screen is active (gate disabled,
-        # or gate enabled AND currently profitable). Otherwise pass through.
-        if hold_reason is not None and (not gate_on or self._gate_active):
+        # Honour the suppression only while the gate says the screen is
+        # currently profitable; otherwise pass the DQN action through.
+        if hold_reason is not None and self._gate_active:
             held = self._hold(hold_reason, sigma)
             held.gate_active = self._gate_active
             return held

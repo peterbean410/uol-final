@@ -6,7 +6,7 @@ a built-in per-symbol default table inside ``Environment::new``
 training and backtest components launch modelenv as a sidecar **without** swap
 CLI flags, so the active rates come from that default table unless overridden via
 the environment variables modelenv also reads
-(``MODELENV_SWAP_RATE_LONG`` / ``MODELENV_SWAP_RATE_SHORT`` / ``MODELENV_NO_SWAP``).
+(``MODELENV_SWAP_RATE_LONG`` / ``MODELENV_SWAP_RATE_SHORT``).
 
 This module reproduces that resolution so the pipeline reports can record the
 *actual* (long, short) daily swap rates a run used. Keep it in sync with
@@ -28,8 +28,6 @@ DEFAULT_DAILY_SWAP_RATES: dict[str, tuple[float, float]] = {
 # Units of the values below, recorded alongside them in reports.
 SWAP_RATE_UNITS = "price units/day per unit volume"
 
-# Truthy spellings modelenv accepts for MODELENV_NO_SWAP (core/src/config.rs).
-_NO_SWAP_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def default_swap_rate_for(symbol: str) -> tuple[float, float]:
@@ -52,32 +50,27 @@ def resolve_swap_rates(
     """Resolve the (long, short) daily swap rates a Training/backtest run uses.
 
     Reproduces ``server/src/main.rs`` precedence for Training mode (the mode the
-    DQN training and backtest components run modelenv in): ``--no-swap`` wins,
-    then per-side ``--swap-rate-*`` overrides filled from the default table, then
-    the built-in default table. Only the environment-variable forms of those
-    flags are read here, since the components launch modelenv without swap CLI
-    flags.
+    DQN training and backtest components run modelenv in): per-side
+    ``--swap-rate-*`` overrides filled from the default table, then the built-in
+    default table. Only the environment-variable forms of those flags are read
+    here, since the components launch modelenv without swap CLI flags.
 
     Returns a report-ready dict: ``long_per_day``, ``short_per_day``, ``source``
-    (``"disabled"`` | ``"override"`` | ``"default_table"``), ``symbol``, ``units``.
+    (``"override"`` | ``"default_table"``), ``symbol``, ``units``.
     """
     env = os.environ if env is None else env
     default_long, default_short = default_swap_rate_for(symbol)
 
-    no_swap = _non_empty(env, "MODELENV_NO_SWAP")
-    if no_swap is not None and no_swap.lower() in _NO_SWAP_TRUTHY:
-        long_rate, short_rate, source = 0.0, 0.0, "disabled"
+    long_raw = _non_empty(env, "MODELENV_SWAP_RATE_LONG")
+    short_raw = _non_empty(env, "MODELENV_SWAP_RATE_SHORT")
+    long_override = _parse_float(long_raw)
+    short_override = _parse_float(short_raw)
+    if long_override is not None or short_override is not None:
+        long_rate = default_long if long_override is None else long_override
+        short_rate = default_short if short_override is None else short_override
+        source = "override"
     else:
-        long_raw = _non_empty(env, "MODELENV_SWAP_RATE_LONG")
-        short_raw = _non_empty(env, "MODELENV_SWAP_RATE_SHORT")
-        long_override = _parse_float(long_raw)
-        short_override = _parse_float(short_raw)
-        if long_override is not None or short_override is not None:
-            long_rate = default_long if long_override is None else long_override
-            short_rate = default_short if short_override is None else short_override
-            source = "override"
-        else:
-            long_rate, short_rate, source = default_long, default_short, "default_table"
+        long_rate, short_rate, source = default_long, default_short, "default_table"
 
     return {
         "symbol": symbol,

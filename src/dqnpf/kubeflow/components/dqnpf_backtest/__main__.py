@@ -27,12 +27,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--forecaster-model-registry-name", required=True)
     parser.add_argument("--output-artifact-path", required=True)
     parser.add_argument(
-        "--no-sidecar",
-        action="store_true",
-        help="Skip launching the modelenv subprocess (used when the sidecar "
-        "is already running in the pod).",
-    )
-    parser.add_argument(
         "--trade-log-output-path",
         default=None,
         help="Optional destination for modelenv's JSONL trade log (every fill + "
@@ -40,21 +34,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "Accepts a local path or a minio:// / s3:// URI.",
     )
     parser.add_argument(
-        "--no-swap",
-        type=_str2bool,
-        default=False,
-        help="Disable overnight swap in the modelenv sidecar (swap-free backtest) "
-        "via modelenv's --no-swap. Default false; the backtest uses modelenv's "
-        "built-in financing table so PnL matches the swap regime the DQN trained "
-        "under. Pass 'true' for a swap-free comparison run.",
-    )
-    parser.add_argument(
         "--swap-rate-long",
         type=float,
         default=0.0,
         help="Daily overnight-financing rate (per unit volume) charged to BUY "
         "positions held across a day boundary. Default 0.0 = use modelenv's "
-        "built-in default table. Ignored when --no-swap is true.",
+        "built-in default table.",
     )
     parser.add_argument(
         "--swap-rate-short",
@@ -74,9 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         dqn_model_registry_name=args.dqn_model_registry_name,
         forecaster_model_registry_name=args.forecaster_model_registry_name,
         output_artifact_path=args.output_artifact_path,
-        start_sidecar=not args.no_sidecar,
         trade_log_output_path=args.trade_log_output_path,
-        no_swap=args.no_swap,
         swap_rate_long=args.swap_rate_long,
         swap_rate_short=args.swap_rate_short,
     )

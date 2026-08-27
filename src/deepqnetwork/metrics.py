@@ -33,14 +33,12 @@ class MetricsLogger:
     Args:
         checkpoint_dir: Directory for CSV output files.
         log_interval: Step interval for per-step metric logging.
-        enable_tensorboard: Whether to enable TensorBoard logging (if available).
     """
 
     def __init__(
         self,
         checkpoint_dir: str = "deepqnetwork/checkpoints/",
         log_interval: int = 10,
-        enable_tensorboard: bool = True,
     ) -> None:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -60,7 +58,7 @@ class MetricsLogger:
 
         # TensorBoard writer (optional)
         self._tb_writer: SummaryWriter | None = None
-        if enable_tensorboard and TENSORBOARD_AVAILABLE:
+        if TENSORBOARD_AVAILABLE:
             tb_log_dir = self.checkpoint_dir / "tensorboard"
             try:
                 self._tb_writer = SummaryWriter(log_dir=str(tb_log_dir))
@@ -68,7 +66,7 @@ class MetricsLogger:
             except Exception as e:
                 logger.warning("Failed to initialize TensorBoard: %s", e)
                 self._tb_writer = None
-        elif enable_tensorboard and not TENSORBOARD_AVAILABLE:
+        else:
             logger.info(
                 "TensorBoard not available (torch.utils.tensorboard not installed). "
                 "Skipping TensorBoard logging."

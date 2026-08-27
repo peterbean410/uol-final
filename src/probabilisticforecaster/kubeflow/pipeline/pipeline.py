@@ -30,12 +30,8 @@ from probabilisticforecaster.kubeflow.pipeline.config_schema import PipelineConf
 # node that does NOT host the gemma LLM predictors (those live on spark-4214).
 # Requires the multi-arch (arm64) forecaster images from
 # forecaster-images-build.yml. Mirrors deepqnetwork's dqn_pipeline so all
-# training/backtesting workloads co-locate on one node. Disable with
-# FORECASTER_SPARK_NODE=false; override the host with
+# training/backtesting workloads co-locate on one node. Override the host with
 # FORECASTER_SPARK_NODE_HOSTNAME.
-SPARK_NODE_ENABLED: bool = os.getenv(
-    "FORECASTER_SPARK_NODE", "true"
-).strip().lower() in ("true", "1", "yes", "on")
 SPARK_NODE_HOSTNAME: str = os.getenv(
     "FORECASTER_SPARK_NODE_HOSTNAME", "spark-5790"
 ).strip()
@@ -48,7 +44,7 @@ SPARK_TAINTS = (
 
 def _pin_to_spark(task) -> None:
     """Pin a task onto the designated spark node (tolerations + hostname)."""
-    if not (SPARK_NODE_ENABLED and SPARK_NODE_HOSTNAME):
+    if not SPARK_NODE_HOSTNAME:
         return
     for key, value in SPARK_TAINTS:
         kubernetes.add_toleration(
@@ -287,10 +283,8 @@ def resolve_config(
         data_start: str = "2012-01-01"
         train_pct: float = 0.75
         test_pct: float = 0.25
-        gpu_enabled: bool = True
         num_workers: int = 1
         max_wall_time_hours: int = 8
-        katib_enabled: bool = False
         katib_max_trials: int = 30
         katib_parallel_trials: int = 5
         katib_trial_timeout_hours: int = 2
@@ -327,7 +321,6 @@ def resolve_config(
         }
         for k, v in katib_overrides.items():
             setattr(cfg, k, v)
-        cfg.katib_enabled = True
 
     # Apply training mode adjustments
     if training_mode == "finetune":

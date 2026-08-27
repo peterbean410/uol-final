@@ -94,21 +94,6 @@ def test_client_order_ids_are_unique_and_symbol_prefixed():
     assert all(order_id.startswith("USDJPY-") for order_id in order_ids)
 
 
-def test_dry_run_never_calls_step():
-    env = FakeEnvClient()
-
-    steps = run_live_executor(
-        fast_config(dry_run=True),
-        env_client=env,
-        predict_fn=lambda symbol: {"action": 2, "action_name": "BUY_2"},
-        max_steps=3,
-    )
-
-    assert steps == 3
-    assert len(env.reset_calls) == 1
-    assert env.step_calls == []
-
-
 def test_aborts_after_max_consecutive_errors():
     env = FakeEnvClient(step_failures=3)
 
@@ -193,7 +178,6 @@ def test_config_from_env(monkeypatch):
     assert config.model_name == "dqnpf-eurusd"
     assert config.grpc_address == "modelenv:50051"
     assert config.step_interval_seconds == 120.0
-    assert config.dry_run is True
     assert config.max_consecutive_errors == 5
 
 

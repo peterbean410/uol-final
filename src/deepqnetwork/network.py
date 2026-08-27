@@ -1,7 +1,7 @@
 """Q-Network architecture for the DQN trading agent.
 
-Supports both standard and dueling architectures with configurable
-hidden dimensions, activation functions, layer normalisation, and dropout.
+A feed-forward stack with layer normalisation, a configurable activation and
+optional dropout, ending in a single Q-value output layer.
 """
 
 from __future__ import annotations
@@ -41,19 +41,10 @@ def _get_activation(name: str) -> nn.Module:
 class QNetwork(nn.Module):
     """Q-Network that maps state vectors to action Q-values.
 
-    Supports standard feedforward and dueling architectures.
-
-    Architecture (standard):
+    Architecture:
         Input(state_dim)
           → Linear → LayerNorm → Activation → Dropout  (per hidden layer)
           → Linear(hidden_dims[-1], action_dim)  [no activation]
-
-    Architecture (dueling):
-        Input(state_dim)
-          → [shared hidden layers, excluding final output]
-          → Value stream:  Linear(hidden_dims[-1], 1)
-          → Advantage stream: Linear(hidden_dims[-1], action_dim)
-          → Q = V + (A - mean(A))
     """
 
     def __init__(
@@ -62,9 +53,7 @@ class QNetwork(nn.Module):
         action_dim: int = 5,
         hidden_dims: list[int] | None = None,
         activation: str = "relu",
-        layer_norm: bool = True,
         dropout: float = 0.0,
-        dueling: bool = False,
     ) -> None:
         """Initialise the Q-Network.
 
@@ -73,9 +62,7 @@ class QNetwork(nn.Module):
             action_dim: Number of discrete actions (default: 5).
             hidden_dims: List of hidden layer sizes (default: [256, 256, 128]).
             activation: Activation function name ("relu", "leaky_relu", "gelu").
-            layer_norm: Whether to apply layer normalisation after each hidden layer.
             dropout: Dropout rate after each activation (0.0 disables dropout).
-            dueling: Whether to use dueling architecture.
         """
         super().__init__()
 
@@ -85,15 +72,13 @@ class QNetwork(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.hidden_dims = hidden_dims
-        self.dueling = dueling
 
         # Build shared hidden layers
         layers: list[nn.Module] = []
         in_dim = state_dim
         for h_dim in hidden_dims:
             layers.append(nn.Linear(in_dim, h_dim))
-            if layer_norm:
-                layers.append(nn.LayerNorm(h_dim))
+            layers.append(nn.LayerNorm(h_dim))
             layers.append(_get_activation(activation))
             if dropout > 0.0:
                 layers.append(nn.Dropout(p=dropout))
@@ -101,17 +86,8 @@ class QNetwork(nn.Module):
 
         self.shared_layers = nn.Sequential(*layers)
 
-        if dueling:
-            # Value stream: outputs scalar V(s)
-            self.value_stream = nn.Linear(hidden_dims[-1], 1)
-            # Advantage stream: outputs A(s, a) for each action
-            self.advantage_stream = nn.Linear(hidden_dims[-1], action_dim)
-            self._init_output_layer(self.value_stream)
-            self._init_output_layer(self.advantage_stream)
-        else:
-            # Standard output layer
-            self.output_layer = nn.Linear(hidden_dims[-1], action_dim)
-            self._init_output_layer(self.output_layer)
+        self.output_layer = nn.Linear(hidden_dims[-1], action_dim)
+        self._init_output_layer(self.output_layer)
 
         # Initialise hidden layers
         self._init_hidden_layers()
@@ -140,14 +116,4 @@ class QNetwork(nn.Module):
         Returns:
             Q-values tensor of shape (batch_size, action_dim).
         """
-        features = self.shared_layers(state)
-
-        if self.dueling:
-            value = self.value_stream(features)  # (batch_size, 1)
-            advantage = self.advantage_stream(features)  # (batch_size, action_dim)
-            # Q = V + (A - mean(A))
-            q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
-        else:
-            q_values = self.output_layer(features)
-
-        return q_values
+        return self.output_layer(self.shared_layers(state))

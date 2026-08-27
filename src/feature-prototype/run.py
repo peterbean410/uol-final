@@ -71,11 +71,8 @@ def _make_config(*, gate_enabled: bool, directional: bool) -> IntegrationConfig:
         variance_threshold=VARIANCE_THRESHOLD,
         max_risk_long_units=2,
         max_risk_short_units=1,
-        directional_disagreement=directional,
-        directional_tolerance=DIRECTIONAL_TOLERANCE,
         forecaster_risk_aversion=0.1,
         forecaster_position_size=100_000.0,  # match VOLUME_PER_UNIT for comparability
-        screen_profit_gate_enabled=gate_enabled,
         screen_profit_window_sessions=3,
         pip_size=data_mod.PIP_SIZE,
     )
@@ -88,10 +85,8 @@ def _summarise(arm) -> dict:
         "gate_enabled": arm.gate_enabled,
         "combined_sharpe_pnl": round(c.combined_sharpe_pnl, 4),
         "baseline_sharpe_pnl": round(c.baseline_sharpe_pnl, 4),
-        "forecaster_sharpe_pnl": round(c.forecaster_sharpe_pnl, 4),
         "combined_pnl_pips": round(c.combined_pnl_pips, 1),
         "baseline_pnl_pips": round(c.baseline_pnl_pips, 1),
-        "forecaster_pnl_pips": round(c.forecaster_pnl_pips, 1),
         "suppression_rate": round(c.suppression_rate, 4),
         "suppression_by_reason": c.suppression_by_reason,
         "high_sigma_time_fraction": round(c.high_sigma_time_fraction, 4),
@@ -138,7 +133,6 @@ def fig_equity(results: dict, pip_size, path):
     for ax, (label, arm) in zip(axes, results.items()):
         ax.plot(_cum_pips(arm.baseline, pip_size), label="DQN-only", color="#1f77b4", lw=1.1)
         ax.plot(_cum_pips(arm.combined, pip_size), label="combined (DQN->screen)", color="#d62728", lw=1.1)
-        ax.plot(_cum_pips(arm.forecaster, pip_size), label="forecaster-only", color="#2ca02c", lw=1.0, alpha=0.8)
         ax.axhline(0, color="#999", lw=0.6)
         verdict = "PASS" if arm.report.passed else "FAIL"
         ax.set_title(f"{label}\nReq-14 gate: {verdict}", fontsize=9)
@@ -226,7 +220,6 @@ def main() -> None:
     ap.add_argument("--episodes", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--synthetic-bars", type=int, default=6000)
-    ap.add_argument("--no-network", action="store_true")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -240,7 +233,6 @@ def main() -> None:
         cache_path=_PROTO_DIR / "cache" / "usdjpy_m5.parquet",
         synthetic_bars=args.synthetic_bars,
         seed=7,
-        allow_network=not args.no_network,
     )
     close = price.frame["close"].to_numpy()
     ts_ns = price.frame["timestamp_ns"].to_numpy()
@@ -317,7 +309,6 @@ def main() -> None:
             "span": price.span,
             "seed": args.seed,
             "variance_threshold": VARIANCE_THRESHOLD,
-            "directional_tolerance": DIRECTIONAL_TOLERANCE,
             "policy": policy_info,
             "evaluation_tests": eval_tests,
         },

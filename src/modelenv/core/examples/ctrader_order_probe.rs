@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let access_token = std::env::var("CTRADER_ACCESS_TOKEN")?;
     let timeout = Duration::from_secs(20);
 
-    let (r, w) = Transport::connect_env(false).await?.into_split();
+    let (r, w) = Transport::connect_env().await?.into_split();
     let (conn, mut events) = Connection::start(r, w);
     auth::app_authenticate(&conn, &client_id, &client_secret, timeout).await?;
     let accounts = data::get_account_list(&conn, &access_token, timeout).await?;

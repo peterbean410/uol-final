@@ -16,7 +16,6 @@ Config (never hard-coded), read from environment or a sibling ``.env`` file:
 
 Run:
     python telegram_advisor_bot.py            # start the polling bot
-    python telegram_advisor_bot.py --dry-run  # print one advice to stdout (no Telegram)
     python telegram_advisor_bot.py --check     # verify the token (getMe) and exit
 """
 
@@ -124,9 +123,6 @@ def compute_advice() -> Advice:
     cfg = IntegrationConfig(
         symbol="USDJPY",
         variance_threshold=VARIANCE_THRESHOLD,
-        directional_disagreement=True,
-        directional_tolerance=DIRECTIONAL_TOLERANCE,
-        screen_profit_gate_enabled=True,
         screen_profit_window_sessions=3,
         pip_size=data_mod.PIP_SIZE,
     )
@@ -373,13 +369,8 @@ def _allowed_from_env() -> set[int]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dry-run", action="store_true", help="print one advice and exit (no Telegram)")
     ap.add_argument("--check", action="store_true", help="verify the bot token (getMe) and exit")
     args = ap.parse_args()
-
-    if args.dry_run:
-        print(format_advice(compute_advice()))
-        return
 
     _load_dotenv()
     import os

@@ -181,7 +181,6 @@ pub struct Environment {
     // ask=high, or price gaps) producing an oversized single-step mark; it
     // does NOT reshape normal signal. <= 0 disables the clamp.
     reward_clip: f64,
-    disable_hedging: bool,
     // Leverage ratio for margin calculation: max_total_margin = total_notional / leverage.
     leverage: f64,
     // Track previous step's total equity for delta_V_t calculation
@@ -278,7 +277,6 @@ impl Environment {
             reward_holding_penalty: 1e-6, // Default holding penalty (orders of magnitude smaller)
             reward_scale: 0.01, // 1 pip = 0.01 price units for USDJPY; tune for other CCYs
             reward_clip: 150.0, // Artifact rail; bounds a 1-yen (100-pip) step at λ=0.5
-            disable_hedging: true,
             leverage: 200.0,
             prev_total_equity: None,
             last_raw_pnl_delta: 0.0,
@@ -387,11 +385,6 @@ impl Environment {
         vol_high: f64,
     ) -> Self {
         self.regime_reward_stats = RegimeRewardStats::new(vol_low, vol_high);
-        self
-    }
-
-    pub fn with_disable_hedging(mut self, disable_hedging: bool) -> Self {
-        self.disable_hedging = disable_hedging;
         self
     }
 
@@ -1021,9 +1014,9 @@ impl Environment {
                 );
 
                 // Replace internal positions with broker state, split to
-                // 1-unit chunks when hedging is disabled so reduce_side can
-                // net individual units (matching training-mode behaviour).
-                if self.disable_hedging {
+                // 1-unit chunks so reduce_side can net individual units
+                // (matching training-mode behaviour).
+                {
                     let mut split = Vec::new();
                     for bp in &broker_positions {
                         let side = match bp.side {
@@ -1043,11 +1036,6 @@ impl Environment {
                         }
                     }
                     self.positions = split;
-                } else {
-                    self.positions = broker_positions
-                        .iter()
-                        .map(Position::from_proto)
-                        .collect();
                 }
 
                 // Update unrealised P/L based on current broker price
@@ -1423,20 +1411,20 @@ impl Environment {
     /// opposite-side positions by `volume`, then open any remainder on the
     /// desired side.  Reducing sells uses FIFO (oldest first); reducing
     /// buys uses LIFO (newest first).
+    /// Open `volume` on `side`, netting against the opposite side first.
+    /// Hedging is not supported: an opposing order reduces existing exposure
+    /// (buys close sells FIFO, sells close buys LIFO) and only the remainder
+    /// opens a new position.
     fn net_open(&mut self, volume: f64, side: Side) -> Result<()> {
-        if self.disable_hedging {
-            let opposite = match side {
-                Side::Buy => Side::Sell,
-                Side::Sell => Side::Buy,
-            };
-            // Buy action → FIFO on existing sells; Sell action → LIFO on existing buys.
-            let newest_first = matches!(side, Side::Sell);
-            let remaining = self.reduce_side(opposite, volume, newest_first)?;
-            if remaining > 0.0 {
-                self.open_position(remaining, side)?;
-            }
-        } else {
-            self.open_position(volume, side)?;
+        let opposite = match side {
+            Side::Buy => Side::Sell,
+            Side::Sell => Side::Buy,
+        };
+        // Buy action → FIFO on existing sells; Sell action → LIFO on existing buys.
+        let newest_first = matches!(side, Side::Sell);
+        let remaining = self.reduce_side(opposite, volume, newest_first)?;
+        if remaining > 0.0 {
+            self.open_position(remaining, side)?;
         }
         Ok(())
     }
@@ -2907,7 +2895,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disable_hedging_nets_out_equal_volume_fully() {
+    async fn test_netting_nets_out_equal_volume_fully() {
         let m1_bars = (0..10)
             .map(|i| Bar {
                 timestamp_ns: i * 60_000_000_000,
@@ -2930,8 +2918,7 @@ mod tests {
             Mode::Training,
             "USDJPY".to_string(),
             "s3://unused".to_string(),
-        )
-        .with_disable_hedging(true);
+        );
         environment.step_size_ns = 60_000_000_000;
         environment.episode = Some(episode);
 
@@ -2959,7 +2946,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disable_hedging_partially_reduces_larger_position() {
+    async fn test_netting_partially_reduces_larger_position() {
         let m1_bars = (0..10)
             .map(|i| Bar {
                 timestamp_ns: i * 60_000_000_000,
@@ -2982,8 +2969,7 @@ mod tests {
             Mode::Training,
             "USDJPY".to_string(),
             "s3://unused".to_string(),
-        )
-        .with_disable_hedging(true);
+        );
         environment.step_size_ns = 60_000_000_000;
         environment.episode = Some(episode);
 
@@ -3013,7 +2999,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disable_hedging_excess_opens_remainder() {
+    async fn test_netting_excess_opens_remainder() {
         let m1_bars = (0..10)
             .map(|i| Bar {
                 timestamp_ns: i * 60_000_000_000,
@@ -3036,8 +3022,7 @@ mod tests {
             Mode::Training,
             "USDJPY".to_string(),
             "s3://unused".to_string(),
-        )
-        .with_disable_hedging(true);
+        );
         environment.step_size_ns = 60_000_000_000;
         environment.episode = Some(episode);
 
@@ -3065,56 +3050,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hedging_enabled_allows_both_sides() {
-        let m1_bars = (0..10)
-            .map(|i| Bar {
-                timestamp_ns: i * 60_000_000_000,
-                open: 100.0 + i as f64,
-                high: 101.0 + i as f64,
-                low: 99.0 + i as f64,
-                close: 100.5 + i as f64,
-                volume: 1000.0,
-            })
-            .collect::<Vec<_>>();
-
-        let episode = Episode::new(
-            "USDJPY".to_string(),
-            [("M1".to_string(), m1_bars)].into_iter().collect(),
-            0,
-            600_000_000_000,
-        );
-
-        let mut environment = Environment::new(
-            Mode::Training,
-            "USDJPY".to_string(),
-            "s3://unused".to_string(),
-        )
-        .with_disable_hedging(false);
-        environment.step_size_ns = 60_000_000_000;
-        environment.episode = Some(episode);
-
-        environment
-            .step(Action {
-                action: ActionType::ActionBuy1 as i32,
-                client_order_id: "buy-1".to_string(),
-            })
-            .await
-            .unwrap();
-
-        environment
-            .step(Action {
-                action: ActionType::ActionSell1 as i32,
-                client_order_id: "sell-1".to_string(),
-            })
-            .await
-            .unwrap();
-
-        // Both positions coexist (hedging allowed)
-        assert_eq!(environment.positions.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_disable_hedging_fifo_sells_lifo_buys() {
+    async fn test_netting_fifo_sells_lifo_buys() {
         // Buy action reduces sells FIFO (oldest sell first).
         // Sell action reduces buys LIFO (newest buy first).
         let m1_bars = (0..10)
@@ -3143,8 +3079,7 @@ mod tests {
                 Mode::Training,
                 "USDJPY".to_string(),
                 "s3://unused".to_string(),
-            )
-            .with_disable_hedging(true);
+            );
             env.step_size_ns = 60_000_000_000;
             env.episode = Some(episode);
 
@@ -3189,8 +3124,7 @@ mod tests {
                 Mode::Training,
                 "USDJPY".to_string(),
                 "s3://unused".to_string(),
-            )
-            .with_disable_hedging(true);
+            );
             env.step_size_ns = 60_000_000_000;
             env.episode = Some(episode);
 

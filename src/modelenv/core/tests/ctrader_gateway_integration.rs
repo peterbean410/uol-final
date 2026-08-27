@@ -16,8 +16,7 @@ fn create_mock_ctrader_gateway(
         Some("refresh-token".to_string()),
         Some("account".to_string()),
         "USDJPY",
-        false, // demo endpoint
-        0.01,  // lots per unit
+        0.01, // lots per unit
     )?;
 
     Ok(Arc::from(gateway))

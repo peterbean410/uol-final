@@ -31,12 +31,11 @@ pub async fn create_broker_gateway(
     ctrader_refresh_token: Option<&str>,
     ctrader_account: Option<&str>,
     symbol: &str,
-    ctrader_live: bool,
     ctrader_lot_size_per_unit: f64,
 ) -> Result<Arc<dyn BrokerGateway + Send + Sync>> {
     info!(
-        "Creating broker gateway: type={}, symbol={}, live={}, lot/unit={}",
-        broker_gateway, symbol, ctrader_live, ctrader_lot_size_per_unit
+        "Creating broker gateway: type={}, symbol={}, lot/unit={} (demo endpoint)",
+        broker_gateway, symbol, ctrader_lot_size_per_unit
     );
 
     match broker_gateway.to_lowercase().as_str() {
@@ -55,7 +54,6 @@ pub async fn create_broker_gateway(
                 refresh_token,
                 account,
                 symbol,
-                ctrader_live,
                 ctrader_lot_size_per_unit,
             )?;
             info!("cTrader broker gateway created for symbol {}", symbol);
@@ -124,7 +122,6 @@ pub async fn try_create_broker_gateway(
     ctrader_refresh_token: Option<&str>,
     ctrader_account: Option<&str>,
     symbol: &str,
-    ctrader_live: bool,
     ctrader_lot_size_per_unit: f64,
 ) -> Result<Option<Arc<dyn BrokerGateway + Send + Sync>>> {
     match broker_gateway {
@@ -138,7 +135,6 @@ pub async fn try_create_broker_gateway(
                 ctrader_refresh_token,
                 ctrader_account,
                 symbol,
-                ctrader_live,
                 ctrader_lot_size_per_unit,
             )
             .await?;
@@ -172,7 +168,6 @@ mod tests {
             Some("refresh-token"),
             Some("account"),
             "USDJPY",
-            false,
             0.01,
         )
         .await
@@ -192,7 +187,6 @@ mod tests {
             None,
             None,
             "USDJPY",
-            false,
             0.01,
         )
         .await;

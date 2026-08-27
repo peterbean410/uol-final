@@ -22,8 +22,6 @@ def test_defaults_match_spec() -> None:
     assert cfg.variance_threshold == 4.5
     assert cfg.max_risk_long_units == 2
     assert cfg.max_risk_short_units == 1
-    assert cfg.directional_disagreement is False
-    assert cfg.directional_tolerance == 1.0
     assert cfg.forecast_horizon == 1
     assert cfg.min_bars_warmup == 1440
     assert cfg.step_size_seconds == 60
@@ -49,10 +47,6 @@ def test_negative_max_risk_short_raises() -> None:
         IntegrationConfig(max_risk_short_units=-1)
 
 
-def test_negative_directional_tolerance_raises() -> None:
-    with pytest.raises(ValueError, match="directional_tolerance"):
-        IntegrationConfig(directional_tolerance=-0.5)
-
 
 @pytest.mark.parametrize("invalid_horizon", [0, 2, 4, 5, 7, 13, -1])
 def test_invalid_forecast_horizon_raises(invalid_horizon: int) -> None:
@@ -77,8 +71,6 @@ def test_yaml_round_trip_preserves_fields(tmp_path: Path) -> None:
         variance_threshold=3.1,
         max_risk_long_units=4,
         max_risk_short_units=2,
-        directional_disagreement=True,
-        directional_tolerance=0.5,
         forecast_horizon=3,
         min_bars_warmup=2000,
         step_size_seconds=60,

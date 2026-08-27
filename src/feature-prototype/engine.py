@@ -53,7 +53,6 @@ class ArmResults:
     gate_enabled: bool
     combined: list[StepRecord]
     baseline: list[StepRecord]
-    forecaster: list[StepRecord]
     gate_active_series: list[tuple[int, bool]]  # (timestamp_ns, gate_active) per combined step
     comparison: BacktestComparison
     report: ThresholdReport
@@ -114,36 +113,6 @@ def _run_policy_arm(env, policy, mu_bps, sigma_bps, ts_ns, close, config, integr
     return records, gate_series
 
 
-def _run_forecaster_arm(mu_bps, sigma_bps, ts_ns, close, warmup, config):
-    """Forecaster-only arm: the paper's mean-variance position, one-bar forward mark."""
-    records: list[StepRecord] = []
-    n = len(close)
-    for t in range(warmup, n - 1):
-        mu = float(mu_bps[t])
-        sigma = float(sigma_bps[t])
-        pos = forecaster_position(
-            mu, sigma, risk_aversion=config.forecaster_risk_aversion
-        )
-        fwd = (close[t + 1] - close[t]) / close[t]
-        pnl = pos * config.forecaster_position_size * fwd
-        action = _BUY_1 if pos > 0 else _SELL_1 if pos < 0 else _HOLD
-        records.append(
-            StepRecord(
-                timestamp_ns=int(ts_ns[t]),
-                dqn_action=action,
-                final_action=action,
-                reason="forecaster",
-                mu=mu,
-                sigma=sigma,
-                reward=float(pnl),
-                high_sigma=bool(sigma > config.variance_threshold),
-                raw_pnl_delta=float(pnl),
-                max_total_margin=abs(pos) * config.forecaster_position_size,
-            )
-        )
-    return records
-
-
 def run_arms(
     *,
     env_factory,
@@ -173,25 +142,17 @@ def run_arms(
     baseline, _ = _run_policy_arm(
         env_factory(), policy, signals.mu_bps, signals.sigma_bps, ts_ns, close, config, None
     )
-    warmup = env_factory().warmup
-    forecaster = _run_forecaster_arm(
-        signals.mu_bps, signals.sigma_bps, ts_ns, close, warmup, config
-    )
-
     comparison = compare_results(
         combined,
         baseline,
-        forecaster=forecaster,
         pip_size=config.pip_size,
-        directional_tolerance=config.directional_tolerance,
     )
     report = validate_thresholds(comparison)
     return ArmResults(
         regime=signals.regime,
-        gate_enabled=config.screen_profit_gate_enabled,
+        gate_enabled=True,
         combined=combined,
         baseline=baseline,
-        forecaster=forecaster,
         gate_active_series=gate_series,
         comparison=comparison,
         report=report,

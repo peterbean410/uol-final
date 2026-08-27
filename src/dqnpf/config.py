@@ -24,9 +24,7 @@ class IntegrationConfig:
             during high-sigma regimes. Default 2.
         max_risk_short_units: Hard cap on cumulative short exposure opened
             during high-sigma regimes. Default 1.
-        directional_disagreement: Whether sign conflict with forecaster
             suppresses the DQN action. Default False.
-        directional_tolerance: abs(mu) below which directional check is
             skipped, in bps. Default 1.0.
         forecast_horizon: Forecaster horizon in 5-min bars. Default 1.
         min_bars_warmup: M5 bars required before forecaster is valid.
@@ -58,7 +56,6 @@ class IntegrationConfig:
         pip_size: Price increment of one pip for ``symbol``, used to convert
             the environment's raw monetary PnL into pips for reporting.
             Default 0.01 (USDJPY and other JPY quote pairs).
-        screen_profit_gate_enabled: When True (default), the PF screen only
             stays ACTIVE while it has been profitable (net money-saving) over the
             trailing ``screen_profit_window_sessions`` sessions; otherwise the
             screen is bypassed and the DQN trades unscreened. The screen's value
@@ -78,8 +75,6 @@ class IntegrationConfig:
     variance_threshold: float = 4.5
     max_risk_long_units: int = 2
     max_risk_short_units: int = 1
-    directional_disagreement: bool = False
-    directional_tolerance: float = 1.0
     # Risk-aversion coefficient gamma for the forecaster-only backtest baseline's
     # mean-variance position sizing pi* = mu / (sigma^2 * gamma) (Qian eq 3.1.7),
     # in the bps unit convention (mu, sigma are scaled by BPS_PER_UNIT). Must be
@@ -107,7 +102,6 @@ class IntegrationConfig:
     hour_of_day_end: int | None = None
     seed: int = 0
     pip_size: float = 0.01
-    screen_profit_gate_enabled: bool = True
     screen_profit_window_sessions: int = 7
 
     def __post_init__(self) -> None:
@@ -119,8 +113,6 @@ class IntegrationConfig:
             raise ValueError("max_risk_long_units must be non-negative")
         if self.max_risk_short_units < 0:
             raise ValueError("max_risk_short_units must be non-negative")
-        if self.directional_tolerance < 0:
-            raise ValueError("directional_tolerance must be non-negative")
         if self.forecaster_risk_aversion <= 0:
             raise ValueError("forecaster_risk_aversion must be positive")
         if self.forecaster_position_size <= 0:
@@ -200,18 +192,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
-        "--directional-disagreement",
-        dest="directional_disagreement",
-        type=_str2bool,
-        default=None,
-    )
-    parser.add_argument(
-        "--directional-tolerance",
-        dest="directional_tolerance",
-        type=float,
-        default=None,
-    )
-    parser.add_argument(
         "--forecaster-risk-aversion",
         dest="forecaster_risk_aversion",
         type=float,
@@ -273,12 +253,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--pip-size", dest="pip_size", type=float, default=None)
-    parser.add_argument(
-        "--screen-profit-gate-enabled",
-        dest="screen_profit_gate_enabled",
-        type=_str2bool,
-        default=None,
-    )
     parser.add_argument(
         "--screen-profit-window-sessions",
         dest="screen_profit_window_sessions",

@@ -21,11 +21,10 @@ async fn main() -> anyhow::Result<()> {
     let client_id = std::env::var("CTRADER_APP_CLIENT_ID")?;
     let client_secret = std::env::var("CTRADER_APP_CLIENT_SECRET")?;
     let access_token = std::env::var("CTRADER_ACCESS_TOKEN")?;
-    let live = std::env::var("CTRADER_LIVE").ok().as_deref() == Some("true");
     let timeout = Duration::from_secs(15);
 
-    eprintln!("[discover] connecting to cTrader {} ...", if live { "LIVE" } else { "demo" });
-    let transport = Transport::connect_env(live).await?;
+    eprintln!("[discover] connecting to cTrader demo ...");
+    let transport = Transport::connect_env().await?;
     eprintln!("[discover] TLS connected: {}", transport.endpoint());
 
     let (r, w) = transport.into_split();

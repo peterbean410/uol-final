@@ -251,10 +251,6 @@ def integration_config(draw):
         ),
         max_risk_long_units=draw(st.integers(min_value=1, max_value=5)),
         max_risk_short_units=draw(st.integers(min_value=1, max_value=5)),
-        directional_disagreement=draw(st.booleans()),
-        directional_tolerance=draw(
-            st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False)
-        ),
         forecast_horizon=draw(st.sampled_from([1, 3, 6, 12])),
         step_size_seconds=draw(st.sampled_from([60, 300])),
     )

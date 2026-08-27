@@ -154,8 +154,6 @@ def _build_predictor(
             variance_threshold=variance_threshold,
             max_risk_long_units=max_risk_long_units,
             max_risk_short_units=max_risk_short_units,
-            directional_disagreement=False,
-            directional_tolerance=1.0,
             forecast_horizon=1,
             min_bars_warmup=1440,
             step_size_seconds=60,

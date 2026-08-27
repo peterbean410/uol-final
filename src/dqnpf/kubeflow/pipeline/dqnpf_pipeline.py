@@ -28,15 +28,8 @@ COMPONENT_IMAGE = f"{ECR_BASE}/dqnpf-intraday-backtest:latest"
 # predictors (those live on spark-4214). Requires the multi-arch (arm64)
 # dqnpf-intraday-backtest image from images-chain.yml. Mirrors
 # deepqnetwork/kubeflow/pipeline/dqn_pipeline.py so DQN training/backtest and
-# this screening backtest co-locate and share warm dqn/base layers. Disable
-# with DQNPF_SPARK_NODE=false; override the host with
-# DQNPF_SPARK_NODE_HOSTNAME.
-SPARK_NODE_ENABLED: bool = os.getenv("DQNPF_SPARK_NODE", "true").strip().lower() in (
-    "true",
-    "1",
-    "yes",
-    "on",
-)
+# this screening backtest co-locate and share warm dqn/base layers. Override
+# the host with DQNPF_SPARK_NODE_HOSTNAME.
 SPARK_NODE_HOSTNAME: str = os.getenv(
     "DQNPF_SPARK_NODE_HOSTNAME", "spark-5790"
 ).strip()
@@ -49,7 +42,7 @@ SPARK_TAINTS = (
 
 def _pin_to_spark(task) -> None:
     """Pin a task onto the designated spark node (tolerations + hostname)."""
-    if not (SPARK_NODE_ENABLED and SPARK_NODE_HOSTNAME):
+    if not SPARK_NODE_HOSTNAME:
         return
     for key, value in SPARK_TAINTS:
         kubernetes.add_toleration(
@@ -98,10 +91,9 @@ def dqnpf_backtest(
     trade_log: Output[Dataset],
     # Strings (not floats) so they pass straight into the container args; the
     # __main__ CLI parses them with argparse type=float. "0.0" = use modelenv's
-    # built-in default table. no_swap defaults "false": backtests apply the
+    # built-in default table: backtests apply the
     # built-in financing table so PnL matches the swap regime the DQN trained
     # under; pass "true" for a swap-free comparison run.
-    no_swap: str = "false",
     swap_rate_long: str = "0.0",
     swap_rate_short: str = "0.0",
 ):
@@ -129,8 +121,6 @@ def dqnpf_backtest(
             backtest_report.uri,
             "--trade-log-output-path",
             trade_log.uri,
-            "--no-swap",
-            no_swap,
             "--swap-rate-long",
             swap_rate_long,
             "--swap-rate-short",
@@ -151,7 +141,6 @@ def dqnpf_intraday_pipeline(
     ),
     dqn_model_registry_name: str = "deepqnetwork-usdjpy",
     forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1",
-    no_swap: str = "false",
     swap_rate_long: str = "0.0",
     swap_rate_short: str = "0.0",
 ):
@@ -165,7 +154,6 @@ def dqnpf_intraday_pipeline(
         integration_config_yaml=integration_config_yaml,
         dqn_model_registry_name=dqn_model_registry_name,
         forecaster_model_registry_name=forecaster_model_registry_name,
-        no_swap=no_swap,
         swap_rate_long=swap_rate_long,
         swap_rate_short=swap_rate_short,
     )

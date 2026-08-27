@@ -35,8 +35,6 @@ _valid_config = st.builds(
     variance_threshold=st.floats(min_value=0.0, max_value=50.0, allow_nan=False),
     max_risk_long_units=st.integers(min_value=0, max_value=10),
     max_risk_short_units=st.integers(min_value=0, max_value=10),
-    directional_disagreement=st.booleans(),
-    directional_tolerance=st.floats(min_value=0.0, max_value=20.0, allow_nan=False),
     forecast_horizon=st.sampled_from([1, 3, 6, 12]),
     min_bars_warmup=st.integers(min_value=36, max_value=5000),
     step_size_seconds=st.sampled_from([5, 30, 60, 300]),
@@ -173,7 +171,6 @@ def test_non_positive_wall_time_surfaces_error(hours: int) -> None:
     [
         ("max_risk_long_units", -1, "max_risk_long_units"),
         ("max_risk_short_units", -1, "max_risk_short_units"),
-        ("directional_tolerance", -0.5, "directional_tolerance"),
         ("dqn_lifecycle_stage", "deployed", "dqn_lifecycle_stage"),
         ("forecaster_lifecycle_stage", "deployed", "forecaster_lifecycle_stage"),
     ],

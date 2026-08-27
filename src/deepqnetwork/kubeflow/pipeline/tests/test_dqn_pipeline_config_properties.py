@@ -68,11 +68,9 @@ def valid_dqn_pipeline_configs(draw):
             st.lists(st.integers(min_value=1, max_value=512), min_size=1, max_size=5)
         ),
         activation=draw(st.sampled_from(VALID_ACTIVATIONS)),
-        layer_norm=draw(st.booleans()),
         dropout=draw(
             st.floats(min_value=0.0, max_value=0.99, allow_nan=False, allow_infinity=False)
         ),
-        dueling=draw(st.booleans()),
         learning_rate=draw(
             st.floats(min_value=1e-6, max_value=0.01, allow_nan=False, allow_infinity=False)
         ),
@@ -93,10 +91,8 @@ def valid_dqn_pipeline_configs(draw):
         num_episodes_per_range=draw(st.integers(min_value=1, max_value=10_000)),
         max_steps_per_episode=draw(st.integers(min_value=1, max_value=100_000)),
         checkpoint_interval=draw(st.integers(min_value=1, max_value=500)),
-        gpu_enabled=draw(st.booleans()),
         num_workers=draw(st.integers(min_value=1, max_value=4)),
-        max_wall_time_hours=draw(st.integers(min_value=1, max_value=48)),
-        katib_enabled=False,  # Keep simple to avoid conditional validation
+        max_wall_time_hours=draw(st.integers(min_value=1, max_value=48)),  # Keep simple to avoid conditional validation
         katib_max_trials=draw(st.integers(min_value=1, max_value=100)),
         katib_parallel_trials=draw(st.integers(min_value=1, max_value=10)),
         katib_trial_timeout_hours=draw(st.integers(min_value=1, max_value=24)),
@@ -334,8 +330,6 @@ class TestCLIArgumentGeneration:
             assert parsed.num_episodes_per_range == config.num_episodes_per_range
 
         # Dueling flag
-        if config.dueling:
-            assert parsed.dueling is True
 
 
 # ---------------------------------------------------------------------------

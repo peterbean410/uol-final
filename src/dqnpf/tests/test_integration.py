@@ -109,36 +109,6 @@ def test_screened_action_fields_on_budget_exhausted() -> None:
     assert result.risk_short_used == 0
 
 
-def test_directional_conflict_at_tolerance_boundary_is_skipped() -> None:
-    # abs(mu) == tolerance → rule is skipped (strict inequality)
-    layer = make_layer(
-        variance_threshold=10.0,
-        directional_disagreement=True,
-        directional_tolerance=1.0,
-    )
-    result = layer.screen(_a(1), mu=-1.0, sigma=0.1)  # LONG with mu < 0
-    assert result.reason == "pass"
-    assert result.action == 1
-
-
-def test_directional_conflict_just_above_tolerance_triggers() -> None:
-    layer = make_layer(
-        variance_threshold=10.0,
-        directional_disagreement=True,
-        directional_tolerance=1.0,
-    )
-    epsilon = math.nextafter(1.0, math.inf) - 1.0
-    result = layer.screen(_a(1), mu=-(1.0 + 1e-6), sigma=0.1)
-    assert result.action == 0
-    assert result.reason == "directional_conflict"
-    # And just above tolerance by one ULP also triggers
-    layer2 = make_layer(
-        variance_threshold=10.0,
-        directional_disagreement=True,
-        directional_tolerance=1.0,
-    )
-    result2 = layer2.screen(_a(1), mu=-(1.0 + epsilon), sigma=0.1)
-    assert result2.reason == "directional_conflict"
 
 
 def test_variance_threshold_at_boundary_is_low_sigma_path() -> None:

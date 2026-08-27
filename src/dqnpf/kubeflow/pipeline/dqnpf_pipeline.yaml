@@ -5,7 +5,6 @@
 #    dqn_model_registry_name: str [Default: 'deepqnetwork-usdjpy']
 #    forecaster_model_registry_name: str [Default: 'probabilistic-transformer-usdjpy-h1']
 #    integration_config_yaml: str [Default: '/etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml']
-#    no_swap: str [Default: 'false']
 #    swap_rate_long: str [Default: '0.0']
 #    swap_rate_short: str [Default: '0.0']
 components:
@@ -18,10 +17,6 @@ components:
         forecaster_model_registry_name:
           parameterType: STRING
         integration_config_yaml:
-          parameterType: STRING
-        no_swap:
-          defaultValue: 'false'
-          isOptional: true
           parameterType: STRING
         swap_rate_long:
           defaultValue: '0.0'
@@ -56,8 +51,6 @@ deploymentSpec:
         - '{{$.outputs.artifacts[''backtest_report''].uri}}'
         - --trade-log-output-path
         - '{{$.outputs.artifacts[''trade_log''].uri}}'
-        - --no-swap
-        - '{{$.inputs.parameters[''no_swap'']}}'
         - --swap-rate-long
         - '{{$.inputs.parameters[''swap_rate_long'']}}'
         - --swap-rate-short
@@ -87,8 +80,6 @@ root:
               componentInputParameter: forecaster_model_registry_name
             integration_config_yaml:
               componentInputParameter: integration_config_yaml
-            no_swap:
-              componentInputParameter: no_swap
             swap_rate_long:
               componentInputParameter: swap_rate_long
             swap_rate_short:
@@ -114,10 +105,6 @@ root:
         defaultValue: /etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml
         isOptional: true
         parameterType: STRING
-      no_swap:
-        defaultValue: 'false'
-        isOptional: true
-        parameterType: STRING
       swap_rate_long:
         defaultValue: '0.0'
         isOptional: true
@@ -134,6 +121,9 @@ platforms:
     deploymentSpec:
       executors:
         exec-dqnpf-backtest:
+          nodeSelector:
+            labels:
+              kubernetes.io/hostname: spark-5790
           pvcMount:
           - constant: modelenv-cache
             mountPath: /tmp/modelenv-cache
@@ -151,3 +141,12 @@ platforms:
             secretNameParameter:
               runtimeValue:
                 constant: mlpipeline-minio-artifact
+          tolerations:
+          - effect: NoExecute
+            key: workload
+            operator: Equal
+            value: ml
+          - effect: NoExecute
+            key: arch
+            operator: Equal
+            value: arm64

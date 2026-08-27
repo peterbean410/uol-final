@@ -402,15 +402,12 @@ class DqnpfIntradayPredictor(kserve.Model):
             # screen counterfactual and re-decide whether the screen stays
             # active; pass the latest M5 close (from the same Reference) so the
             # gate can mark its next-bar counterfactual.
-            screen_price: float | None = None
-            cfg = self._configs[symbol]
-            if cfg.screen_profit_gate_enabled:
-                reference = self._env_client.reference_data(symbol)  # type: ignore[union-attr]
-                sess_ts = int(getattr(reference, "session_start_ts", 0) or 0)
-                if sess_ts and self._session_start_ts.get(symbol) != sess_ts:
-                    layer.begin_session()
-                    self._session_start_ts[symbol] = sess_ts
-                screen_price = _m5_close_from_reference(reference)
+            reference = self._env_client.reference_data(symbol)  # type: ignore[union-attr]
+            sess_ts = int(getattr(reference, "session_start_ts", 0) or 0)
+            if sess_ts and self._session_start_ts.get(symbol) != sess_ts:
+                layer.begin_session()
+                self._session_start_ts[symbol] = sess_ts
+            screen_price = _m5_close_from_reference(reference)
 
             # Screen the action through the integration layer. Pass the latest
             # bar timestamp so the risk budget resets per UTC day in production

@@ -8,7 +8,6 @@
 //! cTrader exposes the trading endpoint on port **5035** (protobuf) for both
 //! demo and live; the host selects the environment:
 //! - demo: `demo.ctraderapi.com`
-//! - live: `live.ctraderapi.com`
 
 use std::sync::Arc;
 
@@ -25,7 +24,6 @@ use super::wire;
 /// cTrader demo trading host (protobuf API).
 pub const DEMO_HOST: &str = "demo.ctraderapi.com";
 /// cTrader live trading host (protobuf API).
-pub const LIVE_HOST: &str = "live.ctraderapi.com";
 /// cTrader protobuf trading port (demo and live).
 pub const PORT: u16 = 5035;
 
@@ -70,10 +68,9 @@ impl Transport {
         })
     }
 
-    /// Connect to the demo or live trading endpoint by environment flag.
-    pub async fn connect_env(live: bool) -> Result<Self> {
-        let host = if live { LIVE_HOST } else { DEMO_HOST };
-        Self::connect(host, PORT).await
+    /// Connect to the demo trading endpoint.
+    pub async fn connect_env() -> Result<Self> {
+        Self::connect(DEMO_HOST, PORT).await
     }
 
     /// Send one framed [`ProtoMessage`].
@@ -116,7 +113,6 @@ mod tests {
     fn endpoint_constants_are_the_protobuf_port() {
         assert_eq!(PORT, 5035);
         assert_eq!(DEMO_HOST, "demo.ctraderapi.com");
-        assert_eq!(LIVE_HOST, "live.ctraderapi.com");
     }
 
     // Building the rustls client config (root store + connector) must not panic;

@@ -24,12 +24,11 @@ def test_running_rms_matches_numpy():
     assert rms.count == 5
 
 
-def _agent(reward_normalize: bool) -> DQNAgent:
+def _agent() -> DQNAgent:
     cfg = DQNConfig(
         batch_size=8,
         replay_buffer_size=1000,
         hidden_dims=[16, 16],
-        reward_normalize=reward_normalize,
     )
     agent = DQNAgent(cfg, torch.device("cpu"), state_dim=53)
     agent._reward_norm_warmup = 8  # tiny warmup so the test reaches it fast
@@ -42,8 +41,8 @@ def _fill(agent: DQNAgent, reward: float, n: int = 64) -> None:
         agent.replay_buffer.push(s, 0, reward, s, False)
 
 
-def test_update_tracks_reward_rms_when_enabled():
-    agent = _agent(reward_normalize=True)
+def test_update_tracks_reward_rms():
+    agent = _agent()
     _fill(agent, reward=5.0)
     for _ in range(3):
         agent.update()
@@ -51,15 +50,3 @@ def test_update_tracks_reward_rms_when_enabled():
     assert agent.reward_rms.count >= 8
     assert abs(agent.reward_rms.rms - 5.0) < 1e-6
 
-
-def test_update_skips_normalisation_when_disabled():
-    agent = _agent(reward_normalize=False)
-    _fill(agent, reward=5.0)
-    for _ in range(3):
-        agent.update()
-    # Tracker is never touched when the flag is off.
-    assert agent.reward_rms.count == 0
-
-
-def test_reward_normalize_default_on():
-    assert DQNConfig().reward_normalize is True

@@ -63,8 +63,6 @@ pub struct BrokerGatewayConfig {
     pub ctrader_refresh_token: Option<String>,
     /// cTrader trader account ID
     pub ctrader_account: Option<String>,
-    /// cTrader endpoint select: false = demo (default), true = live (real money).
-    pub ctrader_live: bool,
     /// cTrader lots submitted per one modelenv position unit (default 0.01).
     pub ctrader_lot_size_per_unit: f64,
 }
@@ -83,7 +81,6 @@ impl Default for BrokerGatewayConfig {
             ctrader_access_token: None,
             ctrader_refresh_token: None,
             ctrader_account: None,
-            ctrader_live: false,
             ctrader_lot_size_per_unit: DEFAULT_CTRADER_LOT_SIZE_PER_UNIT,
         }
     }
@@ -175,8 +172,6 @@ pub struct Config {
     pub reward_holding_penalty: f64,
     /// Symmetric clamp on the final per-step reward (artifact rail; <= 0 = off).
     pub reward_clip: f64,
-    /// When true, close opposite-side positions before opening new ones (no hedging)
-    pub disable_hedging: bool,
     /// Leverage ratio for margin calculation (margin = notional / leverage).
     /// Defaults to 30 (30:1), a common retail forex leverage.
     pub leverage: f64,
@@ -202,11 +197,6 @@ pub struct Config {
     pub swap_rate_long: Option<f64>,
     pub swap_rate_short: Option<f64>,
     /// Explicitly disable overnight swap: force (0.0, 0.0) for the configured
-    /// symbol, overriding both the built-in Training default table and any
-    /// `swap_rate_long`/`swap_rate_short` values. Cleaner and unambiguous vs.
-    /// passing `--swap-rate-* 0` (which reads as "override to zero" but is easy
-    /// to conflate with "unset"). Off (false) by default.
-    pub disable_swap: bool,
     /// Trading-session hours (UTC), matching the episode's hour_start/hour_end.
     /// modelenv liquidates at each session end, in Training/backtest and in
     /// Live: **all short positions and all losing long positions (net of
@@ -219,14 +209,9 @@ pub struct Config {
     /// to denote a session that closes on a later calendar day (e.g. 39 =
     /// 15:00 next day) and is taken modulo 24. On by default: `hour_end`
     /// defaults to 23 (matching the DQNConfig training default); use
-    /// `disable_session_liquidation` to turn liquidation off.
+    /// End-of-session liquidation is always on.
     pub trading_session_hour_start: Option<u32>,
     pub trading_session_hour_end: Option<u32>,
-    /// Explicitly disable end-of-session liquidation, which is otherwise on
-    /// by default (`trading_session_hour_end` defaults to 23). Mirrors
-    /// `disable_swap`: an unambiguous off switch rather than a sentinel value.
-    /// Off (false) by default.
-    pub disable_session_liquidation: bool,
 }
 
 impl Default for Config {
@@ -243,7 +228,6 @@ impl Default for Config {
             reward_action_penalty: 0.001,
             reward_holding_penalty: 1e-6,
             reward_clip: 150.0,
-            disable_hedging: true,
             leverage: 200.0,
             training_date_start: None,
             training_date_end: None,
@@ -252,10 +236,8 @@ impl Default for Config {
             trade_log_path: None,
             swap_rate_long: None,
             swap_rate_short: None,
-            disable_swap: false,
             trading_session_hour_start: None,
             trading_session_hour_end: Some(DEFAULT_TRADING_SESSION_HOUR_END),
-            disable_session_liquidation: false,
         }
     }
 }
@@ -502,14 +484,6 @@ impl Config {
                         return Err(anyhow::anyhow!("--swap-rate-short requires a value"));
                     }
                 }
-                "--no-swap" => {
-                    self.disable_swap = true;
-                    i += 1;
-                }
-                "--no-session-liquidation" => {
-                    self.disable_session_liquidation = true;
-                    i += 1;
-                }
                 "--trading-session-hour-start" => {
                     if i + 1 < args.len() {
                         self.trading_session_hour_start = Some(args[i + 1].parse()?);
@@ -613,15 +587,6 @@ impl Config {
             self.broker_gateway.ctrader_account = Some(ctrader_account);
         }
 
-        // Endpoint select: CTRADER_LIVE=true|1|yes|on|live → live (real money).
-        // Default (unset / anything else) stays demo.
-        if let Some(live) = Self::non_empty_env(env_get, "CTRADER_LIVE") {
-            self.broker_gateway.ctrader_live = matches!(
-                live.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on" | "live"
-            );
-        }
-
         // cTrader lots per modelenv position unit; invalid values keep the default.
         if let Some(lot) = Self::non_empty_env(env_get, "CTRADER_LOT_SIZE_PER_UNIT") {
             match lot.trim().parse::<f64>() {
@@ -686,15 +651,6 @@ impl Config {
             }
         }
 
-        if let Some(disable_hedging_env) =
-            Self::non_empty_env(env_get, "MODELENV_DISABLE_HEDGING")
-        {
-            self.disable_hedging = matches!(
-                disable_hedging_env.to_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            );
-        }
-
         if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRAINING_DATE_START") {
             self.training_date_start = Some(value);
         }
@@ -726,18 +682,6 @@ impl Config {
                 self.swap_rate_short = Some(parsed);
             }
         }
-        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_NO_SWAP") {
-            self.disable_swap = matches!(
-                value.trim().to_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            );
-        }
-        if let Some(value) = Self::non_empty_env(env_get, "MODELENV_NO_SESSION_LIQUIDATION") {
-            self.disable_session_liquidation = matches!(
-                value.trim().to_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            );
-        }
         if let Some(value) = Self::non_empty_env(env_get, "MODELENV_TRADING_SESSION_HOUR_START") {
             if let Ok(parsed) = value.parse::<u32>() {
                 self.trading_session_hour_start = Some(parsed);
@@ -751,14 +695,9 @@ impl Config {
     }
 
     /// Effective end-of-session liquidation hour: the configured
-    /// `trading_session_hour_end` unless `disable_session_liquidation` is set,
-    /// in which case `None` (liquidation off).
+    /// `trading_session_hour_end`. Liquidation is always on.
     pub fn session_liquidation_hour_end(&self) -> Option<u32> {
-        if self.disable_session_liquidation {
-            None
-        } else {
-            self.trading_session_hour_end
-        }
+        self.trading_session_hour_end
     }
 
     fn non_empty_env<F>(env_get: &F, key: &str) -> Option<String>
@@ -939,23 +878,17 @@ impl Config {
         info!("Reward Action Penalty: {}", self.reward_action_penalty);
         info!("Reward Holding Penalty: {}", self.reward_holding_penalty);
         info!("Reward Clip: {} (per-step clamp; <=0 = off)", self.reward_clip);
-        info!("Disable Hedging: {}", self.disable_hedging);
         info!("Leverage: {}:1", self.leverage);
         match self.session_liquidation_hour_end() {
             Some(end) => info!(
-                "Trading session liquidation: ON (start={:?}, end={}h UTC) (\
+                "Trading session liquidation: ON (start={:?}, end={}h UTC), \
                  at session end close all shorts + losing longs (net of swap), \
                  keep winning/break-even longs (Training/backtest and Live)",
                 self.trading_session_hour_start, end
             ),
-            None if self.disable_session_liquidation => {
-                info!("Trading session liquidation: OFF (--no-session-liquidation)")
-            }
             None => info!("Trading session liquidation: OFF"),
         }
-        if self.disable_swap {
-            info!("Daily Swap Rates: DISABLED (--no-swap)) forced to 0.0/0.0");
-        } else {
+        {
             match (self.swap_rate_long, self.swap_rate_short) {
                 (None, None) => info!(
                     "Daily Swap Rates: built-in defaults (Training/backtest) / broker-synced (Live)"
@@ -1107,24 +1040,6 @@ mod tests {
         let config = load_test_config(&["modelenv-server"], &[]).unwrap();
         assert_eq!(config.swap_rate_long, None);
         assert_eq!(config.swap_rate_short, None);
-        assert!(!config.disable_swap);
-    }
-
-    #[test]
-    fn no_swap_flag_parsed_from_cli() {
-        let config = load_test_config(&["modelenv-server", "--no-swap"], &[]).unwrap();
-        assert!(config.disable_swap);
-    }
-
-    #[test]
-    fn no_swap_loaded_from_env() {
-        for val in ["1", "true", "yes", "on", "TRUE"] {
-            let config =
-                load_test_config(&["modelenv-server"], &[("MODELENV_NO_SWAP", val)]).unwrap();
-            assert!(config.disable_swap, "MODELENV_NO_SWAP={val} should enable");
-        }
-        let config = load_test_config(&["modelenv-server"], &[("MODELENV_NO_SWAP", "0")]).unwrap();
-        assert!(!config.disable_swap);
     }
 
     #[test]
@@ -1134,37 +1049,6 @@ mod tests {
             config.session_liquidation_hour_end(),
             Some(DEFAULT_TRADING_SESSION_HOUR_END)
         );
-        assert!(!config.disable_session_liquidation);
-    }
-
-    #[test]
-    fn no_session_liquidation_flag_parsed_from_cli() {
-        let config =
-            load_test_config(&["modelenv-server", "--no-session-liquidation"], &[]).unwrap();
-        assert!(config.disable_session_liquidation);
-        assert_eq!(config.session_liquidation_hour_end(), None);
-    }
-
-    #[test]
-    fn no_session_liquidation_loaded_from_env() {
-        for val in ["1", "true", "yes", "on", "TRUE"] {
-            let config = load_test_config(
-                &["modelenv-server"],
-                &[("MODELENV_NO_SESSION_LIQUIDATION", val)],
-            )
-            .unwrap();
-            assert!(
-                config.disable_session_liquidation,
-                "MODELENV_NO_SESSION_LIQUIDATION={val} should enable"
-            );
-            assert_eq!(config.session_liquidation_hour_end(), None);
-        }
-        let config = load_test_config(
-            &["modelenv-server"],
-            &[("MODELENV_NO_SESSION_LIQUIDATION", "0")],
-        )
-        .unwrap();
-        assert!(!config.disable_session_liquidation);
     }
 
     #[test]
@@ -1383,33 +1267,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.local_cache_dir, "/cli/cache");
-    }
-
-    #[test]
-    fn disable_hedging_defaults_to_true() {
-        let config = load_test_config(&["modelenv-server"], &[]).unwrap();
-        assert!(config.disable_hedging);
-    }
-
-    #[test]
-    fn disable_hedging_parses_true_variants() {
-        for value in &["1", "true", "yes", "on", "TRUE", "Yes"] {
-            let config = load_test_config(
-                &["modelenv-server"],
-                &[("MODELENV_DISABLE_HEDGING", value)],
-            )
-            .unwrap();
-            assert!(config.disable_hedging, "value={value}");
-        }
-    }
-
-    #[test]
-    fn disable_hedging_ignores_unrecognised_values() {
-        let config = load_test_config(
-            &["modelenv-server"],
-            &[("MODELENV_DISABLE_HEDGING", "maybe")],
-        )
-        .unwrap();
-        assert!(!config.disable_hedging);
     }
 }

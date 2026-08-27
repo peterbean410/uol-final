@@ -4,7 +4,6 @@ Extends the base dqn_pipeline (config → training → backtest) with:
 - Model Registry registration after backtest
 - Degradation gate logic with relative and absolute thresholds
 - Initial deployment bootstrap (auto-promote first model)
-- Katib best-parameter injection when katib_enabled=True
 
 The base dqn_pipeline.py remains unchanged; this module builds on top of it
 by adding a post-backtest registration/promotion step.
@@ -25,7 +24,6 @@ from kfp.dsl import Input, Metrics, Model, Output
 
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 from deepqnetwork.kubeflow.pipeline.dqn_pipeline import (
-    GPU_ENABLED,
     MODELENV_CACHE_MOUNT,
     MODELENV_CACHE_PVC,
     _mount_minio_creds,
@@ -540,7 +538,6 @@ def dqn_pipeline_e2e(
     eval_date_end: str = "2015-03-31",
     hour_of_day_start: int = 0,
     hour_of_day_end: int = 23,
-    katib_enabled: bool = False,
     katib_best_params_json: str = "",
     model_registry_url: str = MODEL_REGISTRY_URL,
 ):
@@ -558,7 +555,7 @@ def dqn_pipeline_e2e(
         resolve_dqn_config → dqn_training → dqn_backtest → register_and_promote
 
     Katib integration:
-        When katib_enabled=True and katib_best_params_json is provided, the
+        When katib_best_params_json is provided, the
         Katib-optimized hyperparameters override the pipeline defaults for
         training (learning_rate, batch_size, hidden_dims, gamma, etc.).
 
@@ -569,7 +566,7 @@ def dqn_pipeline_e2e(
         - Bootstrap: auto-promote first model when no production exists
 
     Resource allocation:
-    - Training: 1 GPU (nvidia.com/gpu: 1) when GPU_ENABLED (default), else
+    - Training: 1 GPU (nvidia.com/gpu: 1);
       CPU-only; 16Gi memory, modelenv sidecar
     - Backtest: CPU-only, 4Gi memory, modelenv sidecar
     - Registration: lightweight Python component (256Mi memory)
@@ -588,7 +585,6 @@ def dqn_pipeline_e2e(
         date_end: Exclusive ISO date (YYYY-MM-DD) bounding the window.
         hour_of_day_start: Inclusive UTC hour-of-day filter (0-23).
         hour_of_day_end: Exclusive UTC hour-of-day filter.
-        katib_enabled: Whether Katib-optimized params should be applied.
         katib_best_params_json: JSON string of Katib best hyperparameters.
             Expected keys: learning_rate, hidden_dims, epsilon_decay_steps,
             gamma, batch_size, target_update_freq, dropout.
@@ -598,7 +594,6 @@ def dqn_pipeline_e2e(
     # build_dqn_pipeline_e2e_config(). The katib_best_params_json is also
     # passed to resolve_dqn_config for in-cluster validation. The pipeline
     # parameters (learning_rate, batch_size, etc.) should already reflect
-    # Katib-optimized values when katib_enabled=True.
 
     # -----------------------------------------------------------------------
     # Step 1: Config resolution and validation (lightweight Python component)
@@ -651,12 +646,11 @@ def dqn_pipeline_e2e(
     training_task.set_caching_options(enable_caching=False)
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
-    if GPU_ENABLED:
-        # See dqn_pipeline.py: count alone (set_gpu_limit) is dropped by the KFP
-        # v2 driver; the accelerator *type* is required for the nvidia.com/gpu
-        # limit to actually reach the pod.
-        training_task.set_accelerator_limit(1)
-        training_task.set_accelerator_type("nvidia.com/gpu")
+    # See dqn_pipeline.py: count alone (set_gpu_limit) is dropped by the KFP
+    # v2 driver; the accelerator *type* is required for the nvidia.com/gpu
+    # limit to actually reach the pod.
+    training_task.set_accelerator_limit(1)
+    training_task.set_accelerator_type("nvidia.com/gpu")
     # Warm-cache the modelenv market-data PVC and mount MinIO creds so the
     # checkpoint's minio:// URI can be written (mirrors dqn_pipeline).
     kubernetes.mount_pvc(
@@ -732,15 +726,13 @@ def build_dqn_pipeline_e2e_config(
     date_end: str = "",
     hour_of_day_start: int = 0,
     hour_of_day_end: int = 23,
-    katib_enabled: bool = False,
     katib_best_params_json: str = "",
 ) -> dict:
     """Build and validate pipeline parameters for the DQN E2E pipeline.
 
     Called at pipeline submission time (client-side) to validate configuration
     and apply Katib best parameters before submitting to the KFP engine.
-
-    When katib_enabled=True and katib_best_params_json is provided, the
+        When katib_best_params_json is provided, the
     Katib-optimized hyperparameters override the corresponding pipeline
     parameters (learning_rate, batch_size, etc.).
 
@@ -756,7 +748,6 @@ def build_dqn_pipeline_e2e_config(
         date_end: Exclusive ISO date (YYYY-MM-DD) bounding the window.
         hour_of_day_start: Inclusive UTC hour-of-day filter (0-23).
         hour_of_day_end: Exclusive UTC hour-of-day filter.
-        katib_enabled: Whether to apply Katib-optimized parameters.
         katib_best_params_json: JSON string of Katib best hyperparameters.
 
     Returns:
@@ -769,7 +760,7 @@ def build_dqn_pipeline_e2e_config(
     effective_lr = learning_rate
     effective_batch_size = batch_size
 
-    if katib_enabled and katib_best_params_json:
+    if katib_best_params_json:
         katib_params = json.loads(katib_best_params_json)
         if "learning_rate" in katib_params:
             effective_lr = float(katib_params["learning_rate"])
@@ -788,7 +779,6 @@ def build_dqn_pipeline_e2e_config(
         date_end=date_end,
         hour_of_day_start=hour_of_day_start,
         hour_of_day_end=hour_of_day_end,
-        katib_enabled=katib_enabled,
     )
 
     # Reduced LR for finetune (mode-independent).
@@ -830,7 +820,6 @@ def build_dqn_pipeline_e2e_config(
         "date_end": date_end,
         "hour_of_day_start": hour_of_day_start,
         "hour_of_day_end": hour_of_day_end,
-        "katib_enabled": katib_enabled,
         "katib_best_params_json": katib_best_params_json,
         "model_registry_url": MODEL_REGISTRY_URL,
     }

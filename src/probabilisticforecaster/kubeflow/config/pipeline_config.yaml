@@ -29,12 +29,10 @@ train_pct: 0.75             # 75% of total history for training
 test_pct: 0.25              # 25% of total history for test/evaluation
 
 # Infrastructure
-gpu_enabled: true
 num_workers: 1               # DDP workers (1-4)
 max_wall_time_hours: 8
 
 # Katib hyperparameter tuning
-katib_enabled: false
 katib_max_trials: 30
 katib_parallel_trials: 5
 katib_trial_timeout_hours: 2

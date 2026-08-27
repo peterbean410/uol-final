@@ -52,8 +52,6 @@ class LiveExecutorConfig:
         step_interval_seconds: Wall-clock pause between steps. The DQN was
             trained on a fixed step size; keep this aligned with it.
         request_timeout: Timeout (seconds) for each predictor gRPC call.
-        dry_run: When True, log the screened action but never call Step();
-            no broker orders and no session liquidation are triggered.
         max_consecutive_errors: Abort the loop (non-zero exit) after this many
             back-to-back failed iterations, letting the orchestrator restart
             the pod with a fresh Reset().
@@ -65,7 +63,6 @@ class LiveExecutorConfig:
     grpc_address: str = "localhost:50051"
     step_interval_seconds: float = 60.0
     request_timeout: float = 30.0
-    dry_run: bool = False
     max_consecutive_errors: int = 10
 
     @classmethod
@@ -92,8 +89,6 @@ class LiveExecutorConfig:
                     "DQNPF_REQUEST_TIMEOUT", defaults.request_timeout
                 )
             ),
-            dry_run=os.environ.get("DQNPF_DRY_RUN", "").strip().lower()
-            in ("1", "true", "yes", "on"),
             max_consecutive_errors=int(
                 os.environ.get(
                     "DQNPF_MAX_CONSECUTIVE_ERRORS",
@@ -243,10 +238,9 @@ def run_live_executor(
         step_size_seconds=0,
     )
     logger.info(
-        "live executor started: symbol=%s, interval=%.0fs, dry_run=%s",
+        "live executor started: symbol=%s, interval=%.0fs",
         config.symbol,
         config.step_interval_seconds,
-        config.dry_run,
     )
 
     steps = 0
@@ -258,24 +252,15 @@ def run_live_executor(
             screened = parse_screened_action(predict_fn(config.symbol))
             action = int(screened["action"])
             order_id = f"{config.symbol}-{time.time_ns()}"
-            if config.dry_run:
-                logger.info(
-                    "dry-run: would step action=%s (%s, reason=%s) order_id=%s",
-                    action,
-                    screened.get("action_name"),
-                    screened.get("reason"),
-                    order_id,
-                )
-            else:
-                env_client.step(action, order_id)
-                logger.info(
-                    "stepped action=%s (%s, reason=%s, screened=%s) order_id=%s",
-                    action,
-                    screened.get("action_name"),
-                    screened.get("reason"),
-                    screened.get("screened"),
-                    order_id,
-                )
+            env_client.step(action, order_id)
+            logger.info(
+                "stepped action=%s (%s, reason=%s, screened=%s) order_id=%s",
+                action,
+                screened.get("action_name"),
+                screened.get("reason"),
+                screened.get("screened"),
+                order_id,
+            )
             steps += 1
             consecutive_errors = 0
         except Exception:

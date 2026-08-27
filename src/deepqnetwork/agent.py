@@ -86,9 +86,7 @@ class DQNAgent:
             action_dim=self.action_dim,
             hidden_dims=config.hidden_dims,
             activation=config.activation,
-            layer_norm=config.layer_norm,
             dropout=config.dropout,
-            dueling=config.dueling,
         ).to(device)
 
         # Build Target Network (copy of Q-Network, frozen)
@@ -97,9 +95,7 @@ class DQNAgent:
             action_dim=self.action_dim,
             hidden_dims=config.hidden_dims,
             activation=config.activation,
-            layer_norm=config.layer_norm,
             dropout=config.dropout,
-            dueling=config.dueling,
         ).to(device)
 
         # Copy weights from Q-Network to Target Network
@@ -137,13 +133,12 @@ class DQNAgent:
 
         logger.info(
             "DQNAgent initialised: state_dim=%d, action_dim=%d, device=%s, "
-            "epsilon=%.4f, loss=%s, dueling=%s",
+            "epsilon=%.4f, loss=%s",
             state_dim,
             self.action_dim,
             device,
             self.epsilon,
             config.loss_function,
-            config.dueling,
         )
 
     def select_action(self, state: torch.Tensor, training: bool = True) -> int:
@@ -192,7 +187,7 @@ class DQNAgent:
         # actions shape: (batch_size,) → (batch_size, 1) for gather
         q_values_for_actions = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        # Compute Bellman target (Double DQN when use_double is True):
+        # Compute the Double-DQN Bellman target:
         #   y = r + γ * Q_target(s', argmax_a' Q_online(s', a')) * (1 - done)
         # Double DQN eliminates the maximisation bias of vanilla DQN by
         # decoupling action selection (online net) from evaluation (target net).
@@ -204,22 +199,19 @@ class DQNAgent:
         # Action selection is argmax(Q) and thus scale-invariant, so the
         # deployed policy (advisor/backtest) is unchanged by this.
         norm_rewards = rewards
-        if self.config.reward_normalize:
-            self.reward_rms.update(rewards)
-            if self.reward_rms.count >= self._reward_norm_warmup:
-                norm_rewards = rewards / (self.reward_rms.rms + 1e-8)
+        self.reward_rms.update(rewards)
+        if self.reward_rms.count >= self._reward_norm_warmup:
+            norm_rewards = rewards / (self.reward_rms.rms + 1e-8)
 
         with torch.no_grad():
-            if self.config.use_double:
-                # Select the best action using the online (q_) network
-                online_next_q = self.q_network(next_states)
-                best_actions = online_next_q.argmax(dim=1)
-                # Evaluate that action using the frozen target network
-                next_q_values = self.target_network(next_states)
-                max_next_q = next_q_values.gather(1, best_actions.unsqueeze(1)).squeeze(1)
-            else:
-                next_q_values = self.target_network(next_states)
-                max_next_q = next_q_values.max(dim=1).values
+            # Select the best action using the online network, evaluate it with
+            # the frozen target network; the Double-DQN correction.
+            best_actions = self.q_network(next_states).argmax(dim=1)
+            max_next_q = (
+                self.target_network(next_states)
+                .gather(1, best_actions.unsqueeze(1))
+                .squeeze(1)
+            )
             targets = norm_rewards + self.config.gamma * max_next_q * (1.0 - dones)
 
         # Compute loss

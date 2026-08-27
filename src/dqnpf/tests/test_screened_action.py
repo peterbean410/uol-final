@@ -44,21 +44,6 @@ def test_screened_true_when_reason_is_budget_exhausted() -> None:
     assert result.action_name == "HOLD"
 
 
-def test_screened_true_when_reason_is_directional_conflict() -> None:
-    layer = make_layer(
-        variance_threshold=10.0,
-        directional_disagreement=True,
-        directional_tolerance=0.5,
-    )
-    # LONG (BUY_1) vs negative mu → conflict
-    result = layer.screen(
-        FakeActionResult(action=1, action_name="BUY_1"), mu=-2.0, sigma=0.1
-    )
-    assert result.reason == "directional_conflict"
-    assert result.screened is True
-    assert result.action == 0
-    assert result.action_name == "HOLD"
-
 
 @pytest.mark.parametrize(
     "reason,expected_screened",

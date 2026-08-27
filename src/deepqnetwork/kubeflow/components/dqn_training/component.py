@@ -368,9 +368,7 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         # Network
         hidden_dims=pipeline_config.hidden_dims,
         activation=pipeline_config.activation,
-        layer_norm=pipeline_config.layer_norm,
         dropout=pipeline_config.dropout,
-        dueling=pipeline_config.dueling,
         learning_rate=effective_lr,
         betas=pipeline_config.betas,
         eps=pipeline_config.eps,

@@ -6,8 +6,6 @@ symbol: "USDJPY"
 variance_threshold: 4.5
 max_risk_long_units: 2
 max_risk_short_units: 1
-directional_disagreement: false
-directional_tolerance: 1.0
 forecast_horizon: 1
 min_bars_warmup: 1440
 step_size_seconds: 60
@@ -39,5 +37,4 @@ dqn_model_registry_name: "deepqnetwork-usdjpy"
 forecaster_model_registry_name: "probabilistic-transformer-usdjpy-h1"
 dqn_lifecycle_stage: "production"
 forecaster_lifecycle_stage: "production"
-gpu_enabled: false
 max_wall_time_hours: 4

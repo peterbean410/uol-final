@@ -6,7 +6,7 @@
 //! [`super::orders`] (order RPCs), into one client. It talks to the **real**
 //! cTrader API; the `live` flag selects the endpoint:
 //! `false` → `demo.ctraderapi.com` (paper, default), `true` → `live.ctraderapi.com`
-//! (real money). **Configurable, not compiled in**, see [`CtraderClient::with_live`].
+//! The demo endpoint is used.
 //!
 //! Order sizing: modelenv thinks in position *units*; the broker trades *lots*.
 //! [`CtraderClient::with_lot_size_per_unit`] sets cTrader lots per unit (default
@@ -144,7 +144,6 @@ pub struct CtraderClient {
     /// Trading symbol
     symbol: String,
     /// Endpoint select: `false` = demo (default), `true` = live (real money).
-    live: bool,
     /// cTrader lots submitted per one modelenv position unit.
     lot_size_per_unit: f64,
 
@@ -184,7 +183,6 @@ impl std::fmt::Debug for CtraderClient {
         f.debug_struct("CtraderClient")
             .field("account_id", &self.account_id)
             .field("symbol", &self.symbol)
-            .field("live", &self.live)
             .field("lot_size_per_unit", &self.lot_size_per_unit)
             .field("connected", &self.conn.is_some())
             .field("symbol_id", &self.symbol_id)
@@ -286,7 +284,7 @@ impl CtraderClient {
     }
 
     /// Create a new cTrader API client (demo endpoint, default 0.01 lot/unit).
-    /// Configure the endpoint and sizing with [`with_live`] / [`with_lot_size_per_unit`].
+    /// Configure sizing with [`with_lot_size_per_unit`].
     pub fn new(
         app_client_id: String,
         app_client_secret: String,
@@ -302,7 +300,6 @@ impl CtraderClient {
             refresh_token,
             account_id,
             symbol,
-            live: false,
             lot_size_per_unit: DEFAULT_LOT_SIZE_PER_UNIT,
             account_id_num: 0,
             symbol_id: None,
@@ -320,14 +317,6 @@ impl CtraderClient {
         }
     }
 
-    /// Select the endpoint: `false` = demo (paper), `true` = live (real money).
-    /// Default demo. Configurable so promotion to live is a config change, not a
-    /// code change.
-    pub fn with_live(mut self, live: bool) -> Self {
-        self.live = live;
-        self
-    }
-
     /// Set cTrader lots submitted per one modelenv position unit (default 0.01).
     /// Ignored (kept at default) if `lots` is not finite and > 0.
     pub fn with_lot_size_per_unit(mut self, lots: f64) -> Self {
@@ -340,11 +329,6 @@ impl CtraderClient {
             );
         }
         self
-    }
-
-    /// True if pointed at the live (real-money) endpoint.
-    pub fn is_live(&self) -> bool {
-        self.live
     }
 
     /// cTrader lots per modelenv unit.
@@ -387,15 +371,14 @@ impl CtraderClient {
             )
         })?;
         let symbol = Self::normalise_symbol(&self.symbol)?;
-        let env = if self.live { "LIVE" } else { "demo" };
         info!(
-            "Connecting to cTrader {env} endpoint (account={account_id_num}, symbol={symbol}, lot/unit={})",
+            "Connecting to cTrader demo endpoint (account={account_id_num}, symbol={symbol}, lot/unit={})",
             self.lot_size_per_unit
         );
 
-        let transport = Transport::connect_env(self.live)
+        let transport = Transport::connect_env()
             .await
-            .with_context(|| format!("cTrader {env} TLS connect failed"))?;
+            .context("cTrader demo TLS connect failed")?;
         let (reader, writer) = transport.into_split();
         let (conn, events) = Connection::start(reader, writer);
 
@@ -440,7 +423,7 @@ impl CtraderClient {
         self.heartbeat = Some(heartbeat);
         self.reconnect_attempts = 0;
         let _ = self.refresh_token.is_some();
-        info!("Connected to cTrader {env}: account={account_id_num}, {symbol}=id{symbol_id} (spots subscribed)");
+        info!("Connected to cTrader demo: account={account_id_num}, {symbol}=id{symbol_id} (spots subscribed)");
         Ok(())
     }
 
@@ -871,16 +854,14 @@ mod tests {
     // ---- config surface ----
 
     #[test]
-    fn defaults_demo_and_min_lot() {
+    fn defaults_min_lot() {
         let c = test_client("USDJPY");
-        assert!(!c.is_live());
         assert_eq!(c.lot_size_per_unit(), 0.01);
     }
 
     #[test]
-    fn with_live_and_lot_size_are_configurable() {
-        let c = test_client("USDJPY").with_live(true).with_lot_size_per_unit(0.05);
-        assert!(c.is_live());
+    fn lot_size_is_configurable() {
+        let c = test_client("USDJPY").with_lot_size_per_unit(0.05);
         assert_eq!(c.lot_size_per_unit(), 0.05);
         // invalid lot sizes are ignored, keeping the prior value.
         let c2 = test_client("USDJPY").with_lot_size_per_unit(-1.0);

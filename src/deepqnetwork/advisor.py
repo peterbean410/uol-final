@@ -98,9 +98,7 @@ class DQNAdvisor:
         # Extract network architecture parameters
         hidden_dims = ckpt_config.get("hidden_dims", [256, 256, 128])
         activation = ckpt_config.get("activation", "relu")
-        layer_norm = ckpt_config.get("layer_norm", True)
         dropout = ckpt_config.get("dropout", 0.0)
-        dueling = ckpt_config.get("dueling", False)
 
         # Infer state_dim from the first layer's weight shape
         state_dict = checkpoint["q_network_state_dict"]
@@ -115,9 +113,7 @@ class DQNAdvisor:
             action_dim=5,
             hidden_dims=hidden_dims,
             activation=activation,
-            layer_norm=layer_norm,
             dropout=dropout,
-            dueling=dueling,
         )
 
         # Load weights and set to eval mode
@@ -133,11 +129,10 @@ class DQNAdvisor:
         self._state_dim = state_dim
 
         logger.info(
-            "DQNAdvisor loaded from '%s' (state_dim=%d, device=%s, dueling=%s)",
+            "DQNAdvisor loaded from '%s' (state_dim=%d, device=%s)",
             checkpoint_path,
             state_dim,
             self._device,
-            dueling,
         )
 
     @classmethod

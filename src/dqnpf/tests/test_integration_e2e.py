@@ -42,7 +42,6 @@ def _config(
     max_short: int = 1,
     step_size_seconds: int = 60,
     episode_start_ts: int = 1_700_000_000,
-    screen_profit_gate_enabled: bool = False,
 ) -> IntegrationConfig:
     # The profit gate is left OFF by default in these e2e fixtures: it adds a
     # per-bar `recent_bars` price fetch that the call-counting mocks here would
@@ -56,7 +55,6 @@ def _config(
         step_size_seconds=step_size_seconds,
         episode_start_ts=episode_start_ts,
         episode_end_ts=episode_start_ts + 3600,
-        screen_profit_gate_enabled=screen_profit_gate_enabled,
     )
 
 
@@ -249,8 +247,9 @@ def test_cache_recomputes_when_bar_timestamp_advances() -> None:
     bars_b = make_m5_bars(51)  # one new bar with a fresh latest timestamp
 
     # 4 step iterations: iters 0,1,2 see bars_a; iter 3 sees bars_b.
-    # _latest_bar_ts is the only consumer (MockBridge ignores env_client).
-    responses_per_step = [make_response(bars_a)] * 3 + [make_response(bars_b)]
+    # Each step consumes TWO responses: _latest_bar_ts (cache key) and
+    # _latest_m5_close (the profit gate's next-bar mark price).
+    responses_per_step = [make_response(bars_a)] * 6 + [make_response(bars_b)] * 2
 
     env_client = MockEnvClient(
         observations=_obs_sequence(

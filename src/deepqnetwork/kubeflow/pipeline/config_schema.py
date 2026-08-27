@@ -53,9 +53,7 @@ class DQNPipelineConfig:
     # Network architecture
     hidden_dims: list[int] = field(default_factory=lambda: [256, 256, 128])
     activation: str = "relu"  # relu, leaky_relu, gelu
-    layer_norm: bool = True
     dropout: float = 0.0
-    dueling: bool = False
     learning_rate: float = 1e-4
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
@@ -71,12 +69,10 @@ class DQNPipelineConfig:
     checkpoint_interval: int = 50
 
     # Infrastructure
-    gpu_enabled: bool = True
     num_workers: int = 1
     max_wall_time_hours: int = 8
 
     # Katib hyperparameter tuning
-    katib_enabled: bool = False
     katib_max_trials: int = 20
     katib_parallel_trials: int = 3
     katib_trial_timeout_hours: int = 4
@@ -277,7 +273,7 @@ class DQNPipelineConfig:
             )
 
         # Katib
-        if self.katib_enabled:
+        if True:
             if self.katib_max_trials <= 0:
                 errors.append(
                     f"katib_max_trials must be positive: {self.katib_max_trials}"
@@ -359,8 +355,6 @@ class DQNPipelineConfig:
         args.extend(["--grad-clip-norm", str(self.grad_clip_norm)])
         args.extend(["--weight-decay", str(self.weight_decay)])
         args.extend(["--loss-function", self.loss_function])
-        if self.dueling:
-            args.append("--dueling")
 
         # Training, emit only the knob that applies to the active mode so the
         # downstream DQNConfig never trips train()'s mis-set guard.

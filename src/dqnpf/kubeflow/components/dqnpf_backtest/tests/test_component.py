@@ -79,10 +79,15 @@ def _stub_materialize_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     ``run_backtest_fn`` the checkpoint is never opened, so stub it to a no-op
     pass-through; the assertions expect the resolved URI to flow through to
     ``IntegrationConfig`` unchanged.
+
+    The modelenv sidecar is now started unconditionally, so also stub the
+    launcher; the binary is not on PATH in a unit-test environment and an
+    injected ``run_backtest_fn`` never talks to it.
     """
     monkeypatch.setattr(
         component, "_materialize_checkpoint", lambda uri, dest_dir, name: uri
     )
+    monkeypatch.setattr(component, "_start_modelenv_sidecar", lambda *a, **k: None)
 
 
 def _write_pipeline_yaml(tmp_path: Path, **overrides) -> Path:
@@ -184,8 +189,7 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(
         output_artifact_path=str(output_path),
         checkpoint_resolver=resolver,
         run_backtest_fn=runner,
-        start_sidecar=False,
-    )
+        )
 
     assert calls["runner"] == 1
     assert calls["resolver"] == [
@@ -222,8 +226,7 @@ def test_run_dqnpf_backtest_records_failing_thresholds(
         output_artifact_path=str(output_path),
         checkpoint_resolver=lambda n, s: f"s3://bucket/{n}.pt",
         run_backtest_fn=lambda cfg: _failing_comparison(),
-        start_sidecar=False,
-    )
+        )
 
     report = payload["threshold_report"]
     assert report["passed"] is False
@@ -250,8 +253,7 @@ def test_run_dqnpf_backtest_uses_pipeline_stages(
         output_artifact_path=str(output_path),
         checkpoint_resolver=lambda n, s: stages.append((n, s)) or f"s3://{n}/{s}.pt",
         run_backtest_fn=lambda cfg: _passing_comparison(),
-        start_sidecar=False,
-    )
+        )
 
     assert stages == [
         ("deepqnetwork-usdjpy", "staging"),
@@ -342,8 +344,7 @@ def test_sidecar_omits_swap_rates_by_default(monkeypatch: pytest.MonkeyPatch) ->
     captured = _patch_sidecar_capture(monkeypatch)
     _start_modelenv_sidecar("USDJPY")
     # By default the sidecar applies modelenv's built-in swap table: no
-    # --no-swap and no per-side rate overrides.
-    assert "--no-swap" not in captured[0]
+    # no per-side rate overrides.
     assert "--swap-rate-long" not in captured[0]
     assert "--swap-rate-short" not in captured[0]
 
@@ -354,23 +355,6 @@ def test_sidecar_passes_swap_rates_when_set(monkeypatch: pytest.MonkeyPatch) -> 
     cmd = captured[0]
     assert cmd[cmd.index("--swap-rate-long") + 1] == "-0.5"
     assert cmd[cmd.index("--swap-rate-short") + 1] == "0.25"
-
-
-def test_sidecar_passes_no_swap_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = _patch_sidecar_capture(monkeypatch)
-    _start_modelenv_sidecar("USDJPY", no_swap=True)
-    assert "--no-swap" in captured[0]
-
-
-def test_sidecar_no_swap_overrides_swap_rates(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = _patch_sidecar_capture(monkeypatch)
-    _start_modelenv_sidecar(
-        "USDJPY", no_swap=True, swap_rate_long=-0.5, swap_rate_short=0.25
-    )
-    cmd = captured[0]
-    assert "--no-swap" in cmd
-    assert "--swap-rate-long" not in cmd
-    assert "--swap-rate-short" not in cmd
 
 
 def test_cli_swap_rates_default_to_zero() -> None:
@@ -399,32 +383,6 @@ def test_cli_swap_rates_parsed_as_float() -> None:
     )
     assert args.swap_rate_long == -0.5
     assert args.swap_rate_short == 0.25
-
-
-def test_cli_no_swap_defaults_false() -> None:
-    args = _build_parser().parse_args(
-        [
-            "--integration-config-yaml=cfg.yaml",
-            "--dqn-model-registry-name=dqn",
-            "--forecaster-model-registry-name=fc",
-            "--output-artifact-path=out.json",
-        ]
-    )
-    # Default: swap ON (built-in table), matching DQN training/backtest.
-    assert args.no_swap is False
-
-
-def test_cli_no_swap_parsed_true() -> None:
-    args = _build_parser().parse_args(
-        [
-            "--integration-config-yaml=cfg.yaml",
-            "--dqn-model-registry-name=dqn",
-            "--forecaster-model-registry-name=fc",
-            "--output-artifact-path=out.json",
-            "--no-swap=true",
-        ]
-    )
-    assert args.no_swap is True
 
 
 def test_export_trade_log_copies_contents(tmp_path: Path) -> None:
@@ -465,8 +423,7 @@ def test_run_dqnpf_backtest_emits_summary_log(
             output_artifact_path=str(output_path),
             checkpoint_resolver=lambda n, s: "s3://stub",
             run_backtest_fn=lambda cfg: _passing_comparison(),
-            start_sidecar=False,
-        )
+            )
 
     events: list[str] = []
     for rec in caplog.records:

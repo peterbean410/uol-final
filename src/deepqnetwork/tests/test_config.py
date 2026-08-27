@@ -36,9 +36,7 @@ class TestDQNConfig:
         config = DQNConfig()
         assert config.hidden_dims == [256, 256, 128]
         assert config.activation == "relu"
-        assert config.layer_norm is True
         assert config.dropout == 0.0
-        assert config.dueling is False
         assert config.learning_rate == 1e-4
         assert config.betas == (0.9, 0.999)
         assert config.eps == 1e-8

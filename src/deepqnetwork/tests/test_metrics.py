@@ -16,33 +16,32 @@ class TestMetricsLoggerInit:
     def test_creates_checkpoint_directory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = os.path.join(tmpdir, "new_subdir", "checkpoints")
-            logger = MetricsLogger(checkpoint_dir=checkpoint_dir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=checkpoint_dir)
             assert os.path.isdir(checkpoint_dir)
             logger.close()
 
     def test_default_log_interval(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             assert logger.log_interval == 10
             logger.close()
 
     def test_custom_log_interval(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=5, enable_tensorboard=False
-            )
+                checkpoint_dir=tmpdir, log_interval=5)
             assert logger.log_interval == 5
             logger.close()
 
     def test_initial_best_reward(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             assert logger.best_reward == float("-inf")
             logger.close()
 
     def test_initial_avg_reward(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             assert logger.avg_reward_100 == 0.0
             logger.close()
 
@@ -52,7 +51,7 @@ class TestLogEpisode:
 
     def test_writes_csv_header_on_first_call(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             logger.log_episode(
                 episode=1, reward=10.5, length=100, avg_loss=0.05, epsilon=0.9, duration=5.2
             )
@@ -70,7 +69,7 @@ class TestLogEpisode:
 
     def test_writes_correct_values(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             logger.log_episode(
                 episode=5, reward=-2.3, length=50, avg_loss=0.123, epsilon=0.5, duration=3.7
             )
@@ -86,7 +85,7 @@ class TestLogEpisode:
 
     def test_appends_multiple_episodes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             for i in range(3):
                 logger.log_episode(
                     episode=i, reward=float(i), length=10 * i,
@@ -104,7 +103,7 @@ class TestLogEpisode:
 
     def test_updates_best_reward(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             logger.log_episode(episode=1, reward=5.0, length=10, avg_loss=0.0, epsilon=1.0, duration=1.0)
             logger.log_episode(episode=2, reward=10.0, length=10, avg_loss=0.0, epsilon=1.0, duration=1.0)
             logger.log_episode(episode=3, reward=3.0, length=10, avg_loss=0.0, epsilon=1.0, duration=1.0)
@@ -114,7 +113,7 @@ class TestLogEpisode:
 
     def test_updates_rolling_average(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             for i in range(10):
                 logger.log_episode(
                     episode=i, reward=float(i), length=10,
@@ -127,7 +126,7 @@ class TestLogEpisode:
 
     def test_rolling_average_caps_at_100(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             # Log 150 episodes with reward = episode number
             for i in range(150):
                 logger.log_episode(
@@ -143,7 +142,7 @@ class TestLogEpisode:
         import logging
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             with caplog.at_level(logging.INFO):
                 logger.log_episode(
                     episode=1, reward=5.0, length=100,
@@ -161,8 +160,7 @@ class TestLogStep:
     def test_logs_at_interval(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=10, enable_tensorboard=False
-            )
+                checkpoint_dir=tmpdir, log_interval=10)
             # Step 10 should be logged
             logger.log_step(step=10, action=1, reward=0.5, q_value=1.2, epsilon=0.8, loss=0.01)
 
@@ -180,8 +178,7 @@ class TestLogStep:
     def test_skips_non_interval_steps(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=10, enable_tensorboard=False
-            )
+                checkpoint_dir=tmpdir, log_interval=10)
             # Steps 1-9 should not be logged
             for step in range(1, 10):
                 logger.log_step(step=step, action=0, reward=0.0, q_value=0.0, epsilon=1.0, loss=None)
@@ -193,8 +190,7 @@ class TestLogStep:
     def test_writes_correct_values(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=5, enable_tensorboard=False
-            )
+                checkpoint_dir=tmpdir, log_interval=5)
             logger.log_step(step=5, action=3, reward=-0.1, q_value=2.5, epsilon=0.7, loss=0.05)
 
             csv_path = os.path.join(tmpdir, "step_metrics.csv")
@@ -208,8 +204,7 @@ class TestLogStep:
     def test_none_loss_written_as_zero(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=1, enable_tensorboard=False
-            )
+                checkpoint_dir=tmpdir, log_interval=1)
             logger.log_step(step=1, action=0, reward=0.0, q_value=0.0, epsilon=1.0, loss=None)
 
             csv_path = os.path.join(tmpdir, "step_metrics.csv")
@@ -225,8 +220,7 @@ class TestLogStep:
         """Step 0 is a multiple of any interval, so it should be logged."""
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=10, enable_tensorboard=False
-            )
+                checkpoint_dir=tmpdir, log_interval=10)
             logger.log_step(step=0, action=0, reward=0.0, q_value=0.0, epsilon=1.0, loss=None)
 
             csv_path = os.path.join(tmpdir, "step_metrics.csv")
@@ -241,7 +235,7 @@ class TestLogCheckpointSummary:
         import logging
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             # Add some episodes
             for i in range(10):
                 logger.log_episode(
@@ -261,7 +255,7 @@ class TestLogCheckpointSummary:
         import logging
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             # Provide external history
             rewards = [1.0, 2.0, 3.0, 4.0, 5.0]
             logger._best_reward = 5.0  # Set manually since we didn't use log_episode
@@ -277,7 +271,7 @@ class TestLogCheckpointSummary:
         import logging
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
 
             with caplog.at_level(logging.INFO):
                 logger.log_checkpoint_summary(episode=0)
@@ -289,24 +283,17 @@ class TestLogCheckpointSummary:
 class TestTensorBoardIntegration:
     """Tests for optional TensorBoard integration."""
 
-    def test_tensorboard_disabled_gracefully(self):
-        """When enable_tensorboard=False, no writer is created."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
-            assert logger._tb_writer is None
-            logger.close()
-
     @pytest.mark.skipif(not TENSORBOARD_AVAILABLE, reason="TensorBoard not installed")
     def test_tensorboard_enabled_creates_writer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=True)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             assert logger._tb_writer is not None
             logger.close()
 
     @pytest.mark.skipif(not TENSORBOARD_AVAILABLE, reason="TensorBoard not installed")
     def test_tensorboard_episode_scalars(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=True)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             # Should not raise
             logger.log_episode(
                 episode=1, reward=5.0, length=100,
@@ -318,8 +305,7 @@ class TestTensorBoardIntegration:
     def test_tensorboard_step_scalars(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
-                checkpoint_dir=tmpdir, log_interval=1, enable_tensorboard=True
-            )
+                checkpoint_dir=tmpdir, log_interval=1)
             # Should not raise
             logger.log_step(step=1, action=0, reward=0.5, q_value=1.0, epsilon=0.8, loss=0.01)
             logger.close()
@@ -328,21 +314,8 @@ class TestTensorBoardIntegration:
 class TestFlushAndClose:
     """Tests for flush and close methods."""
 
-    def test_close_without_tensorboard(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
-            # Should not raise
-            logger.close()
-
-    def test_flush_without_tensorboard(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
-            # Should not raise
-            logger.flush()
-            logger.close()
-
     def test_close_sets_writer_to_none(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = MetricsLogger(checkpoint_dir=tmpdir, enable_tensorboard=False)
+            logger = MetricsLogger(checkpoint_dir=tmpdir)
             logger.close()
             assert logger._tb_writer is None

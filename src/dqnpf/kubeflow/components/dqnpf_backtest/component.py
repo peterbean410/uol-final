@@ -107,7 +107,6 @@ def _start_modelenv_sidecar(
     trade_log_path: str | None = None,
     swap_rate_long: float = 0.0,
     swap_rate_short: float = 0.0,
-    no_swap: bool = False,
     trading_session_hour_start: int | None = None,
     trading_session_hour_end: int | None = None,
     training_date_start: str | None = None,
@@ -119,17 +118,13 @@ def _start_modelenv_sidecar(
     so every order fill and position close is appended as JSONL to that path
     for offline review. The trade log is a pure side-channel; it does not
     affect observations, rewards, or the backtest result.
-
-    ``no_swap`` (default False, matching ``run_dqnpf_backtest``) starts modelenv
-    with ``--no-swap`` only when explicitly requested, forcing zero overnight
-    financing and overriding both modelenv's built-in default table and any
     swap-rate values; the clean way to run a swap-free comparison backtest. By
     default it is left unset so modelenv applies its built-in default table and
     the backtest's PnL reflects the same swap regime the DQN trained under.
 
     ``swap_rate_long`` / ``swap_rate_short`` are the daily overnight-financing
     rates (per unit volume) charged to BUY / SELL positions held across a day
-    boundary; they only apply when ``no_swap`` is False, and only a genuinely
+    boundary; only a genuinely
     non-zero rate is forwarded as ``--swap-rate-long`` / ``--swap-rate-short`` so
     the backtest's PnL and trade log reflect overnight swap costs.
 
@@ -166,7 +161,6 @@ def _start_modelenv_sidecar(
                 "port": port,
                 "binary": _MODELENV_BINARY,
                 "trade_log_path": trade_log_path,
-                "no_swap": no_swap,
                 "swap_rate_long": swap_rate_long,
                 "swap_rate_short": swap_rate_short,
                 "trading_session_hour_start": trading_session_hour_start,
@@ -182,10 +176,6 @@ def _start_modelenv_sidecar(
     cmd = [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol]
     if trade_log_path:
         cmd += ["--trade-log", trade_log_path]
-    if no_swap:
-        # Swap-free run: --no-swap forces 0/0 in modelenv and takes precedence
-        # over any swap-rate values, so don't bother forwarding the rates.
-        cmd += ["--no-swap"]
     else:
         if swap_rate_long:
             cmd += ["--swap-rate-long", str(swap_rate_long)]
@@ -425,9 +415,7 @@ def run_dqnpf_backtest(
     *,
     checkpoint_resolver: CheckpointResolver | None = None,
     run_backtest_fn: Callable[[IntegrationConfig], BacktestComparison] | None = None,
-    start_sidecar: bool = True,
     trade_log_output_path: str | None = None,
-    no_swap: bool = False,
     swap_rate_long: float = 0.0,
     swap_rate_short: float = 0.0,
 ) -> dict:
@@ -446,9 +434,6 @@ def run_dqnpf_backtest(
             ``(model_name, lifecycle_stage) -> s3_path`` for unit tests.
         run_backtest_fn: Optional dependency-injected backtest runner for unit
             tests. Defaults to :func:`backtest.run_backtest`.
-        start_sidecar: If True (default), launches modelenv as a subprocess.
-            Set to False for unit tests that supply their own gRPC env or use
-            an injected ``run_backtest_fn``.
         trade_log_output_path: Optional destination for modelenv's JSONL trade
             log (every fill + position close), exported so it can be downloaded
             after the run. modelenv writes it to a pod-local temp file via
@@ -456,17 +441,13 @@ def run_dqnpf_backtest(
             here (a KFP outputPath, or a ``minio://`` / ``s3://`` URI). Only
             takes effect when the sidecar is started by this component. The
             trade log is a side-channel and does not affect the backtest result.
-        no_swap: If True, start modelenv with ``--no-swap`` for a swap-free
-            comparison run. Default False, modelenv applies its built-in
-            default financing table so the backtest's PnL reflects the same swap
-            regime the DQN trained under.
         swap_rate_long: Daily overnight-financing rate (per unit volume) charged
             to BUY positions held across a day boundary. Default 0.0 = leave
             modelenv's built-in default table in place; a non-zero value is
             forwarded as ``--swap-rate-long``.
         swap_rate_short: Same as ``swap_rate_long`` for SELL positions, passed as
             ``--swap-rate-short``. Both only take effect when this component
-            starts the sidecar and ``no_swap`` is False.
+            starts the sidecar.
 
     Returns:
         The payload dict that was written to ``output_artifact_path``.
@@ -508,7 +489,7 @@ def run_dqnpf_backtest(
     # pod-local temp path and export that to the downloadable output afterwards.
     local_trade_log = (
         os.path.join(tempfile.mkdtemp(prefix="dqnpf-tradelog-"), "trades.jsonl")
-        if trade_log_output_path and start_sidecar
+        if trade_log_output_path
         else None
     )
 
@@ -519,7 +500,7 @@ def run_dqnpf_backtest(
     # fixed-window mode resolves to None and leaves liquidation off.
     session_hour_start: int | None = None
     session_hour_end: int | None = None
-    if start_sidecar and integration_cfg.date_start:
+    if integration_cfg.date_start:
         from deepqnetwork.advisor import DQNAdvisor
 
         session_hours = backtest._resolve_session_hours(
@@ -528,20 +509,15 @@ def run_dqnpf_backtest(
         if session_hours is not None:
             session_hour_start, session_hour_end = session_hours
 
-    sidecar = (
-        _start_modelenv_sidecar(
+    sidecar = _start_modelenv_sidecar(
             integration_cfg.symbol,
             trade_log_path=local_trade_log,
-            no_swap=no_swap,
             swap_rate_long=swap_rate_long,
             swap_rate_short=swap_rate_short,
             trading_session_hour_start=session_hour_start,
             trading_session_hour_end=session_hour_end,
             training_date_start=integration_cfg.date_start or None,
-            training_date_end=integration_cfg.date_end or None,
-        )
-        if start_sidecar
-        else None
+        training_date_end=integration_cfg.date_end or None,
     )
     try:
         comparison = runner(integration_cfg)

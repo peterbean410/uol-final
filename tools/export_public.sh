@@ -19,7 +19,7 @@ OUT="$DEST/src"
 EXCLUDES=(
   --exclude 'target/'            # Rust build output (14 GB)
   --exclude '__pycache__/'  --exclude '*.pyc'  --exclude '*.pyo'
-  --exclude '.env'               # credentials, .env.example is kept
+  --exclude '.env'               # credentials (.env.example is kept
   --exclude '.idea/'  --exclude '.vscode/'  --exclude '.DS_Store'
   --exclude '.pytest_cache/'  --exclude '.hypothesis/'  --exclude '.ruff_cache/'
   --exclude 'cache/'             # downloaded market-data caches
@@ -27,6 +27,7 @@ EXCLUDES=(
   --exclude '*.mov'  --exclude '*.mp4'        # screen recordings
   --exclude '*.log'
   --exclude '/service/'          # ta/service: uncommitted scaffolding, not part of the report
+  --exclude 'specs/'             # this repository is code only) no specs or documents
 )
 
 rm -rf "$OUT"; mkdir -p "$OUT"

@@ -9,8 +9,6 @@ step_size_seconds: 60
 variance_threshold: 4.5
 max_risk_long_units: 2
 max_risk_short_units: 1
-directional_disagreement: false
-directional_tolerance: 1.0
 
 # Forecaster
 forecast_horizon: 1

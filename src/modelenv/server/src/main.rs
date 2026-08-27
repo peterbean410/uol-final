@@ -39,7 +39,6 @@ fn build_environment(config: &Config) -> Environment {
     .with_reward_action_penalty(config.reward_action_penalty)
     .with_reward_holding_penalty(config.reward_holding_penalty)
     .with_reward_clip(config.reward_clip)
-    .with_disable_hedging(config.disable_hedging)
     .with_leverage(config.leverage)
     .with_trade_log(config.trade_log_path.clone());
 
@@ -47,11 +46,7 @@ fn build_environment(config: &Config) -> Environment {
     // inside Environment::new; Live syncs from the broker. Only override here when
     // a rate is explicitly configured, filling any unspecified side from the
     // mode-appropriate default (the table in Training, 0.0 in Live).
-    if config.disable_swap {
-        // --no-swap: force zero overnight financing, overriding the built-in
-        // table and any --swap-rate-* values.
-        environment = environment.with_daily_swap_rate(config.symbol.clone(), 0.0, 0.0);
-    } else if config.swap_rate_long.is_some() || config.swap_rate_short.is_some() {
+    if config.swap_rate_long.is_some() || config.swap_rate_short.is_some() {
         let (default_long, default_short) = if matches!(config.mode, Mode::Training) {
             default_swap_rate_for(&config.symbol)
         } else {
@@ -342,7 +337,6 @@ async fn main() -> Result<()> {
             config.broker_gateway.ctrader_refresh_token.as_deref(),
             config.broker_gateway.ctrader_account.as_deref(),
             config.symbol.as_str(),
-            config.broker_gateway.ctrader_live,
             config.broker_gateway.ctrader_lot_size_per_unit,
         )
         .await

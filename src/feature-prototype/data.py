@@ -147,7 +147,6 @@ def load_usdjpy_m5(
     end_date: str = DEFAULT_END,
     synthetic_bars: int = 6000,
     seed: int = 7,
-    allow_network: bool = True,
 ) -> PriceData:
     """Load a USD/JPY M5 slice: cache -> Dukascopy download+aggregate -> synthetic."""
     cache_path = Path(cache_path)
@@ -156,15 +155,14 @@ def load_usdjpy_m5(
         logger.info("loaded %d M5 bars from cache %s", len(frame), cache_path)
         return PriceData(frame=frame, source=f"cache:{cache_path.name}")
 
-    if allow_network:
-        try:
-            frame = _from_dukascopy(start_date, end_date, cache_path.parent)
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            frame.to_parquet(cache_path, index=False)
-            logger.info("downloaded+aggregated %d real M5 bars -> cached", len(frame))
-            return PriceData(frame=frame, source=f"dukascopy:{start_date}..{end_date}")
-        except Exception as exc:  # noqa: BLE001 - fall back so the prototype still runs
-            logger.warning("Dukascopy unavailable (%s); using synthetic fallback", exc)
+    try:
+        frame = _from_dukascopy(start_date, end_date, cache_path.parent)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(cache_path, index=False)
+        logger.info("downloaded+aggregated %d real M5 bars -> cached", len(frame))
+        return PriceData(frame=frame, source=f"dukascopy:{start_date}..{end_date}")
+    except Exception as exc:  # noqa: BLE001 - fall back so the prototype still runs
+        logger.warning("Dukascopy unavailable (%s); using synthetic fallback", exc)
 
     frame = _synthetic(synthetic_bars, seed)
     cache_path.parent.mkdir(parents=True, exist_ok=True)

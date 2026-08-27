@@ -28,16 +28,13 @@ tau: 1.0                     # 1.0 = hard copy; <1.0 = soft Polyak averaging
 # Network architecture
 hidden_dims: [256, 256, 128]
 activation: "relu"           # relu, leaky_relu, gelu
-layer_norm: true
 dropout: 0.0
-dueling: false
 learning_rate: 0.0001
 betas: [0.9, 0.999]
 eps: 0.00000001
 weight_decay: 0.0
 grad_clip_norm: 10.0
 loss_function: "huber"       # huber, mse
-reward_normalize: true   # scale rewards by running RMS (sign-preserving) for value stability
 
 # Training schedule
 # Episode-count knobs are mode-specific and mutually exclusive, set at most the
@@ -49,12 +46,10 @@ max_steps_per_episode: 30000
 checkpoint_interval: 50
 
 # Infrastructure
-gpu_enabled: true
 num_workers: 1
 max_wall_time_hours: 8
 
 # Katib hyperparameter tuning
-katib_enabled: false
 katib_max_trials: 20
 katib_parallel_trials: 3
 katib_trial_timeout_hours: 4

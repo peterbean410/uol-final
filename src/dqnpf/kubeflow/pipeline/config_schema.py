@@ -37,8 +37,6 @@ class DqnpfPipelineConfig:
     variance_threshold: float = 4.5
     max_risk_long_units: int = 2
     max_risk_short_units: int = 1
-    directional_disagreement: bool = False
-    directional_tolerance: float = 1.0
     forecaster_risk_aversion: float = 0.1
     forecaster_position_size: float = 10_000_000.0
     forecast_horizon: int = 1
@@ -57,7 +55,6 @@ class DqnpfPipelineConfig:
     hour_of_day_end: int | None = None
     seed: int = 0
     pip_size: float = 0.01
-    screen_profit_gate_enabled: bool = True
     screen_profit_window_sessions: int = 7
 
     # --- Pipeline-level fields ---
@@ -65,7 +62,6 @@ class DqnpfPipelineConfig:
     forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1"
     dqn_lifecycle_stage: str = "production"
     forecaster_lifecycle_stage: str = "production"
-    gpu_enabled: bool = False
     max_wall_time_hours: int = 4
 
     # ------------------------------------------------------------------ #

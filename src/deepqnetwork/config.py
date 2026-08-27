@@ -45,17 +45,13 @@ class DQNConfig:
     # Network
     hidden_dims: list[int] = field(default_factory=lambda: [256, 256, 128])
     activation: str = "relu"
-    layer_norm: bool = True
     dropout: float = 0.0
-    dueling: bool = False
     learning_rate: float = 1e-4
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
     weight_decay: float = 0.0
     grad_clip_norm: float = 10.0
     loss_function: str = "huber"
-    use_double: bool = True         # Double DQN: use online net for action selection, target for eval
-    reward_normalize: bool = True   # scale rewards by a running RMS (sign-preserving) for value stability
 
     # Training
     # Episode-count knobs are mode-specific and mutually exclusive; both default
@@ -147,8 +143,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grad-clip-norm", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--dropout", type=float, default=None)
-    parser.add_argument("--dueling", action="store_true", default=None)
-    parser.add_argument("--use-double", action="store_true", default=None, dest="use_double")
     parser.add_argument("--num-episodes-per-range", dest="num_episodes_per_range", type=int, default=None)
     parser.add_argument("--repeats-per-date", dest="repeats_per_date", type=int, default=None)
     parser.add_argument("--max-steps-per-episode", type=int, default=None)
@@ -190,7 +184,6 @@ _CLI_TO_CONFIG = {
     "grad_clip_norm": "grad_clip_norm",
     "weight_decay": "weight_decay",
     "dropout": "dropout",
-    "dueling": "dueling",
     "num_episodes_per_range": "num_episodes_per_range",
     "repeats_per_date": "repeats_per_date",
     "max_steps_per_episode": "max_steps_per_episode",
@@ -199,8 +192,6 @@ _CLI_TO_CONFIG = {
     "log_interval": "log_interval",
     "progress_log_interval": "progress_log_interval",
     "loss_function": "loss_function",
-    "use_double": "use_double",
-    "reward_normalize": "reward_normalize",
 }
 
 

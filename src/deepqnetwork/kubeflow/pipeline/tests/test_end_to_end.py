@@ -185,34 +185,6 @@ class TestBuildPipelineConfig:
         assert params["training_mode"] == "scratch"
         assert params["model_registry_url"] == MODEL_REGISTRY_URL
 
-    def test_katib_params_override_learning_rate(self):
-        """Katib best params override learning rate when enabled."""
-        katib_params = json.dumps({"learning_rate": 0.005, "batch_size": 128})
-        params = build_dqn_pipeline_e2e_config(
-            symbol="USDJPY",
-            date_start="2024-01-01",
-            date_end="2024-02-01",
-            learning_rate=1e-4,
-            batch_size=64,
-            katib_enabled=True,
-            katib_best_params_json=katib_params,
-        )
-        assert params["learning_rate"] == 0.005
-        assert params["batch_size"] == 128
-
-    def test_katib_disabled_ignores_params(self):
-        """Katib params are ignored when katib_enabled=False."""
-        katib_params = json.dumps({"learning_rate": 0.005})
-        params = build_dqn_pipeline_e2e_config(
-            symbol="USDJPY",
-            date_start="2024-01-01",
-            date_end="2024-02-01",
-            learning_rate=1e-4,
-            katib_enabled=False,
-            katib_best_params_json=katib_params,
-        )
-        assert params["learning_rate"] == 1e-4
-
     def test_finetune_mode_overrides_lr_and_episodes(self):
         """Finetune mode uses reduced LR and fewer episodes."""
         params = build_dqn_pipeline_e2e_config(
@@ -257,25 +229,6 @@ class TestBuildPipelineConfig:
                 date_end="2024-02-01",
                 learning_rate=0.1,  # Too high
             )
-
-    def test_katib_overrides_within_valid_range(self):
-        """Katib params within valid range produce valid config."""
-        katib_params = json.dumps({
-            "learning_rate": 0.001,
-            "batch_size": 32,
-        })
-        params = build_dqn_pipeline_e2e_config(
-            symbol="AUDJPY",
-            date_start="2024-01-01",
-            date_end="2024-02-01",
-            katib_enabled=True,
-            katib_best_params_json=katib_params,
-        )
-        assert params["symbol"] == "AUDJPY"
-        assert params["learning_rate"] == 0.001
-        assert params["batch_size"] == 32
-        assert params["katib_enabled"] is True
-
 
 # ---------------------------------------------------------------------------
 # Tests for constants
