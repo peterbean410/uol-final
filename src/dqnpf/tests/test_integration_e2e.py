@@ -11,17 +11,17 @@ import logging
 
 import pytest
 
-from tradingmodel.intraday.dqnpf import backtest
-from tradingmodel.intraday.dqnpf.backtest import (
+from dqnpf import backtest
+from dqnpf.backtest import (
     StepRecord,
     compare_results,
     validate_thresholds,
 )
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
-from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
-from tradingmodel.intraday.dqnpf.tests._mocks import (
+from dqnpf.config import IntegrationConfig
+from dqnpf.forecaster_bridge import ForecasterBridge
+from dqnpf.integration import IntegrationLayer
+from dqnpf.signal_cache import SignalCache
+from dqnpf.tests._mocks import (
     FakeActionResult,
     MockBridge,
     MockDQN,
@@ -84,7 +84,7 @@ def test_end_to_end_loop_drives_all_components(caplog: pytest.LogCaptureFixture)
     bridge = MockBridge(signal_script=[(0.0, 5.0), (0.0, 5.0), (0.0, 5.0)])
     cache = SignalCache()
 
-    with caplog.at_level(logging.INFO, logger="tradingmodel.intraday.dqnpf.integration"):
+    with caplog.at_level(logging.INFO, logger="dqnpf.integration"):
         integration = IntegrationLayer(
             dqn=dqn, forecaster_bridge=bridge, signal_cache=cache, config=config
         )

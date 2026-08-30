@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.integration import ScreenedAction
-from tradingmodel.intraday.dqnpf.tests.conftest import FakeActionResult, make_layer
+from dqnpf.integration import ScreenedAction
+from dqnpf.tests.conftest import FakeActionResult, make_layer
 
 
 def test_construction_with_all_fields() -> None:

@@ -107,7 +107,7 @@ class DqnpfKFPTrigger:
 
         Requirements: 23.5, 23.6
         """
-        from tradingmodel.intraday.dqnpf.kubeflow.pipeline.dqnpf_pipeline import (
+        from dqnpf.kubeflow.pipeline.dqnpf_pipeline import (
             dqnpf_intraday_pipeline,
         )
 
@@ -232,7 +232,7 @@ def check_parent_models_available(
 
     Requirements: 23.6
     """
-    from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
+    from dqnpf.kubeflow.registry.registry_client import (
         resolve_production_checkpoint,
     )
 

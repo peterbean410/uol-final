@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import torch
 
-from tradingmodel.intraday.dqnpf.forecaster_bridge import (
+from dqnpf.forecaster_bridge import (
     BPS_PER_UNIT,
     FEATURE_DIM,
     LOOKBACK_WINDOW,

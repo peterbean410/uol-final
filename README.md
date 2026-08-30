@@ -73,6 +73,47 @@ tools/                      export_public.sh, scan_secrets.sh
 | how promotion is gated | `src/deepqnetwork/kubeflow/components/dqn_backtest/component.py` |
 | the user-facing advisor | `src/feature-prototype/telegram_advisor_bot.py`, `llm.py` |
 
+## Running the code
+
+Verified from a clean clone on macOS with Python 3.11 and Rust 1.91.
+
+**Rust; the market environment.** No setup beyond a toolchain:
+
+```bash
+cd src/modelenv && cargo test --workspace     # 500 tests pass
+```
+
+**Python.** The gRPC stubs are build output and are not committed, so generate
+them once, then install whichever component you want to run:
+
+```bash
+./tools/gen_protos.sh                          # -> src/environment_pb2*.py
+pip install -r src/deepqnetwork/requirements.txt
+pip install -r src/dqnpf/requirements.txt
+cd src && python -m pytest deepqnetwork dqnpf -q
+```
+
+Everything is imported from `src/`, which is the package root.
+
+**What runs standalone:** the environment, the agent and network, the forecaster
+model and its training/evaluation code, the integration layer and its
+profitability gate, the backtest metric and threshold helpers, and the feature
+prototype, 141 of 191 modules import with no external services.
+
+**What does not:** the Airflow DAGs (`*/dags/`, `*/airflow/`) are definitions
+deployed *into* an Airflow instance rather than pip-installed, so they need one
+to import; the KServe predictors and registry clients need `kserve` and
+`model-registry`, pinned in the per-component requirements under
+`kubeflow/serving/` and `kubeflow/base/`; and anything that resolves a
+checkpoint, reads a market-data snapshot or places an order needs the S3 bucket,
+the model registry and the broker account, none of which ship here.
+
+**Known test failures**, present before and after the flag removal and unrelated
+to it: 6 in `deepqnetwork` (stale expected defaults in `test_config.py`, plus two
+image-manifest checks that assume the built container) and 8 in `dqnpf` (KServe
+predictor property tests needing the serving stack). On macOS the Rust *doctests*
+additionally need a working Xcode SDK; the unit and integration tests do not.
+
 ## Notes on this repository
 
 This is a **curated export** of a larger private working repository, produced by

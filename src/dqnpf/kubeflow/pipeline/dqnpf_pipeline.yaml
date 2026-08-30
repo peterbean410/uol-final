@@ -58,7 +58,7 @@ deploymentSpec:
         command:
         - python
         - -m
-        - tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest
+        - dqnpf.kubeflow.components.dqnpf_backtest
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-backtest:latest
 pipelineInfo:
   description: 'Combined DQN + ProbabilisticForecaster intraday integration: runs

@@ -7,8 +7,8 @@ using a probabilistic forecaster's uncertainty (σ) plus risk budgets, and the
 earning its keep.
 
 It reuses the **production code unchanged**,
-`tradingmodel.intraday.dqnpf.integration.IntegrationLayer` (screen + gate),
-the `tradingmodel.intraday.dqnpf.backtest` pure helpers (`compare_results`,
+`dqnpf.integration.IntegrationLayer` (screen + gate),
+the `dqnpf.backtest` pure helpers (`compare_results`,
 `validate_thresholds`, `forecaster_position`, `StepRecord`), the action mapper and
 config, and the production `deepqnetwork.network.QNetwork` architecture for the
 agent. Only the *replay loop* (`engine.py`) and the compact DQN trainer

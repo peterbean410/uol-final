@@ -66,7 +66,7 @@ with DAG(
 
     def _check_parents(**context):
         """Fail fast if either parent model has no production version."""
-        from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+        from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
             check_parent_models_available,
         )
 
@@ -79,7 +79,7 @@ with DAG(
 
     def _submit_weekly_backtest(**context):
         """Submit dqnpf-intraday pipeline run for the walk-forward window."""
-        from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+        from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
             DqnpfKFPTrigger,
         )
 
@@ -123,7 +123,7 @@ with DAG(
 
     def _check_parents_revalidate(**context):
         """Fail fast if either parent model has no production version."""
-        from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+        from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
             check_parent_models_available,
         )
 
@@ -142,7 +142,7 @@ with DAG(
 
         Requirements: 23.6
         """
-        from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+        from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
             DqnpfKFPTrigger,
         )
 

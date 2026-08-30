@@ -1,7 +1,7 @@
 """Per-date episode-window generation shared by DQN training and evaluation.
 
 Both the DQN training loop (``deepqnetwork/train.py``) and the DQNPF intraday
-backtest (``tradingmodel/intraday/dqnpf/backtest.py``) slice a calendar date
+backtest (``dqnpf/backtest.py``) slice a calendar date
 range into one episode per date, each bounded by an hour-of-day window. Keeping
 this in one place guarantees the backtest evaluates the policy on the *same*
 session windows it trained on (see the train/eval parity requirement).

@@ -20,10 +20,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from deepqnetwork.episode_windows import iter_date_episodes
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
-from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
+from dqnpf.config import IntegrationConfig
+from dqnpf.forecaster_bridge import ForecasterBridge
+from dqnpf.integration import IntegrationLayer
+from dqnpf.signal_cache import SignalCache
 
 logger = logging.getLogger(__name__)
 

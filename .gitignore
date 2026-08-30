@@ -246,3 +246,7 @@ criterion/
 Thumbs.db
 *.swp
 *~
+
+# Generated gRPC stubs, produced by tools/gen_protos.sh
+/src/environment_pb2.py
+/src/environment_pb2_grpc.py

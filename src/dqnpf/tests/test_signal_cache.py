@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tradingmodel.intraday.dqnpf.signal_cache import CachedSignal, SignalCache
+from dqnpf.signal_cache import CachedSignal, SignalCache
 
 
 def _const(mu: float, sigma: float):

@@ -12,14 +12,14 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from tradingmodel.intraday.dqnpf.action_mapper import (
+from dqnpf.action_mapper import (
     ACTION_NAMES,
     Direction,
     map_action,
 )
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
-from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
+from dqnpf.config import IntegrationConfig
+from dqnpf.forecaster_bridge import ForecasterBridge
+from dqnpf.signal_cache import SignalCache
 
 logger = logging.getLogger(__name__)
 

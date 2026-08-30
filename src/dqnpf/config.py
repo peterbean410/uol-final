@@ -170,7 +170,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=str,
-        default="tradingmodel/intraday/dqnpf/config.yaml",
+        default="dqnpf/config.yaml",
         help="Path to YAML configuration file",
     )
     parser.add_argument("--symbol", type=str, default=None)

@@ -42,13 +42,13 @@ import data as data_mod  # noqa: E402
 import llm  # noqa: E402
 import signals as sig_mod  # noqa: E402
 from policy import InferencePolicy, ReplayTradingEnv  # noqa: E402
-from tradingmodel.intraday.dqnpf.action_mapper import ACTION_NAMES  # noqa: E402
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig  # noqa: E402
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer  # noqa: E402
+from dqnpf.action_mapper import ACTION_NAMES  # noqa: E402
+from dqnpf.config import IntegrationConfig  # noqa: E402
+from dqnpf.integration import IntegrationLayer  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("tg-advisor")
-logging.getLogger("tradingmodel.intraday.dqnpf.integration").setLevel(logging.WARNING)
+logging.getLogger("dqnpf.integration").setLevel(logging.WARNING)
 
 VARIANCE_THRESHOLD = 3.0
 DIRECTIONAL_TOLERANCE = 1.0

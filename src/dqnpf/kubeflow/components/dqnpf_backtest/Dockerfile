@@ -9,9 +9,9 @@ FROM ${DQNPF_INTRADAY_BASE}
 LABEL component="dqnpf-intraday-backtest"
 
 # The component module is shipped inside the base image (installed from
-# tradingmodel/intraday/dqnpf), so no extra COPY is needed for code. The
+# dqnpf), so no extra COPY is needed for code. The
 # component CLI entry point lives at
-# tradingmodel/intraday/dqnpf/kubeflow/components/dqnpf_backtest/__main__.py.
+# dqnpf/kubeflow/components/dqnpf_backtest/__main__.py.
 #
 # Pipeline-level config: the KFP pipeline DSL passes
 # `--integration-config-yaml /etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml`
@@ -19,7 +19,7 @@ LABEL component="dqnpf-intraday-backtest"
 # default works out-of-the-box. Run-time overrides (e.g. mounting a
 # ConfigMap at the same path, or passing a different --integration-config-yaml)
 # still take precedence.
-COPY tradingmodel/intraday/dqnpf/kubeflow/pipeline/config/dqnpf_pipeline_config.yaml \
+COPY dqnpf/kubeflow/pipeline/config/dqnpf_pipeline_config.yaml \
      /etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml
 
-ENTRYPOINT ["python", "-m", "tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest"]
+ENTRYPOINT ["python", "-m", "dqnpf.kubeflow.components.dqnpf_backtest"]

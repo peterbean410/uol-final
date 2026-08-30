@@ -5,9 +5,9 @@ lightweight consumers (pipeline DSL compilation in CI, config inspection)
 don't pay the cost of importing numpy/torch via forecaster_bridge etc.
 Use the explicit module paths:
 
-    from tradingmodel.intraday.dqnpf.action_mapper import map_action, ACTION_MAP
-    from tradingmodel.intraday.dqnpf.config import IntegrationConfig, load_config
-    from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
-    from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
-    from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
+    from dqnpf.action_mapper import map_action, ACTION_MAP
+    from dqnpf.config import IntegrationConfig, load_config
+    from dqnpf.forecaster_bridge import ForecasterBridge
+    from dqnpf.integration import IntegrationLayer
+    from dqnpf.signal_cache import SignalCache
 """

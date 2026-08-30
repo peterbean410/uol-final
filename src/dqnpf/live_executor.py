@@ -285,7 +285,7 @@ def run_live_executor(
 
 
 def main() -> int:
-    """Entry point: ``python -m tradingmodel.intraday.dqnpf.live_executor``."""
+    """Entry point: ``python -m dqnpf.live_executor``."""
     import signal
 
     logging.basicConfig(

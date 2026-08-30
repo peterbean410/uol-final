@@ -4,10 +4,10 @@ This is the heart of the prototype: it produces ``StepRecord`` streams for the
 combined (DQN -> screen), DQN-only baseline, and forecaster-only arms by
 replaying a price slice, and it does so using the production code unchanged,
 
-* ``tradingmodel.intraday.dqnpf.integration.IntegrationLayer`` (screen + gate),
-* ``tradingmodel.intraday.dqnpf.backtest`` pure helpers (compare_results,
+* ``dqnpf.integration.IntegrationLayer`` (screen + gate),
+* ``dqnpf.backtest`` pure helpers (compare_results,
   validate_thresholds, forecaster_position, StepRecord),
-* ``tradingmodel.intraday.dqnpf.action_mapper`` / ``config``.
+* ``dqnpf.action_mapper`` / ``config``.
 
 Only the *replay loop* is new; it stands in for ``backtest._run_episode``'s gRPC
 loop, mirroring its arm logic (one session per UTC day, per-day budget reset,
@@ -21,8 +21,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from tradingmodel.intraday.dqnpf.action_mapper import ACTION_NAMES
-from tradingmodel.intraday.dqnpf.backtest import (
+from dqnpf.action_mapper import ACTION_NAMES
+from dqnpf.backtest import (
     BacktestComparison,
     StepRecord,
     ThresholdReport,
@@ -30,8 +30,8 @@ from tradingmodel.intraday.dqnpf.backtest import (
     forecaster_position,
     validate_thresholds,
 )
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
+from dqnpf.config import IntegrationConfig
+from dqnpf.integration import IntegrationLayer
 
 logger = logging.getLogger(__name__)
 

@@ -59,7 +59,7 @@ implementation:
     command:
       - python
       - -m
-      - tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest
+      - dqnpf.kubeflow.components.dqnpf_backtest
     args:
       - --integration-config-yaml
       - { inputValue: integration_config_yaml }
@@ -77,5 +77,5 @@ implementation:
       - { inputValue: swap_rate_short }
 
 # Retry policy and resource requests are applied at pipeline-definition time
-# (see tradingmodel/intraday/dqnpf/kubeflow/pipeline/dqnpf_pipeline.py, Task 29).
+# (see dqnpf/kubeflow/pipeline/dqnpf_pipeline.py, Task 29).
 # Defaults: retry(3) on transient failure; CPU-only (no GPU); 2 vCPU / 4Gi mem.

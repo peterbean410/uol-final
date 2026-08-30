@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig, load_config
+from dqnpf.config import IntegrationConfig, load_config
 
 
 # ---------------------------------------------------------------------------

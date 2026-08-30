@@ -36,7 +36,7 @@ class DQNLifecycleManager:
 
     Promotion to ``production`` is registry-metadata-only. The dqnpf-intraday
     InferenceService's hot-reload watcher (see
-    ``tradingmodel/intraday/dqnpf/kubeflow/serving/dqnpf_predictor.py``) is the
+    ``dqnpf/kubeflow/serving/dqnpf_predictor.py``) is the
     consumer that swaps in the new checkpoint at serving time.
     """
 

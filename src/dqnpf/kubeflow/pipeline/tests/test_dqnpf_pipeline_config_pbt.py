@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 from hypothesis import given, strategies as st
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig, load_config
-from tradingmodel.intraday.dqnpf.kubeflow.pipeline.config_schema import (
+from dqnpf.config import IntegrationConfig, load_config
+from dqnpf.kubeflow.pipeline.config_schema import (
     DqnpfPipelineConfig,
 )
 

@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.tune import (
+from dqnpf.config import IntegrationConfig
+from dqnpf.tune import (
     DEFAULT_GRID,
     GridPoint,
     GridResult,

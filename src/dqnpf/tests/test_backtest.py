@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.backtest import (
+from dqnpf.config import IntegrationConfig
+from dqnpf.backtest import (
     BacktestComparison,
     StepRecord,
     ThresholdReport,

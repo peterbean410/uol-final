@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.action_mapper import (
+from dqnpf.action_mapper import (
     ACTION_NAMES,
     Direction,
     map_action,

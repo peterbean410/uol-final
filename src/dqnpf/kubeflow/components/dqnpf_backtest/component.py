@@ -7,7 +7,7 @@ Responsibilities (Requirement 21):
 2. Launch ``modelenv-server`` as a subprocess sidecar (mounting the warm
    modelenv-cache PVC) and wait for the gRPC server to come up on
    ``localhost:50051``.
-3. Invoke :func:`tradingmodel.intraday.dqnpf.backtest.run_backtest` and then
+3. Invoke :func:`dqnpf.backtest.run_backtest` and then
    :func:`validate_thresholds`.
 4. Write a single JSON artifact at the KFP output path containing the
    comparison, threshold report, and the integration config used.
@@ -35,14 +35,14 @@ from urllib.parse import urlparse
 
 import yaml
 
-from tradingmodel.intraday.dqnpf import backtest
-from tradingmodel.intraday.dqnpf.backtest import (
+from dqnpf import backtest
+from dqnpf.backtest import (
     BacktestComparison,
     ThresholdReport,
     validate_thresholds,
 )
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.kubeflow.pipeline.config_schema import (
+from dqnpf.config import IntegrationConfig
+from dqnpf.kubeflow.pipeline.config_schema import (
     DqnpfPipelineConfig,
 )
 
@@ -316,7 +316,7 @@ def _default_checkpoint_resolver(model_name: str, lifecycle_stage: str) -> str:
     """
     import os
 
-    from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
+    from dqnpf.kubeflow.registry.registry_client import (
         resolve_production_checkpoint,
     )
 

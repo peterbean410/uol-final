@@ -12,7 +12,7 @@ arm cannot be produced here; its result is published in the preliminary report
 and stands as written there, including the deflated Sharpe ratio, which was
 deflated over the three trials run then, not the two run here.
 
-Usage (from the forex repo root, so deepqnetwork/tradingmodel import):
+Usage (run from `src/`, so `deepqnetwork` and `dqnpf` are importable):
     python -m preliminaryreport.prototype.run            # or:
     python preliminaryreport/prototype/run.py
 """
@@ -46,7 +46,7 @@ import signals as sig_mod  # noqa: E402
 import stats_tests  # noqa: E402
 from policy import InferencePolicy, ReplayTradingEnv  # noqa: E402
 from engine import run_arms  # noqa: E402
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig  # noqa: E402
+from dqnpf.config import IntegrationConfig  # noqa: E402
 
 logger = logging.getLogger("prototype")
 
@@ -230,7 +230,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     # The integration layer logs every budget-exhausted suppression at INFO; quiet
     # it so the prototype's own progress is readable.
-    logging.getLogger("tradingmodel.intraday.dqnpf.integration").setLevel(logging.WARNING)
+    logging.getLogger("dqnpf.integration").setLevel(logging.WARNING)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 

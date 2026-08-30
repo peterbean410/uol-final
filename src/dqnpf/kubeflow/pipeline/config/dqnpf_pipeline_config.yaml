@@ -1,5 +1,5 @@
 # dqnpf-intraday Pipeline Configuration, Default Values
-# Mirrors tradingmodel/intraday/dqnpf/config.yaml plus pipeline-level fields.
+# Mirrors dqnpf/config.yaml plus pipeline-level fields.
 
 # --- Mirrored IntegrationConfig fields ---
 symbol: "USDJPY"

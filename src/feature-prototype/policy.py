@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from tradingmodel.intraday.dqnpf.action_mapper import Direction, map_action
+from dqnpf.action_mapper import Direction, map_action
 
 ACTION_DIM = 5
 HOLD, BUY_1, BUY_2, SELL_1, SELL_2 = 0, 1, 2, 3, 4

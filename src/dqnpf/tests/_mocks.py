@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from tradingmodel.intraday.dqnpf.action_mapper import ACTION_NAMES
+from dqnpf.action_mapper import ACTION_NAMES
 
 
 # ---------------------------------------------------------------------------

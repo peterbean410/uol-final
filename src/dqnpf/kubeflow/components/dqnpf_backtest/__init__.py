@@ -1,6 +1,6 @@
 """dqnpf_backtest KFP component."""
 
-from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.component import (
+from dqnpf.kubeflow.components.dqnpf_backtest.component import (
     run_dqnpf_backtest,
 )
 

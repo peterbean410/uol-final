@@ -15,7 +15,7 @@ from pathlib import Path
 
 from hypothesis import given, settings, strategies as st
 
-from tradingmodel.intraday.dqnpf.kubeflow.pipeline.dqnpf_pipeline import (
+from dqnpf.kubeflow.pipeline.dqnpf_pipeline import (
     DEFAULT_IR_PATH,
     PIPELINE_NAME,
     compile_pipeline,
@@ -53,7 +53,7 @@ def test_shipped_ir_yaml_matches_fresh_compile(tmp_path) -> None:
     compile_pipeline(fresh)
     assert DEFAULT_IR_PATH.exists(), (
         f"shipped IR YAML missing at {DEFAULT_IR_PATH}; run "
-        "`python -m tradingmodel.intraday.dqnpf.kubeflow.pipeline.dqnpf_pipeline`"
+        "`python -m dqnpf.kubeflow.pipeline.dqnpf_pipeline`"
     )
     assert _digest(fresh) == _digest(DEFAULT_IR_PATH), (
         "shipped dqnpf_pipeline.yaml is stale, re-run compile_pipeline()"

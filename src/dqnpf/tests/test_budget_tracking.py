@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.tests.conftest import FakeActionResult, make_layer
+from dqnpf.tests.conftest import FakeActionResult, make_layer
 
 
 @pytest.mark.parametrize(

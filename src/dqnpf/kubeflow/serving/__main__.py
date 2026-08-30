@@ -27,7 +27,7 @@ from pathlib import Path
 
 import kserve
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
+from dqnpf.config import IntegrationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ def main() -> None:
     logger.info("Loaded configs for symbols: %s", list(configs.keys()))
 
     # Instantiate predictor
-    from tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor import (
+    from dqnpf.kubeflow.serving.dqnpf_predictor import (
         DqnpfIntradayPredictor,
     )
 

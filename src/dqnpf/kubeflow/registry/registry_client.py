@@ -17,8 +17,8 @@ from urllib.parse import urlsplit
 
 from model_registry import ModelRegistry
 
-from tradingmodel.intraday.dqnpf.backtest import BacktestComparison, ThresholdReport
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
+from dqnpf.backtest import BacktestComparison, ThresholdReport
+from dqnpf.config import IntegrationConfig
 
 
 class DqnpfRegistryClient:

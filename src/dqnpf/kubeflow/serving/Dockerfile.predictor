@@ -2,11 +2,11 @@
 #
 # Extends the dqnpf-intraday-base image (which already provides PyTorch,
 # grpcio, environment_pb2, modelenv binary, deepqnetwork, probabilisticforecaster,
-# and tradingmodel.intraday.dqnpf installed as a package) with the kserve
+# and dqnpf installed as a package) with the kserve
 # runtime and the serving entry point.
 #
 # The base image already includes the serving module source (it copies the
-# entire tradingmodel/intraday/dqnpf/ tree). This Dockerfile overlays the
+# entire dqnpf/ tree). This Dockerfile overlays the
 # latest serving code to allow predictor rebuilds without rebuilding the base.
 #
 # Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:<sha>
@@ -24,7 +24,7 @@ WORKDIR /app
 # pyasn) build C extensions during install, install gcc + python headers
 # just for this layer and purge them in the same RUN so the resulting
 # layer doesn't ship the toolchain.
-COPY tradingmodel/intraday/dqnpf/kubeflow/serving/requirements.txt /app/serving-requirements.txt
+COPY dqnpf/kubeflow/serving/requirements.txt /app/serving-requirements.txt
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc python3-dev \
     && pip install --no-cache-dir -r /app/serving-requirements.txt \
@@ -32,14 +32,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Overlay the latest serving module code on top of the base image's copy of
-# tradingmodel/. This allows predictor image rebuilds without rebuilding the
-# base, while keeping the import path (`tradingmodel.intraday.dqnpf.kubeflow.
+# dqnpf/. This allows predictor image rebuilds without rebuilding the
+# base, while keeping the import path (`dqnpf.kubeflow.
 # serving`) resolvable from PYTHONPATH=/app set in the base image.
-COPY tradingmodel/intraday/dqnpf/kubeflow/serving/ /app/tradingmodel/intraday/dqnpf/kubeflow/serving/
+COPY dqnpf/kubeflow/serving/ /app/dqnpf/kubeflow/serving/
 
 # Build-time import smoke test (Requirements 20.1, 22.1)
 RUN python -c "import kserve; \
-from tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor import DqnpfIntradayPredictor; \
+from dqnpf.kubeflow.serving.dqnpf_predictor import DqnpfIntradayPredictor; \
 print('dqnpf-intraday-predictor import smoke OK')"
 
 # KServe default HTTP port
@@ -48,4 +48,4 @@ EXPOSE 8080
 ENV PYTHONUNBUFFERED=1
 ENV MODEL_NAME=dqnpf-intraday
 
-ENTRYPOINT ["python", "-m", "tradingmodel.intraday.dqnpf.kubeflow.serving"]
+ENTRYPOINT ["python", "-m", "dqnpf.kubeflow.serving"]

@@ -102,10 +102,10 @@ class TestPreconditionFailsFastOnMissingParent:
         with patch.dict(
             sys.modules,
             {
-                "tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client": mock_registry_module,
+                "dqnpf.kubeflow.registry.registry_client": mock_registry_module,
             },
         ):
-            from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+            from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
                 check_parent_models_available,
             )
 
@@ -142,10 +142,10 @@ class TestPreconditionFailsFastOnMissingParent:
         with patch.dict(
             sys.modules,
             {
-                "tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client": mock_registry_module,
+                "dqnpf.kubeflow.registry.registry_client": mock_registry_module,
             },
         ):
-            from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+            from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
                 check_parent_models_available,
             )
 
@@ -180,10 +180,10 @@ class TestPreconditionFailsFastOnMissingParent:
         with patch.dict(
             sys.modules,
             {
-                "tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client": mock_registry_module,
+                "dqnpf.kubeflow.registry.registry_client": mock_registry_module,
             },
         ):
-            from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+            from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
                 check_parent_models_available,
             )
 
@@ -228,11 +228,11 @@ class TestParameterForwarding:
         episode_end_ts = episode_start_ts + 86400  # 1 day later
 
         with patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
         ) as mock_client_cls, patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.tenacity.nap.time"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.tenacity.nap.time"
         ), patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.logger"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.logger"
         ):
             mock_client = MagicMock()
             mock_client_cls.return_value = mock_client
@@ -241,7 +241,7 @@ class TestParameterForwarding:
             mock_run.run_id = "dqnpf-revalidate-run-001"
             mock_client.create_run_from_pipeline_func.return_value = mock_run
 
-            from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+            from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
                 DqnpfKFPTrigger,
             )
 
@@ -286,11 +286,11 @@ class TestParameterForwarding:
         episode_end_ts = episode_start_ts + 3600
 
         with patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
         ) as mock_client_cls, patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.tenacity.nap.time"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.tenacity.nap.time"
         ), patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.logger"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.logger"
         ):
             mock_client = MagicMock()
             mock_client_cls.return_value = mock_client
@@ -299,7 +299,7 @@ class TestParameterForwarding:
             mock_run.run_id = "dqnpf-revalidate-run-002"
             mock_client.create_run_from_pipeline_func.return_value = mock_run
 
-            from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+            from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
                 DqnpfKFPTrigger,
             )
 
@@ -346,11 +346,11 @@ class TestParameterForwarding:
         **Validates: Requirements 23.6**
         """
         with patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
         ) as mock_client_cls, patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.tenacity.nap.time"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.tenacity.nap.time"
         ), patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils.logger"
+            "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.logger"
         ):
             mock_client = MagicMock()
             mock_client_cls.return_value = mock_client
@@ -359,7 +359,7 @@ class TestParameterForwarding:
             mock_run.run_id = "dqnpf-weekly-run-001"
             mock_client.create_run_from_pipeline_func.return_value = mock_run
 
-            from tradingmodel.intraday.dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
+            from dqnpf.kubeflow.airflow.dqnpf_kfp_utils import (
                 DqnpfKFPTrigger,
             )
 

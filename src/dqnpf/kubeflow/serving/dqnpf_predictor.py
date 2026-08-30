@@ -38,10 +38,10 @@ from deepqnetwork.preprocessor import StatePreprocessor
 from probabilisticforecaster.config import ForecasterConfig
 from probabilisticforecaster.inference import ForecasterInference
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.forecaster_bridge import ForecasterBridge
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer, ScreenedAction
-from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
+from dqnpf.config import IntegrationConfig
+from dqnpf.forecaster_bridge import ForecasterBridge
+from dqnpf.integration import IntegrationLayer, ScreenedAction
+from dqnpf.signal_cache import SignalCache
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +263,7 @@ class DqnpfIntradayPredictor(kserve.Model):
         Returns:
             True when the model is ready to serve.
         """
-        from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
+        from dqnpf.kubeflow.registry.registry_client import (
             resolve_production_checkpoint,
         )
 
@@ -454,7 +454,7 @@ class DqnpfIntradayPredictor(kserve.Model):
                 break
 
             try:
-                from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
+                from dqnpf.kubeflow.registry.registry_client import (
                     resolve_production_checkpoint,
                 )
 

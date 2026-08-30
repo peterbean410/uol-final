@@ -7,7 +7,7 @@ JSON artifact containing the ``BacktestComparison`` and ``ThresholdReport``.
 
 The pipeline has no training step; the integration layer has no learnable
 parameters. Threshold tuning happens offline via
-``tradingmodel/intraday/dqnpf/backtest.py``; the resulting frozen thresholds
+``dqnpf/backtest.py``; the resulting frozen thresholds
 are committed to ``config/dqnpf_pipeline_config.yaml``.
 
 Requirements: 21.1
@@ -108,7 +108,7 @@ def dqnpf_backtest(
         command=[
             "python",
             "-m",
-            "tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest",
+            "dqnpf.kubeflow.components.dqnpf_backtest",
         ],
         args=[
             "--integration-config-yaml",

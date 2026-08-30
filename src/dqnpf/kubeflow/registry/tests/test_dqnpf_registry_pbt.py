@@ -26,8 +26,8 @@ sys.modules["model_registry.types"] = MagicMock()
 from hypothesis import given, settings, HealthCheck, assume
 from hypothesis import strategies as st
 
-from tradingmodel.intraday.dqnpf.backtest import BacktestComparison, ThresholdReport
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
+from dqnpf.backtest import BacktestComparison, ThresholdReport
+from dqnpf.config import IntegrationConfig
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ class FakeModelRegistry:
 # Import the registry client (after mocking model_registry)
 # ---------------------------------------------------------------------------
 
-from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
+from dqnpf.kubeflow.registry.registry_client import (
     DqnpfRegistryClient,
     resolve_production_checkpoint,
 )
@@ -140,7 +140,7 @@ from tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client import (
 def create_test_client() -> DqnpfRegistryClient:
     """Create a DqnpfRegistryClient backed by the in-memory fake."""
     with patch(
-        "tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client.ModelRegistry",
+        "dqnpf.kubeflow.registry.registry_client.ModelRegistry",
         FakeModelRegistry,
     ):
         client = DqnpfRegistryClient(registry_url="http://fake:8080")
@@ -413,7 +413,7 @@ class TestProductionLookupReturnsLatest:
 
         # Resolve production checkpoint
         with patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client.ModelRegistry",
+            "dqnpf.kubeflow.registry.registry_client.ModelRegistry",
             FakeModelRegistry,
         ):
             # Use the client's internal registry for resolution

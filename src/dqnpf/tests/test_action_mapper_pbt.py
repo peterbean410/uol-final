@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from hypothesis import given, strategies as st
 
-from tradingmodel.intraday.dqnpf.action_mapper import (
+from dqnpf.action_mapper import (
     ACTION_MAP,
     Direction,
     map_action,

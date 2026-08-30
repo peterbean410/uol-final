@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.integration import IntegrationLayer
+from dqnpf.config import IntegrationConfig
+from dqnpf.integration import IntegrationLayer
 
 
 @dataclass

@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.integration import ScreenedAction
-from tradingmodel.intraday.dqnpf.tests.conftest import FakeActionResult, make_layer
+from dqnpf.integration import ScreenedAction
+from dqnpf.tests.conftest import FakeActionResult, make_layer
 
 
 def _a(idx: int) -> FakeActionResult:

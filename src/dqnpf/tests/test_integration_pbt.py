@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from hypothesis import HealthCheck, given, settings, strategies as st
 
-from tradingmodel.intraday.dqnpf.action_mapper import ACTION_MAP, Direction, map_action
-from tradingmodel.intraday.dqnpf.tests.conftest import FakeActionResult, make_layer
+from dqnpf.action_mapper import ACTION_MAP, Direction, map_action
+from dqnpf.tests.conftest import FakeActionResult, make_layer
 
 
 _VALID_REASONS = {"pass", "budget_exhausted", "directional_conflict"}

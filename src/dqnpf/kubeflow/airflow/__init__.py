@@ -7,5 +7,5 @@ GitDagBundle entry (for the Airflow HelmRelease in the FluxCD repo):
       type: git
       kwargs:
         tracking_ref: master
-        subdir: tradingmodel/intraday/dqnpf/kubeflow/airflow
+        subdir: dqnpf/kubeflow/airflow
 """

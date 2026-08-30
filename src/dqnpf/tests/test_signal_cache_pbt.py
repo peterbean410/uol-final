@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from hypothesis import given, strategies as st
 
-from tradingmodel.intraday.dqnpf.signal_cache import SignalCache
+from dqnpf.signal_cache import SignalCache
 
 
 _FINITE_FLOAT = st.floats(

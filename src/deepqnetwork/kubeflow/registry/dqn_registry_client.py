@@ -177,7 +177,7 @@ class DQNRegistryClient:
         lifecycle stage in the Model Registry. The dqnpf-intraday
         InferenceService picks up the new production-stage entry via its
         registry-polling hot-reload watcher (see
-        ``tradingmodel/intraday/dqnpf/kubeflow/serving/dqnpf_predictor.py``).
+        ``dqnpf/kubeflow/serving/dqnpf_predictor.py``).
         No KServe patching is performed here; the standalone DQN
         InferenceService was deprecated when serving moved to dqnpf-intraday
         (see kubeflow-ml-pipeline spec, Requirement 15).

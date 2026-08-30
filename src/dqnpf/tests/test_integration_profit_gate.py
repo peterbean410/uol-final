@@ -8,7 +8,7 @@ full window the screen defaults active.
 
 from __future__ import annotations
 
-from tradingmodel.intraday.dqnpf.tests.conftest import FakeActionResult, make_layer
+from dqnpf.tests.conftest import FakeActionResult, make_layer
 
 
 def _a(idx: int) -> FakeActionResult:

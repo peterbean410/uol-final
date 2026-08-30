@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
+from dqnpf.config import IntegrationConfig
 
 
 _INTEGRATION_FIELDS = {f.name for f in fields(IntegrationConfig)}
@@ -131,7 +131,7 @@ class DqnpfPipelineConfig:
         """Emit ``--flag value`` argv covering every ``IntegrationConfig`` field.
 
         The output is consumable by
-        :func:`tradingmodel.intraday.dqnpf.config.load_config` and reproduces
+        :func:`dqnpf.config.load_config` and reproduces
         the same ``IntegrationConfig`` when parsed back. ``None`` values are
         omitted (load_config falls back to YAML/defaults).
         """

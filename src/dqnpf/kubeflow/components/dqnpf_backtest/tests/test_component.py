@@ -3,7 +3,7 @@
 Validates the orchestration layer with the registry resolver and
 ``run_backtest`` injected as fakes; the heavy gRPC + checkpoint paths are
 out of scope for this layer (those are covered by the integration tests
-under ``tradingmodel/intraday/dqnpf/tests/test_integration_e2e.py``).
+under ``dqnpf/tests/test_integration_e2e.py``).
 """
 
 from __future__ import annotations
@@ -16,20 +16,20 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tradingmodel.intraday.dqnpf.backtest import BacktestComparison
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
-from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest import component
-from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.component import (
+from dqnpf.backtest import BacktestComparison
+from dqnpf.config import IntegrationConfig
+from dqnpf.kubeflow.components.dqnpf_backtest import component
+from dqnpf.kubeflow.components.dqnpf_backtest.component import (
     _build_integration_config,
     _load_pipeline_config,
     _serialise_result,
     _start_modelenv_sidecar,
     run_dqnpf_backtest,
 )
-from tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.__main__ import (
+from dqnpf.kubeflow.components.dqnpf_backtest.__main__ import (
     _build_parser,
 )
-from tradingmodel.intraday.dqnpf.kubeflow.pipeline.config_schema import (
+from dqnpf.kubeflow.pipeline.config_schema import (
     DqnpfPipelineConfig,
 )
 
@@ -131,7 +131,7 @@ def test_build_integration_config_applies_resolved_paths() -> None:
 
 def test_serialise_result_contains_required_sections() -> None:
     comparison = _passing_comparison()
-    from tradingmodel.intraday.dqnpf.backtest import validate_thresholds
+    from dqnpf.backtest import validate_thresholds
 
     report = validate_thresholds(comparison)
     cfg = IntegrationConfig()
@@ -414,7 +414,7 @@ def test_run_dqnpf_backtest_emits_summary_log(
 
     with caplog.at_level(
         logging.INFO,
-        logger="tradingmodel.intraday.dqnpf.kubeflow.components.dqnpf_backtest.component",
+        logger="dqnpf.kubeflow.components.dqnpf_backtest.component",
     ):
         run_dqnpf_backtest(
             integration_config_yaml=str(yaml_path),

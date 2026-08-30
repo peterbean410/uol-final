@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tradingmodel.intraday.dqnpf.live_executor import (
+from dqnpf.live_executor import (
     LiveExecutorConfig,
     decode_infer_response,
     parse_screened_action,

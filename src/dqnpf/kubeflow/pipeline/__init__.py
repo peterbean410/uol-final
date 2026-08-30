@@ -1,6 +1,6 @@
 """Pipeline definition and configuration for the dqnpf-intraday KFP pipeline."""
 
-from tradingmodel.intraday.dqnpf.kubeflow.pipeline.config_schema import (
+from dqnpf.kubeflow.pipeline.config_schema import (
     DqnpfPipelineConfig,
 )
 

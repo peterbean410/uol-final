@@ -30,10 +30,10 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import yaml
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig, load_config
+from dqnpf.config import IntegrationConfig, load_config
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from tradingmodel.intraday.dqnpf.backtest import (
+    from dqnpf.backtest import (
         BacktestComparison,
         ThresholdReport,
     )
@@ -100,7 +100,7 @@ def grid_search(
 
     if run_fn is None or validate_fn is None:
         # Lazy import: pulls torch via forecaster_bridge, so only at runtime.
-        from tradingmodel.intraday.dqnpf.backtest import (
+        from dqnpf.backtest import (
             run_backtest,
             validate_thresholds,
         )

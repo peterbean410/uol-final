@@ -55,14 +55,14 @@ def _stub_resolve_production_checkpoint(monkeypatch):
     """
     stub = MagicMock(return_value="/fake/checkpoint/path.pt")
     monkeypatch.setattr(
-        "tradingmodel.intraday.dqnpf.kubeflow.registry.registry_client."
+        "dqnpf.kubeflow.registry.registry_client."
         "resolve_production_checkpoint",
         stub,
     )
     yield stub
 
 
-from tradingmodel.intraday.dqnpf.config import IntegrationConfig
+from dqnpf.config import IntegrationConfig
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ def _build_predictor(
         for sym in symbols
     }
 
-    from tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor import (
+    from dqnpf.kubeflow.serving.dqnpf_predictor import (
         DqnpfIntradayPredictor,
     )
 
@@ -203,19 +203,19 @@ def _load_predictor_with_mocks(
 
     with (
         patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor.DQNAdvisor",
+            "dqnpf.kubeflow.serving.dqnpf_predictor.DQNAdvisor",
             return_value=mock_dqn,
         ),
         patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor.ForecasterInference",
+            "dqnpf.kubeflow.serving.dqnpf_predictor.ForecasterInference",
             return_value=mock_forecaster,
         ),
         patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor._ServingEnvClient",
+            "dqnpf.kubeflow.serving.dqnpf_predictor._ServingEnvClient",
             return_value=mock_env_client,
         ),
         patch(
-            "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor.StatePreprocessor",
+            "dqnpf.kubeflow.serving.dqnpf_predictor.StatePreprocessor",
         ) as mock_preprocessor_cls,
     ):
         # StatePreprocessor.process returns a tensor-like with .numpy()
@@ -508,15 +508,15 @@ def test_hot_reload_atomicity(
         """Perform hot-reload with mocked model constructors and bridge."""
         with (
             patch(
-                "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor.DQNAdvisor",
+                "dqnpf.kubeflow.serving.dqnpf_predictor.DQNAdvisor",
                 return_value=mock_dqn_new,
             ),
             patch(
-                "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor.ForecasterInference",
+                "dqnpf.kubeflow.serving.dqnpf_predictor.ForecasterInference",
                 return_value=mock_forecaster_new,
             ),
             patch(
-                "tradingmodel.intraday.dqnpf.kubeflow.serving.dqnpf_predictor.ForecasterBridge",
+                "dqnpf.kubeflow.serving.dqnpf_predictor.ForecasterBridge",
                 side_effect=_make_mock_bridge,
             ),
         ):
