@@ -1,7 +1,7 @@
 # Feature-prototype dependencies (pinned to the versions used for the report run).
 # The prototype also imports the production packages `deepqnetwork` and
 # `tradingmodel.intraday.dqnpf` from the forex repo root (put it on PYTHONPATH,
-# e.g. run from the repo root: `python finalreport/preliminaryreport/prototype/run.py`).
+# e.g. from src/: `PYTHONPATH=. python feature-prototype/run.py`).
 numpy==1.26.3
 pandas==2.1.4
 matplotlib==3.8.2

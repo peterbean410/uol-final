@@ -13,8 +13,7 @@ and stands as written there, including the deflated Sharpe ratio, which was
 deflated over the three trials run then, not the two run here.
 
 Usage (run from `src/`, so `deepqnetwork` and `dqnpf` are importable):
-    python -m preliminaryreport.prototype.run            # or:
-    python preliminaryreport/prototype/run.py
+    PYTHONPATH=. python feature-prototype/run.py     # from src/
 """
 
 from __future__ import annotations

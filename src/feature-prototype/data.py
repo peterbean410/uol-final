@@ -142,7 +142,7 @@ def _synthetic(n_bars: int, seed: int) -> pd.DataFrame:
 
 def load_usdjpy_m5(
     *,
-    cache_path: str | Path = "preliminaryreport/prototype/cache/usdjpy_m5.parquet",
+    cache_path: str | Path = "feature-prototype/cache/usdjpy_m5.parquet",
     start_date: str = DEFAULT_START,
     end_date: str = DEFAULT_END,
     synthetic_bars: int = 6000,

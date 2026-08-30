@@ -14,9 +14,9 @@ Config (never hard-coded), read from environment or a sibling ``.env`` file:
     TELEGRAM_BOT_TOKEN          (required)  BotFather token
     TELEGRAM_ALLOWED_CHAT_IDS   (optional)  comma-separated chat ids allowed to use it
 
-Run:
-    python telegram_advisor_bot.py            # start the polling bot
-    python telegram_advisor_bot.py --check     # verify the token (getMe) and exit
+Run from `src/` (so `dqnpf` resolves), not from this directory:
+    PYTHONPATH=. python feature-prototype/telegram_advisor_bot.py           # polling bot
+    PYTHONPATH=. python feature-prototype/telegram_advisor_bot.py --check   # verify token
 """
 
 from __future__ import annotations
@@ -380,8 +380,8 @@ def main() -> None:
         print(
             "TELEGRAM_BOT_TOKEN not set.\n"
             "  export TELEGRAM_BOT_TOKEN=<your BotFather token>\n"
-            "  (or put it in preliminaryreport/prototype/.env)\n"
-            "Then: python telegram_advisor_bot.py",
+            "  (or put it in feature-prototype/.env)\n"
+            "Then, from src/: PYTHONPATH=. python feature-prototype/telegram_advisor_bot.py",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -102,7 +102,7 @@ def fetch_ticks(
     end: datetime,
     *,
     point_divisor: float = 1000.0,
-    cache_dir: str | Path = "preliminaryreport/prototype/cache/dukascopy",
+    cache_dir: str | Path = "feature-prototype/cache/dukascopy",
     max_workers: int = 12,
 ) -> pd.DataFrame:
     """Download ticks for ``[start, end)`` and return a tidy tick DataFrame.

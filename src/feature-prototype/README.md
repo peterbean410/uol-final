@@ -27,7 +27,7 @@ whole thing runs on a laptop without the K8s/gRPC/S3 stack.
 From the **forex repo root** (so the production packages import):
 
 ```bash
-python finalreport/preliminaryreport/prototype/run.py
+cd src && PYTHONPATH=. python feature-prototype/run.py
 ```
 
 The first run downloads ~500 hourly tick files (~2.5M real ticks) and aggregates
@@ -36,8 +36,8 @@ are cached, so subsequent runs are instant. There is no training, so the run
 finishes in seconds. Pass `--no-network` to force the offline synthetic fallback.
 
 Outputs:
-- `preliminaryreport/figures/fig1..5_*.png`, price/σ, equity curves, suppression-by-σ, gate timeline, σ-calibration.
-- `preliminaryreport/prototype/results/metrics.json`, full metrics + Req-14 gate verdicts per configuration.
+- `figures/fig1..5_*.png` (in the report tree), price/σ, equity curves, suppression-by-σ, gate timeline, σ-calibration.
+- `feature-prototype/results/metrics.json`, full metrics + Req-14 gate verdicts per configuration.
 
 ## Telegram advisor bot (`telegram_advisor_bot.py`)
 
