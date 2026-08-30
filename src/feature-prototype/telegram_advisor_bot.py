@@ -15,13 +15,11 @@ Config (never hard-coded), read from environment or a sibling ``.env`` file:
     TELEGRAM_ALLOWED_CHAT_IDS   (optional)  comma-separated chat ids allowed to use it
 
 Run from `src/` (so `dqnpf` resolves), not from this directory:
-    PYTHONPATH=. python feature-prototype/telegram_advisor_bot.py           # polling bot
-    PYTHONPATH=. python feature-prototype/telegram_advisor_bot.py --check   # verify token
+    PYTHONPATH=. python feature-prototype/telegram_advisor_bot.py
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import sys
 import time
@@ -368,10 +366,6 @@ def _allowed_from_env() -> set[int]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--check", action="store_true", help="verify the bot token (getMe) and exit")
-    args = ap.parse_args()
-
     _load_dotenv()
     import os
 
@@ -387,10 +381,6 @@ def main() -> None:
         sys.exit(1)
 
     bot = TelegramBot(token, allowed_chat_ids=_allowed_from_env())
-    if args.check:
-        me = bot.get_me()
-        print(f"token OK, bot is @{me.get('username')} (id {me.get('id')})")
-        return
     bot.run()
 
 
