@@ -419,6 +419,13 @@ class TelegramBot:
                 )
                 if prose:
                     self.send_message(chat_id, prose + "\n\n" + _provenance(advice))
+                elif llm.available():
+                    self.send_message(
+                        chat_id,
+                        structured
+                        + "\n\n(The language model did not answer, so this is the"
+                          " recommendation itself rather than an explanation of it.)",
+                    )
                 else:
                     self.send_message(
                         chat_id,
