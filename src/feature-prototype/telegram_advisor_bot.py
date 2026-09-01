@@ -61,6 +61,7 @@ HELP = (
     "Or just ask in plain language (e.g. \"what's your view on USD/JPY?\") ("
     "if a local language model is configured I'll answer in prose, grounded in "
     "the live recommendation.\n\n"
+    "This bot only advises: it never places, changes or closes an order.\n"
     "Educational/research only) not financial advice."
 )
 
@@ -224,8 +225,15 @@ def _provenance(a: Advice) -> str:
     Every reply carries this. The advisor reasons over a fixed historical slice,
     so a prose answer without the bar timestamp reads as if it described the
     present market.
+
+    It also states that nothing was traded. The same policy can be run inside the
+    market environment's live mode, where it does submit orders, so a reply that
+    only says "buy" leaves the reader to guess which of the two just happened.
     """
-    return f"(bar {a.bar_time_utc} · source: {a.data_source} · not financial advice)"
+    return (
+        f"(bar {a.bar_time_utc} · source: {a.data_source} · "
+        "advice only, no order was placed · not financial advice)"
+    )
 
 
 def format_advice(a: Advice) -> str:
@@ -240,7 +248,8 @@ def format_advice(a: Advice) -> str:
         f"Forecast: mu={a.mu_bps:+.2f} bp, sigma={a.sigma_bps:.2f} bp ({regime} regime)\n"
         f"Screen: {a.reason} | profitability gate: {'active' if a.gate_active else 'bypassed'}\n"
         f"Last price: {a.price:.3f}\n"
-        f"(source: {a.data_source}; educational/research only) not financial advice)"
+        f"(source: {a.data_source}; advice only, no order was placed; "
+        "educational/research only) not financial advice)"
     )
 
 
