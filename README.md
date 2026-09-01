@@ -108,11 +108,13 @@ to import; the KServe predictors and registry clients need `kserve` and
 checkpoint, reads a market-data snapshot or places an order needs the S3 bucket,
 the model registry and the broker account, none of which ship here.
 
-**Known test failures**, present before and after the flag removal and unrelated
-to it: 6 in `deepqnetwork` (stale expected defaults in `test_config.py`, plus two
-image-manifest checks that assume the built container) and 8 in `dqnpf` (KServe
-predictor property tests needing the serving stack). On macOS the Rust *doctests*
-additionally need a working Xcode SDK; the unit and integration tests do not.
+**Known test failures**, 5 of 523, all pre-existing and unrelated to the
+code discussed in the report. Four in `deepqnetwork` are stale expectations in
+tests that were never updated when a hyperparameter or CLI flag changed
+(`gamma`, `epsilon_end`, `--num-episodes-per-range`); one in `dqnpf` asserts a
+pipeline precondition against the Model Registry, which does not ship here.
+On macOS the Rust *doctests* additionally need a working Xcode SDK; the unit
+and integration tests do not.
 
 ## Notes on this repository
 
