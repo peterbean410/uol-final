@@ -1,0 +1,124 @@
+# Keeps the ECR imagePullSecret alive in the cm3070 namespace.
+#
+# ECR authorisation tokens expire after 12 hours. Without this the Deployment
+# keeps running, but the next pod start fails with 403 ErrImagePull because
+# imagePullPolicy is Always. Mirrors the modelenv refresher.
+#
+# Requires secret/ecr-aws-credentials holding AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY and AWS_DEFAULT_REGION for a principal with pull
+# permission on the forex-cm3070-advisor repository.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ecr-secret-refresher
+  namespace: cm3070
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ecr-secret-refresher
+  namespace: cm3070
+rules:
+  # Scoped to the one secret it maintains.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch"]
+    resourceNames: ["ecr-registry-credentials"]
+  # create takes no resourceNames, needed only for the first run.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ecr-secret-refresher
+  namespace: cm3070
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ecr-secret-refresher
+subjects:
+  - kind: ServiceAccount
+    name: ecr-secret-refresher
+    namespace: cm3070
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ecr-credentials-refresh
+  namespace: cm3070
+spec:
+  schedule: "0 */10 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 2
+      template:
+        metadata:
+          annotations:
+            # This namespace is Istio-injected. Without opting out, the sidecar
+            # keeps running after the script exits and the Job never completes.
+            sidecar.istio.io/inject: "false"
+        spec:
+          serviceAccountName: ecr-secret-refresher
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          containers:
+            - name: refresh
+              image: amazon/aws-cli:latest
+              imagePullPolicy: Always
+              workingDir: /tmp
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+              envFrom:
+                - secretRef:
+                    name: ecr-aws-credentials
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  # Talks only to ECR (for the token) and the in-cluster API
+                  # server (to upsert the secret); no external downloads.
+                  SA=/var/run/secrets/kubernetes.io/serviceaccount
+                  NS=cm3070
+                  NAME=ecr-registry-credentials
+                  SERVER=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com
+                  API=https://kubernetes.default.svc
+                  TOKEN=$(aws ecr get-login-password --region "$AWS_DEFAULT_REGION")
+                  AUTH=$(printf 'AWS:%s' "$TOKEN" | base64 -w0)
+                  CFG=$(printf '{"auths":{"%s":{"username":"AWS","password":"%s","auth":"%s"}}}' "$SERVER" "$TOKEN" "$AUTH")
+                  DATA=$(printf '%s' "$CFG" | base64 -w0)
+                  KTOKEN=$(cat "$SA/token")
+                  code=$(curl -sS -o /tmp/resp -w '%{http_code}' --cacert "$SA/ca.crt" \
+                    -H "Authorization: Bearer $KTOKEN" \
+                    -H 'Content-Type: application/merge-patch+json' -X PATCH \
+                    "$API/api/v1/namespaces/$NS/secrets/$NAME" \
+                    --data "{\"data\":{\".dockerconfigjson\":\"$DATA\"}}")
+                  if [ "$code" = "404" ]; then
+                    curl -sS --fail --cacert "$SA/ca.crt" \
+                      -H "Authorization: Bearer $KTOKEN" \
+                      -H 'Content-Type: application/json' -X POST \
+                      "$API/api/v1/namespaces/$NS/secrets" \
+                      --data "{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"type\":\"kubernetes.io/dockerconfigjson\",\"metadata\":{\"name\":\"$NAME\",\"namespace\":\"$NS\"},\"data\":{\".dockerconfigjson\":\"$DATA\"}}"
+                  elif [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+                    echo "secret patch failed ($code):"; cat /tmp/resp; exit 1
+                  fi
+                  echo "refreshed $NS/$NAME"

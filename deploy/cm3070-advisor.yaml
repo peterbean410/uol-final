@@ -1,0 +1,49 @@
+# CM3070 Telegram financial-advisor bot.
+#
+# One replica only, and Recreate rather than RollingUpdate: Telegram allows a
+# single getUpdates consumer per token, so two pods would fight for the long
+# poll and each would see 409 Conflict.
+#
+# Requires:
+#   - secret/cm3070-advisor-secrets with key TELEGRAM_BOT_TOKEN
+#   - the ecr-registry-credentials pull secret in this namespace, and the
+#     flux-ecr-refresher IAM user holding a pull policy for this repository
+#     (without it the pod gets 403 ErrImagePull)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cm3070-advisor
+  namespace: cm3070
+  labels:
+    app.kubernetes.io/name: cm3070-advisor
+    app.kubernetes.io/part-of: cm3070-final-project
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cm3070-advisor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cm3070-advisor
+    spec:
+      imagePullSecrets:
+        - name: ecr-registry-credentials
+      containers:
+        - name: advisor
+          image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-cm3070-advisor:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: cm3070-advisor-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          # The bot is a long-poll loop with no HTTP surface, so liveness is
+          # "the process is still running", which the kubelet already tracks.
+          # A probe would need an endpoint the advisor deliberately does not have.
