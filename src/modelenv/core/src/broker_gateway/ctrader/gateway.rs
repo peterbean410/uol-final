@@ -1,4 +1,3 @@
-// BrokerGateway trait implementation for cTrader
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use modelenv_proto::ActionType;
@@ -123,13 +122,11 @@ impl BrokerGateway for CtraderBrokerGateway {
             )
         })?;
 
-        // Refresh swap rates before syncing positions
-        match client.refresh_swap_rates().await {
+                match client.refresh_swap_rates().await {
             Ok(_) => {}
             Err(e) => {
                 warn!("Failed to refresh swap rates before position sync: {}", e);
-                // Continue anyway - swap rates are cached
-            }
+                            }
         }
 
         match client.sync_positions(&symbol).await {
@@ -378,8 +375,7 @@ impl BrokerGateway for CtraderBrokerGateway {
             )
         })?;
 
-        // Try to submit the action
-        match client.submit_order(action).await {
+                match client.submit_order(action).await {
             Ok(fill) => {
                 let processed = client.process_action_queue().await;
                 if processed > 0 {
@@ -393,10 +389,8 @@ impl BrokerGateway for CtraderBrokerGateway {
             Err(e) => {
                 error!("Action submission failed: {}", e);
 
-                // Check if it's a connection error that might be recoverable
-                if Self::is_connection_error(&e) {
-                    // Attempt reconnection
-                    if let Err(reconnect_err) = client.reconnect().await {
+                                if Self::is_connection_error(&e) {
+                                        if let Err(reconnect_err) = client.reconnect().await {
                         error!("Reconnection failed: {}", reconnect_err);
                         return Err(anyhow!(
                             "OrderError {{ client_order_id: {}, broker_error: {} }}",
@@ -405,8 +399,7 @@ impl BrokerGateway for CtraderBrokerGateway {
                         ));
                     }
 
-                    // Retry after reconnection
-                    match client.submit_order(action).await {
+                                        match client.submit_order(action).await {
                         Ok(fill) => Ok(fill),
                         Err(retry_err) => {
                             error!("Retry after reconnection failed: {}", retry_err);
@@ -418,8 +411,7 @@ impl BrokerGateway for CtraderBrokerGateway {
                         }
                     }
                 } else {
-                    // Queue action for retry if it's a temporary error
-                    if Self::is_retryable_submission_error(&e) {
+                                        if Self::is_retryable_submission_error(&e) {
                         client.queue_action(action.clone()).await;
                         Err(anyhow!(
                             "OrderError {{ client_order_id: {}, broker_error: {} }}",
@@ -477,8 +469,7 @@ impl BrokerGateway for CtraderBrokerGateway {
             Err(e) => {
                 error!("Position close failed: {}", e);
 
-                // Check if it's a connection error that might be recoverable
-                if Self::is_connection_error(&e) {
+                                if Self::is_connection_error(&e) {
                     if let Err(reconnect_err) = client.reconnect().await {
                         error!("Reconnection failed: {}", reconnect_err);
                         return Err(anyhow!(
@@ -488,8 +479,7 @@ impl BrokerGateway for CtraderBrokerGateway {
                         ));
                     }
 
-                    // Retry after reconnection
-                    client.close_position(position).await.map_err(|retry_err| {
+                                        client.close_position(position).await.map_err(|retry_err| {
                         error!("Retry after reconnection failed: {}", retry_err);
                         anyhow!(
                             "OrderError {{ position_id: {}, broker_error: {} }}",
@@ -552,9 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn sync_positions_errors_without_reachable_broker() {
-        // Real client: connect fails (no broker reachable in a unit test), so the
-        // operation surfaces an error rather than fabricating positions.
-        let gateway = test_gateway("USDJPY");
+                        let gateway = test_gateway("USDJPY");
         assert!(gateway.sync_positions("USDJPY").await.is_err());
     }
 

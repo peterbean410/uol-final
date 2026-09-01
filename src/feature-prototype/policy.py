@@ -25,8 +25,8 @@ from dqnpf.action_mapper import Direction, map_action
 
 ACTION_DIM = 5
 HOLD, BUY_1, BUY_2, SELL_1, SELL_2 = 0, 1, 2, 3, 4
-MAX_POSITION = 2            # net risk units, clamped to [-2, +2]
-VOLUME_PER_UNIT = 10_000.0  # base-currency units per risk unit (PnL scale)
+MAX_POSITION = 2
+VOLUME_PER_UNIT = 10_000.0
 
 
 @dataclass
@@ -142,8 +142,8 @@ class InferencePolicy:
         self._t = threshold
 
     def act(self, obs: np.ndarray) -> int:
-        mom = float(obs[0] + obs[1])          # recent 2-bar momentum (scaled bps)
-        pos_norm = float(obs[7])              # current net position / MAX_POSITION
+        mom = float(obs[0] + obs[1])
+        pos_norm = float(obs[7])
         if mom > self._t and pos_norm < 1.0:
             return BUY_2 if mom > 2.0 * self._t else BUY_1
         if mom < -self._t and pos_norm > -1.0:

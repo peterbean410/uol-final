@@ -15,7 +15,6 @@ import pandas as pd
 import pytest
 import requests
 
-# The module uses a hyphenated filename, so import via importlib
 _mod = importlib.import_module("marketdata.usecases.download-interval-news-data")
 download_news_data = _mod.download_news_data
 _build_s3_key = _mod._build_s3_key
@@ -71,8 +70,6 @@ def _make_news_item(idx: int) -> dict:
     }
 
 
-# ── Test 1: date range computed from execution timestamp ─────────────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "get_news_data")
 def test_correct_date_range_passed_to_api(mock_get_news, mock_upload):
@@ -90,8 +87,6 @@ def test_correct_date_range_passed_to_api(mock_get_news, mock_upload):
     assert kwargs["items"] == _mod.DEFAULT_PAGE_SIZE
 
 
-# ── Test 2: news data parsed into DataFrame and uploaded ─────────────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "get_news_data")
 def test_news_parsed_into_dataframe(mock_get_news, mock_upload):
@@ -108,8 +103,6 @@ def test_news_parsed_into_dataframe(mock_get_news, mock_upload):
     assert expected_cols.issubset(set(df.columns))
     mock_upload.assert_called_once()
 
-
-# ── Test 3: S3 upload path and filename format ───────────────────────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "get_news_data")
@@ -136,8 +129,6 @@ def test_build_s3_key_format():
     )
 
 
-# ── Test 4: empty data results in no upload ──────────────────────────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "get_news_data")
 def test_empty_data_skips_upload(mock_get_news, mock_upload):
@@ -148,8 +139,6 @@ def test_empty_data_skips_upload(mock_get_news, mock_upload):
     assert df.empty
     mock_upload.assert_not_called()
 
-
-# ── Test 5: retry succeeds on 2nd attempt with backoff ───────────────
 
 @patch.object(_mod.time, "sleep")
 @patch.object(_mod, "get_news_data")
@@ -168,8 +157,6 @@ def test_retry_recovers_after_transient_error(mock_get_news, mock_sleep):
     mock_sleep.assert_called_once_with(_mod.INITIAL_BACKOFF_SECONDS)
 
 
-# ── Test 6: retry exhausts and raises after MAX_RETRIES failures ─────
-
 @patch.object(_mod.time, "sleep")
 @patch.object(_mod, "get_news_data")
 def test_retry_exhaustion_raises_and_logs(mock_get_news, mock_sleep, caplog):
@@ -184,13 +171,10 @@ def test_retry_exhaustion_raises_and_logs(mock_get_news, mock_sleep, caplog):
             )
 
     assert mock_get_news.call_count == _mod.MAX_RETRIES
-    # exponential backoff: 1s after attempt 1, 2s after attempt 2, no sleep after final attempt
     sleep_calls = [c.args[0] for c in mock_sleep.call_args_list]
     assert sleep_calls == [1, 2]
     assert any("failed after" in r.message for r in caplog.records)
 
-
-# ── Test 7: API-error (RuntimeError) also retries ────────────────────
 
 @patch.object(_mod.time, "sleep")
 @patch.object(_mod, "get_news_data")
@@ -210,8 +194,6 @@ def test_runtime_error_triggers_retry(mock_get_news, mock_sleep):
     sleep_calls = [c.args[0] for c in mock_sleep.call_args_list]
     assert sleep_calls == [1, 2]
 
-
-# ── Test 8: pagination, full page triggers next fetch ───────────────
 
 @patch.object(_mod, "get_news_data")
 def test_pagination_loops_until_partial_page(mock_get_news):
@@ -234,8 +216,6 @@ def test_pagination_loops_until_partial_page(mock_get_news):
     items_requested = [c.kwargs["items"] for c in mock_get_news.call_args_list]
     assert items_requested == [items, items, items]
 
-
-# ── Test 9: pagination, first short page exits immediately ──────────
 
 @patch.object(_mod, "get_news_data")
 def test_pagination_single_short_page(mock_get_news):

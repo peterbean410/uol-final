@@ -16,10 +16,6 @@ from hypothesis import strategies as st
 from probabilisticforecaster.kubeflow.pipeline.config_schema import PipelineConfig
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 VALID_SYMBOLS = ("USDJPY", "AUDJPY")
 VALID_FORECAST_HORIZONS = (1, 3, 6, 12)
 VALID_NUM_LAYERS = (2, 3, 4)
@@ -100,7 +96,6 @@ def invalid_pipeline_configs(draw):
 
     Deliberately sets one or more fields to out-of-range values.
     """
-    # Pick which field(s) to invalidate
     invalid_field = draw(
         st.sampled_from([
             "symbol",
@@ -120,7 +115,6 @@ def invalid_pipeline_configs(draw):
         ])
     )
 
-    # Start with valid defaults
     config_kwargs = dict(
         symbol="USDJPY",
         forecast_horizon=1,
@@ -137,7 +131,6 @@ def invalid_pipeline_configs(draw):
         test_pct=0.25,
     )
 
-    # Invalidate the chosen field
     if invalid_field == "symbol":
         config_kwargs["symbol"] = draw(
             st.text(min_size=1, max_size=10, alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -213,7 +206,6 @@ def invalid_pipeline_configs(draw):
             )
         )
     elif invalid_field == "pct_sum":
-        # Both valid individually but sum > 1.0
         config_kwargs["train_pct"] = draw(
             st.floats(min_value=0.6, max_value=0.9, allow_nan=False, allow_infinity=False)
         )
@@ -225,7 +217,6 @@ def invalid_pipeline_configs(draw):
     return PipelineConfig(**config_kwargs)
 
 
-# Fields that can be overridden in the override test
 OVERRIDABLE_FIELDS = {
     "symbol": st.sampled_from(VALID_SYMBOLS),
     "forecast_horizon": st.sampled_from(VALID_FORECAST_HORIZONS),
@@ -246,11 +237,6 @@ OVERRIDABLE_FIELDS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Property 16: YAML Configuration Round-Trip
-# ---------------------------------------------------------------------------
-
-
 class TestYAMLConfigurationRoundTrip:
     """Property 16: YAML configuration round-trip.
 
@@ -268,7 +254,6 @@ class TestYAMLConfigurationRoundTrip:
 
         **Validates: Requirements 8.1**
         """
-        # Serialize config to YAML via a temp file
         config_dict = asdict(config)
 
         with tempfile.NamedTemporaryFile(
@@ -278,15 +263,12 @@ class TestYAMLConfigurationRoundTrip:
             tmp_path = f.name
 
         try:
-            # Deserialize back using from_yaml
             loaded_config = PipelineConfig.from_yaml(tmp_path)
 
-            # All fields should be equivalent
             loaded_dict = asdict(loaded_config)
             for field_name, original_value in config_dict.items():
                 loaded_value = loaded_dict[field_name]
                 if isinstance(original_value, float):
-                    # Float comparison with tolerance for YAML serialization
                     assert abs(original_value - loaded_value) < 1e-10, (
                         f"Field '{field_name}' differs after round-trip: "
                         f"original={original_value}, loaded={loaded_value}"
@@ -298,11 +280,6 @@ class TestYAMLConfigurationRoundTrip:
                     )
         finally:
             os.unlink(tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# Property 17: Parameter Override Precedence
-# ---------------------------------------------------------------------------
 
 
 class TestParameterOverridePrecedence:
@@ -326,13 +303,10 @@ class TestParameterOverridePrecedence:
 
         **Validates: Requirements 8.2**
         """
-        # Draw a new value for the chosen field
         new_value = data.draw(OVERRIDABLE_FIELDS[field_name])
 
-        # Apply the override
         overridden = config.override(**{field_name: new_value})
 
-        # The overridden field should have the new value
         original_dict = asdict(config)
         overridden_dict = asdict(overridden)
 
@@ -341,7 +315,6 @@ class TestParameterOverridePrecedence:
             f"got {overridden_dict[field_name]}"
         )
 
-        # All other fields should remain unchanged
         for other_field, original_value in original_dict.items():
             if other_field == field_name:
                 continue
@@ -356,11 +329,6 @@ class TestParameterOverridePrecedence:
                     f"Field '{other_field}' changed after overriding '{field_name}': "
                     f"original={original_value}, after_override={overridden_value}"
                 )
-
-
-# ---------------------------------------------------------------------------
-# Property 18: Parameter Validation Rejects Invalid Configurations
-# ---------------------------------------------------------------------------
 
 
 class TestParameterValidationRejectsInvalid:

@@ -20,9 +20,8 @@ from torch.optim import Optimizer
 
 logger = logging.getLogger(__name__)
 
-# S3 retry configuration
 _S3_MAX_RETRIES = 3
-_S3_BASE_DELAY = 1.0  # seconds
+_S3_BASE_DELAY = 1.0
 _S3_BACKOFF_FACTOR = 2.0
 
 
@@ -63,7 +62,6 @@ class CheckpointManager:
         self.horizon = horizon
         self.version = version
 
-        # Lazily initialised S3 client
         self._s3_client = None
 
     @property
@@ -111,13 +109,11 @@ class CheckpointManager:
             "config": config or {},
         }
 
-        # Save locally
         local_filename = f"dqn_episode_{episode}.pt"
         local_path = self.checkpoint_dir / local_filename
         torch.save(checkpoint_dict, str(local_path))
         logger.info("Checkpoint saved locally: %s", local_path)
 
-        # Upload to S3 if configured
         if self.s3_prefix is not None:
             s3_filename = self._generate_s3_filename()
             self._upload_to_s3(str(local_path), s3_filename)
@@ -139,7 +135,6 @@ class CheckpointManager:
         """
         local_path = path
 
-        # Download from S3 if path is an S3 URI
         if path.startswith("s3://"):
             local_path = self._download_from_s3(path)
             if local_path is None:
@@ -150,7 +145,6 @@ class CheckpointManager:
                 )
                 return {}
 
-        # Load from local file
         try:
             checkpoint = torch.load(
                 local_path, map_location="cpu", weights_only=False
@@ -191,17 +185,14 @@ class CheckpointManager:
         Returns:
             Tuple of (bucket_name, object_key).
         """
-        # Parse s3_prefix: "s3://bucket/path/to/prefix/"
         prefix = self.s3_prefix.rstrip("/")
         if prefix.startswith("s3://"):
             prefix = prefix[5:]
 
-        # Split into bucket and key prefix
         parts = prefix.split("/", 1)
         bucket = parts[0]
         key_prefix = parts[1] if len(parts) > 1 else ""
 
-        # Build the full key with partition path
         partition = (
             f"symbol={self.symbol}/horizon={self.horizon}/version={self.version}"
         )
@@ -262,8 +253,7 @@ class CheckpointManager:
         Returns:
             Path to the downloaded local file, or None on failure.
         """
-        # Parse the S3 URI
-        uri = s3_uri[5:]  # strip "s3://"
+        uri = s3_uri[5:]
         parts = uri.split("/", 1)
         if len(parts) < 2:
             logger.warning("Invalid S3 URI: %s", s3_uri)
@@ -272,7 +262,6 @@ class CheckpointManager:
         bucket = parts[0]
         key = parts[1]
 
-        # Download to a temp file in the checkpoint directory
         local_path = self.checkpoint_dir / Path(key).name
         try:
             self.s3_client.download_file(bucket, key, str(local_path))

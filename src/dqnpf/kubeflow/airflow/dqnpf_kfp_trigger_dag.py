@@ -25,21 +25,14 @@ from airflow.providers.standard.operators.python import PythonOperator
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
-# KFP API endpoint (in-cluster service address)
 _KFP_HOST = "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
-# Parent model registry names
 _DQN_MODEL_REGISTRY_NAME = "deepqnetwork-usdjpy"
 _FORECASTER_MODEL_REGISTRY_NAME = "probabilistic-transformer-usdjpy-h1"
 
-# Walk-forward window: 30 days of episode data for backtest
 _WALKFORWARD_DAYS = 30
 
-# Integration config YAML path (mounted in pipeline pod)
 _INTEGRATION_CONFIG_YAML = (
     "/etc/dqnpf/config/dqnpf_pipeline_config.yaml"
 )
@@ -51,14 +44,10 @@ default_args = {
 }
 
 
-# ---------------------------------------------------------------------------
-# DAG 1: Weekly Walk-Forward Backtest
-# ---------------------------------------------------------------------------
-
 with DAG(
     dag_id="dqnpf_weekly_backtest",
     start_date=datetime(2026, 5, 1),
-    schedule="0 3 * * 0",  # Every Sunday at 03:00 UTC
+    schedule="0 3 * * 0",
     default_args=default_args,
     catchup=False,
     tags=["dqnpf", "kubeflow", "backtest"],
@@ -104,14 +93,10 @@ with DAG(
     check_parents >> submit_backtest
 
 
-# ---------------------------------------------------------------------------
-# DAG 2: Manual Revalidation (operator-triggered)
-# ---------------------------------------------------------------------------
-
 with DAG(
     dag_id="dqnpf_revalidate",
     start_date=datetime(2026, 5, 1),
-    schedule=None,  # Triggered manually by operator
+    schedule=None,
     default_args=default_args,
     catchup=False,
     tags=["dqnpf", "kubeflow", "revalidate"],

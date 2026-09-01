@@ -70,10 +70,9 @@ def _make_bars(n: int, base_price: float = 100.0) -> list[_FakeBar]:
     """Build n synthetic M5 bars with valid (non-zero, slightly varying) OHLC."""
     rng = np.random.default_rng(seed=42)
     bars = []
-    start_ns = 1_700_000_000_000_000_000  # 2023-11-14 UTC, in ns
+    start_ns = 1_700_000_000_000_000_000
     step_ns = 5 * 60 * 1_000_000_000
     for i in range(n):
-        # Tiny random walk so std isn't zero
         drift = rng.normal(0.0, 0.05)
         open_p = base_price + i * 0.01 + drift
         close_p = open_p + rng.normal(0.0, 0.02)
@@ -111,11 +110,8 @@ def test_compute_signal_pipeline_with_mock_grpc_client() -> None:
     bridge = ForecasterBridge(forecaster=forecaster, symbol="USDJPY", env_client=env)
     mu, sigma = bridge.compute_signal()
 
-    # Forecaster emits raw fractions; the bridge converts to basis points.
     assert (mu, sigma) == (0.42 * BPS_PER_UNIT, 2.71 * BPS_PER_UNIT)
     assert env.calls == ["USDJPY"]
-    # Must request the deep feature window (1440 + 36), not the default 64, or
-    # compute_features would never have enough history and warm-up would be 100%.
     assert env.counts == [RECENT_BARS_COUNT]
     assert len(forecaster.received) == 1
     received = forecaster.received[0]
@@ -171,7 +167,6 @@ def test_compute_signal_converts_fraction_output_to_bps() -> None:
         [(b.timestamp_ns, b.open, b.high, b.low, b.close, b.volume) for b in bars],
         columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"],
     )
-    # Magnitudes mirror the live forecaster: fractions, not bps.
     forecaster = _FakeForecaster(mu=0.000286, sigma=0.001379)
     bridge = ForecasterBridge(
         forecaster=forecaster, symbol="USDJPY", env_client=_FakeEnvClient(_FakeResponse({}))
@@ -179,8 +174,8 @@ def test_compute_signal_converts_fraction_output_to_bps() -> None:
 
     mu, sigma = bridge.compute_signal_from_bars(bars_df)
 
-    assert mu == pytest.approx(2.86, abs=1e-2)   # 0.000286 * 10_000
-    assert sigma == pytest.approx(13.79, abs=1e-2)  # 0.001379 * 10_000
+    assert mu == pytest.approx(2.86, abs=1e-2)
+    assert sigma == pytest.approx(13.79, abs=1e-2)
 
 
 def test_compute_signal_from_bars_few_rows_raises_value_error() -> None:

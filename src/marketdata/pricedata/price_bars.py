@@ -31,12 +31,7 @@ INTERVAL_TO_PERIOD = {
 
 DEFAULT_PRICE_SCALE = 5
 
-# cTrader Open API per-request response timeout. The library default is 5s, which
-# is too aggressive for a busy/slow broker endpoint and was the dominant cause of
-# transient `twisted.internet.defer.TimeoutError: (5, 'Deferred')` download
-# failures (one slow auth/trendbars reply failed the whole task).
 RESPONSE_TIMEOUT_SECONDS = 30
-# Overall cap on the full auth -> trendbars fetch (several sequential requests).
 FETCH_TIMEOUT_SECONDS = 120
 
 
@@ -221,7 +216,6 @@ def get_price_bars(
             "Ensure APP_CLIENT_ID, APP_CLIENT_SECRET, and DEFAULT_ACCOUNT_ID are set."
         )
 
-    # Always refresh the access token before calling the API
     config.refresh_access_token()
 
     host = EndPoints.PROTOBUF_DEMO_HOST if config.default_mode == "demo" else EndPoints.PROTOBUF_LIVE_HOST

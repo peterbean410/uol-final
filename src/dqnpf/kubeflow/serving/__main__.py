@@ -53,13 +53,11 @@ def _load_configs() -> dict[str, IntegrationConfig]:
 
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
-        # Extract only fields that IntegrationConfig accepts
         from dataclasses import fields as dc_fields
 
         valid_fields = {f.name for f in dc_fields(IntegrationConfig)}
         base_kwargs = {k: v for k, v in data.items() if k in valid_fields}
 
-    # Override with env vars
     grpc_address = os.environ.get("GRPC_ADDRESS", "localhost:50051")
     device = os.environ.get("DEVICE", "cpu")
 
@@ -83,21 +81,17 @@ def main() -> None:
 
     logger.info("Starting dqnpf-intraday predictor: model_name=%s", model_name)
 
-    # Load per-symbol configs
     configs = _load_configs()
     logger.info("Loaded configs for symbols: %s", list(configs.keys()))
 
-    # Instantiate predictor
     from dqnpf.kubeflow.serving.dqnpf_predictor import (
         DqnpfIntradayPredictor,
     )
 
     predictor = DqnpfIntradayPredictor(name=model_name, configs=configs)
 
-    # Load models from registry
     predictor.load()
 
-    # Start KServe model server
     kserve.ModelServer().start([predictor])
 
 

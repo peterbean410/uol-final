@@ -37,16 +37,8 @@ from scipy import stats
 
 SENTIMENT_MAP = {"positive": 1.0, "negative": -1.0, "neutral": 0.0}
 
-# Sources whose USD-JPY output is dominated by templated technical-analysis columns
-# published on a fixed cadence; a sentiment index over these largely measures
-# publishing schedule rather than news flow.
 TA_BOILERPLATE_SOURCES = {"action forex", "dailyfx"}
 
-# Event flags match topics AND headline, with word boundaries. Topics alone are
-# not enough: the vendor taxonomy has no Bank of Japan tag at all (38 distinct
-# topics, ECB present, BOJ absent), so the single largest USD-JPY driver is
-# invisible unless the headline is searched. Bare substrings are also unsafe -
-# "employment" matches "unemployment", conflating NFP with a different release.
 TOPIC_FLAGS = {
     "flag_fed": r"\b(?:fed|fed's|federal reserve|fomc|powell)\b",
     "flag_cpi": r"\b(?:cpi|inflation)\b",
@@ -128,8 +120,6 @@ def load_news(path: str) -> pd.DataFrame:
     """Load the EOD news snapshot with parsed timestamps and mapped sentiment."""
     df = _read_parquet(path)
 
-    # forexnewsapi returns RFC 2822 with a US eastern offset that alternates
-    # EST/EDT across the year; utc=True is required or the column stays object.
     df["ts"] = pd.to_datetime(
         df["date"], format="%a, %d %b %Y %H:%M:%S %z", utc=True, errors="coerce"
     )
@@ -198,8 +188,6 @@ def build_panel(news: pd.DataFrame, bars: pd.DataFrame) -> pd.DataFrame:
     for flag in TOPIC_FLAGS:
         panel[flag] = panel[flag].fillna(False).astype(float)
 
-    # Rolling features use a window ending at t inclusive, so they only ever read
-    # news already published by the decision point.
     panel["sent_mean_5d"] = panel["sent_mean"].rolling(5, min_periods=3).mean()
     panel["sent_mean_20d"] = panel["sent_mean"].rolling(20, min_periods=10).mean()
     rolling_n = panel["n_articles"].rolling(20, min_periods=10)
@@ -210,7 +198,6 @@ def build_panel(news: pd.DataFrame, bars: pd.DataFrame) -> pd.DataFrame:
     for h in HORIZONS:
         panel[f"fwd_{h}"] = close.shift(-h) / close - 1.0
 
-    # Restrict to the span the news snapshot actually covers.
     covered = panel.index[panel["n_articles"] > 0]
     return panel.loc[covered.min():covered.max()].copy()
 

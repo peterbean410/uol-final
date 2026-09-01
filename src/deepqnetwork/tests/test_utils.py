@@ -112,7 +112,6 @@ class TestSetupLogging:
         try:
             logger = setup_logging(level="INFO", csv_path=csv_path)
             logger.info("test message")
-            # Flush handlers
             for h in logger.handlers:
                 h.flush()
             with open(csv_path) as f:
@@ -145,7 +144,6 @@ class TestGenerateOrderId:
         import uuid
 
         order_id = generate_order_id()
-        # Should not raise
         parsed = uuid.UUID(order_id)
         assert parsed.version == 4
 

@@ -1,16 +1,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Kustomize entrypoint for the Probabilistic Forecaster ML pipeline.
-# Referenced by FluxCD via app/base/ProbabilisticForecaster.yaml.
 
 namespace: forecaster
 
 resources:
   - namespace.yaml
   - resource_quotas.yaml
-  # Note: No InferenceService, Forecaster serving is consolidated under
-  # dqnpf-intraday (see kubeflow-ml-pipeline spec, Requirement 5 deprecation).
   - ../monitoring/prometheus_rules.yaml
   - pytorchjob.yaml
 

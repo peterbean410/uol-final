@@ -1,4 +1,3 @@
-// Broker connection module for Production Mode
 use anyhow::Result;
 use log::{error, info};
 use std::sync::Arc;
@@ -63,8 +62,7 @@ pub async fn create_broker_gateway(
             let _broker_addr = broker_addr.ok_or_else(|| {
                 anyhow::anyhow!("Broker gateway type specified but address not configured")
             })?;
-            // TODO: Implement MetaTrader API gateway
-            let err = anyhow::anyhow!(
+                        let err = anyhow::anyhow!(
                 "MetaTrader API gateway not yet implemented. \
                 Please configure a different broker gateway or implement the MetaTrader API integration."
             );
@@ -75,8 +73,7 @@ pub async fn create_broker_gateway(
             let _broker_addr = broker_addr.ok_or_else(|| {
                 anyhow::anyhow!("Broker gateway type specified but address not configured")
             })?;
-            // TODO: Implement Interactive Brokers API gateway
-            let err = anyhow::anyhow!(
+                        let err = anyhow::anyhow!(
                 "Interactive Brokers API gateway not yet implemented. \
                 Please configure a different broker gateway or implement the IB API integration."
             );
@@ -141,8 +138,7 @@ pub async fn try_create_broker_gateway(
             Ok(Some(gateway))
         }
         None if broker_addr.is_none() => {
-            // Broker gateway not configured - this is fine for Training Mode
-            info!("Broker gateway not configured; starting without external broker");
+                        info!("Broker gateway not configured; starting without external broker");
             Ok(None)
         }
         None => {

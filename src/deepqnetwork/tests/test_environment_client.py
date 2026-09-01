@@ -12,9 +12,6 @@ import environment_pb2_grpc
 from deepqnetwork.environment_client import EnvironmentClient
 
 
-# --- Mock gRPC server for testing ---
-
-
 class MockEnvironmentServicer(environment_pb2_grpc.EnvironmentServicer):
     """Mock implementation of the Environment gRPC service."""
 
@@ -269,7 +266,6 @@ class TestEnvironmentClientRetry:
                     episode_end_ts=2000,
                     step_size_seconds=5,
                 )
-            # Should have attempted exactly max_retries times
             assert servicer.call_count == 3
         finally:
             client.close()
@@ -287,15 +283,10 @@ class TestEnvironmentClientRetry:
                     episode_end_ts=2000,
                     step_size_seconds=5,
                 )
-            # Should have slept (max_retries - 1) times
             assert mock_sleep.call_count == 3
-            # Verify exponential backoff pattern (base=1, factor=2, jitter ±0.5)
             delays = [call.args[0] for call in mock_sleep.call_args_list]
-            # delay[0] ≈ 1.0 ± 0.5 → [0.5, 1.5]
             assert 0.0 <= delays[0] <= 1.5
-            # delay[1] ≈ 2.0 ± 0.5 → [1.5, 2.5]
             assert 1.5 <= delays[1] <= 2.5
-            # delay[2] ≈ 4.0 ± 0.5 → [3.5, 4.5]
             assert 3.5 <= delays[2] <= 4.5
         finally:
             client.close()
@@ -312,7 +303,6 @@ class TestEnvironmentClientRetry:
                 episode_end_ts=2000,
                 step_size_seconds=5,
             )
-            # Should have succeeded on 3rd attempt
             assert servicer.call_count == 3
             assert list(obs.state_data[0].values) == [42.0]
         finally:
@@ -345,4 +335,4 @@ class TestEnvironmentClientClose:
         """Close completes without error."""
         address, _ = mock_server
         client = EnvironmentClient(address=address, timeout=5.0)
-        client.close()  # Should not raise
+        client.close()

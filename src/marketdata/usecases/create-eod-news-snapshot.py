@@ -37,8 +37,6 @@ from marketdata.newsdata.news_labeller import LABEL_COLUMNS, label_headlines
 
 NEWS_DEDUP_KEYS = ["news_url"]
 
-# Safety valve for the first backfill run: bounds pod runtime if the whole
-# cumulative history arrives unlabelled. Leftovers are picked up next run.
 DEFAULT_MAX_LABEL_ROWS = 20000
 
 

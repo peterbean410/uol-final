@@ -57,9 +57,7 @@ impl LiveData {
             m15_double_top_low: self.m15_double_top_low,
             sin_hour: self.sin_hour,
             cos_hour: self.cos_hour,
-            // Filled by Environment::reference_data from session_start_cutoff
-            // (this struct has no session-hour config); 0 here is a placeholder.
-            session_start_ts: 0,
+                                    session_start_ts: 0,
         }
     }
 
@@ -81,8 +79,7 @@ impl LiveData {
 
     /// Build a flat `Vec<f64>` in the order specified by `columns`.
     fn flatten(&self, columns: &[String]) -> Vec<f64> {
-        // Build lookup tables
-        let ta_by_interval: HashMap<&str, &IntervalIndicators> = TIME_INTERVALS
+                let ta_by_interval: HashMap<&str, &IntervalIndicators> = TIME_INTERVALS
             .iter()
             .zip(self.ta.iter())
             .map(|(iv, ta)| (*iv, ta))
@@ -100,8 +97,7 @@ impl LiveData {
         col: &str,
         ta_by_interval: &HashMap<&str, &IntervalIndicators>,
     ) -> f64 {
-        // --- per-interval bar fields ---
-        if col.ends_with("_bar_close") {
+                if col.ends_with("_bar_close") {
             let iv = col.strip_suffix("_bar_close").unwrap();
             return self.live_bars.get(iv).map(|b| b.close).unwrap_or(0.0);
         }
@@ -110,14 +106,12 @@ impl LiveData {
             return self.live_bars.get(iv).map(|b| b.volume).unwrap_or(0.0);
         }
 
-        // --- per-interval TA fields ---
-        if let Some(_ta_name) = col.strip_prefix("M5_ta_")
+                if let Some(_ta_name) = col.strip_prefix("M5_ta_")
             .or_else(|| col.strip_prefix("M15_ta_"))
             .or_else(|| col.strip_prefix("H1_ta_"))
             .or_else(|| col.strip_prefix("W1_ta_"))
         {
-            // ta_name is e.g. "rsi_14" or "fr_618"; we need to figure out the interval
-            for iv in TIME_INTERVALS {
+                        for iv in TIME_INTERVALS {
                 let prefix = format!("{}_ta_", iv);
                 if col.starts_with(&prefix) {
                     let field = col.strip_prefix(&prefix).unwrap();
@@ -129,8 +123,7 @@ impl LiveData {
             }
         }
 
-        // --- global scalars ---
-        match col {
+                match col {
             "session_realised_pnl" => self.session_realised_pnl,
             "unrealised_pnl" => self
                 .positions
@@ -140,12 +133,12 @@ impl LiveData {
             "num_positions_buy" => self
                 .positions
                 .iter()
-                .filter(|p| p.side == 0) // FILL_SIDE_BUY
+                .filter(|p| p.side == 0)
                 .count() as f64,
             "num_positions_sell" => self
                 .positions
                 .iter()
-                .filter(|p| p.side == 1) // FILL_SIDE_SELL
+                .filter(|p| p.side == 1)
                 .count() as f64,
             "swap_fees" => self.positions.iter().map(|p| p.swap).sum(),
             "tick_ask" => self.live_ticks.first().map(|t| t.ask).unwrap_or(0.0),
@@ -167,11 +160,9 @@ impl LiveData {
 
     fn extract_ta_field(indicators: &IntervalIndicators, field: &str) -> f64 {
         let v = match field {
-            // Momentum
-            "rsi_14" => indicators.momentum.as_ref().map(|m| m.rsi_14).unwrap_or(0.0),
+                        "rsi_14" => indicators.momentum.as_ref().map(|m| m.rsi_14).unwrap_or(0.0),
             "cci_14" => indicators.momentum.as_ref().map(|m| m.cci_14).unwrap_or(0.0),
-            // Trend
-            "adx_14" => indicators.trend.as_ref().map(|t| t.adx_14).unwrap_or(0.0),
+                        "adx_14" => indicators.trend.as_ref().map(|t| t.adx_14).unwrap_or(0.0),
             "macd" => indicators.trend.as_ref().map(|t| t.macd).unwrap_or(0.0),
             "macd_signal" => indicators.trend.as_ref().map(|t| t.macd_signal).unwrap_or(0.0),
             "macd_hist" => indicators.trend.as_ref().map(|t| t.macd_hist).unwrap_or(0.0),
@@ -206,12 +197,10 @@ impl LiveData {
                 .as_ref()
                 .map(|t| t.ichimoku_chikou)
                 .unwrap_or(0.0),
-            // Volatility
-            "bb_upper" => indicators.volatility.as_ref().map(|v| v.bb_upper).unwrap_or(0.0),
+                        "bb_upper" => indicators.volatility.as_ref().map(|v| v.bb_upper).unwrap_or(0.0),
             "bb_middle" => indicators.volatility.as_ref().map(|v| v.bb_middle).unwrap_or(0.0),
             "bb_lower" => indicators.volatility.as_ref().map(|v| v.bb_lower).unwrap_or(0.0),
-            // Support
-            "fr_000" => indicators.support.as_ref().map(|s| s.fr_000).unwrap_or(0.0),
+                        "fr_000" => indicators.support.as_ref().map(|s| s.fr_000).unwrap_or(0.0),
             "fr_236" => indicators.support.as_ref().map(|s| s.fr_236).unwrap_or(0.0),
             "fr_382" => indicators.support.as_ref().map(|s| s.fr_382).unwrap_or(0.0),
             "fr_500" => indicators.support.as_ref().map(|s| s.fr_500).unwrap_or(0.0),

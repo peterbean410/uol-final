@@ -1,10 +1,3 @@
-# dqnpf-intraday KServe InferenceService; the canonical combined predictor.
-#
-# Single InferenceService serving screened trading actions via the DQN +
-# Forecaster integration layer. Both parent models are loaded in-process;
-# modelenv runs as a sidecar providing state preprocessing and RecentBars.
-#
-# Requirements: 22.7, 22.10, 22.11, 24.3
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
@@ -16,13 +9,6 @@ metadata:
     app.kubernetes.io/part-of: fintech-forex
     app.kubernetes.io/managed-by: fluxcd
   annotations:
-    # Autoscaling is configured on the predictor block below via the knative
-    # annotations + scaleMetric/scaleTarget (serverless/KPA). The
-    # serving.kserve.io/autoscalerClass annotation is NOT set: it only accepts
-    # hpa/external (RawDeployment mode), and the KServe validator rejects the
-    # knative class string here.
-    # Prometheus metrics scraping, request latency, error rate,
-    # suppression rate by reason, per-symbol budget utilisation
     prometheus.io/scrape: "true"
     prometheus.io/port: "8080"
     prometheus.io/path: "/metrics"
@@ -32,21 +18,12 @@ spec:
     maxReplicas: 2
     scaleTarget: 5
     scaleMetric: concurrency
-    # Scale-to-zero after 5 minutes of no traffic (KServe default)
     annotations:
       autoscaling.knative.dev/class: kpa.autoscaling.knative.dev
       autoscaling.knative.dev/metric: concurrency
       autoscaling.knative.dev/target: "5"
       autoscaling.knative.dev/scale-to-zero-pod-retention-period: "5m"
-      # Force a fresh revision: revision 00015 failed ErrImagePull because the
-      # modelenv image tag was bumped before its CI push finished (the image is
-      # now present in ECR). Bump this to roll a new revision that retries.
       dqnpf.fintech/redeploy: "2026-06-20T15-session-gate"
-    # Tolerate the arm64 spark GPU nodes' taints so the (now multi-arch)
-    # predictor MAY be scheduled there. spark-4214/spark-5790 carry both
-    # workload=ml:NoExecute and arch=arm64:NoExecute, so both are tolerated.
-    # The predictor is DEVICE=cpu and requests no GPU; it just uses CPU on the
-    # node. Scheduling stays permitted on the amd64 nodes too.
     tolerations:
       - key: arch
         operator: Equal
@@ -61,11 +38,6 @@ spec:
         requiredDuringSchedulingIgnoredDuringExecution:
           nodeSelectorTerms:
             - matchExpressions:
-                # Exclude the control-plane (rpivn) and the beanpi Pis: among
-                # arm64 nodes only the spark GPU nodes are wanted. beanpi01/02
-                # have only the arch taint (now tolerated) so they would
-                # otherwise become eligible; beanpi03 hosts the gitea arm64
-                # runner. amd64 nodes remain eligible.
                 - key: kubernetes.io/hostname
                   operator: NotIn
                   values:
@@ -74,7 +46,6 @@ spec:
                     - beanpi02
                     - beanpi03
     containers:
-      # Primary predictor container, combined DQN + Forecaster integration layer
       - name: kserve-container
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:latest
         ports:
@@ -98,10 +69,6 @@ spec:
             value: "probabilistic-transformer-usdjpy-h1"
           - name: MODEL_REGISTRY_URL
             value: "http://model-registry-service.kubeflow.svc.cluster.local:8080"
-          # MinIO credentials for fetching checkpoint artifacts whose URI in
-          # the Model Registry is `minio://mlpipeline/...` (KFP's default
-          # artifact store). Used by `_download_uri_to_local` in the
-          # dqnpf_predictor via probabilisticforecaster.artifact_io.
           - name: MINIO_ACCESS_KEY
             valueFrom:
               secretKeyRef:
@@ -112,18 +79,8 @@ spec:
               secretKeyRef:
                 name: mlpipeline-minio-artifact
                 key: secretkey
-      # Modelenv sidecar, provides state preprocessing (53-feature vector)
-      # and RecentBars M5 series for ForecasterBridge
       - name: modelenv
-        # Tag managed by Flux image automation: the ImageUpdateAutomation in
-        # Platform/fluxcd app/base/DqnpfIntraday.yaml rewrites the setter marker
-        # below to the newest CI build tag (resolved by the flux-system:modelenv
-        # ImagePolicy in app/base/ModelEnv.yaml). See fluxcd/README.md.
         image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/modelenv:202608030952 # {"$imagepolicy": "flux-system:modelenv"}
-        # No containerPort: knative/KServe serverless allows only ONE port
-        # across all containers in the pod (that's the kserve-container's 8080).
-        # The predictor reaches modelenv over localhost:50051 (same pod via
-        # GRPC_ADDRESS), which needs no declared containerPort.
         resources:
           requests:
             cpu: "1"

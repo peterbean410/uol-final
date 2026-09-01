@@ -10,9 +10,6 @@ import torch
 from deepqnetwork.preprocessor import StatePreprocessor
 
 
-# --- Fake protobuf-like objects for testing ---
-
-
 @dataclass
 class FakeStateRow:
     """Mimics environment_pb2.StateRow."""
@@ -120,13 +117,11 @@ class TestStatePreprocessorProcess:
         )
         preprocessor.process(obs1)
 
-        # Second observation with same dim but different column names
         obs2 = FakeObservation(
             state_columns=["x", "y", "z"],
             state_data=[FakeStateRow(values=[4.0, 5.0, 6.0])],
         )
         preprocessor.process(obs2)
-        # state_dim remains 3 (from first observation)
         assert preprocessor.state_dim == 3
 
     def test_validates_state_data_length_mismatch(self):
@@ -138,7 +133,6 @@ class TestStatePreprocessorProcess:
         )
         preprocessor.process(obs1)
 
-        # Now provide wrong length
         obs2 = FakeObservation(
             state_columns=["a", "b", "c"],
             state_data=[FakeStateRow(values=[1.0, 2.0])],

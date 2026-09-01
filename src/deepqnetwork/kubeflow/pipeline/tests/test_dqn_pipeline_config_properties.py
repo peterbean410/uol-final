@@ -18,10 +18,6 @@ from hypothesis import strategies as st
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 VALID_SYMBOLS = ("USDJPY", "AUDJPY")
 VALID_ACTIVATIONS = ("relu", "leaky_relu", "gelu")
 VALID_LOSS_FUNCTIONS = ("huber", "mse")
@@ -92,7 +88,7 @@ def valid_dqn_pipeline_configs(draw):
         max_steps_per_episode=draw(st.integers(min_value=1, max_value=100_000)),
         checkpoint_interval=draw(st.integers(min_value=1, max_value=500)),
         num_workers=draw(st.integers(min_value=1, max_value=4)),
-        max_wall_time_hours=draw(st.integers(min_value=1, max_value=48)),  # Keep simple to avoid conditional validation
+        max_wall_time_hours=draw(st.integers(min_value=1, max_value=48)),
         katib_max_trials=draw(st.integers(min_value=1, max_value=100)),
         katib_parallel_trials=draw(st.integers(min_value=1, max_value=10)),
         katib_trial_timeout_hours=draw(st.integers(min_value=1, max_value=24)),
@@ -140,7 +136,6 @@ def invalid_dqn_pipeline_configs(draw):
         ])
     )
 
-    # Start with valid defaults
     config_kwargs: dict = dict(
         symbol="USDJPY",
         gamma=0.99,
@@ -153,7 +148,6 @@ def invalid_dqn_pipeline_configs(draw):
         num_workers=1,
     )
 
-    # Invalidate the chosen field
     if invalid_field == "learning_rate_too_high":
         config_kwargs["learning_rate"] = draw(
             st.floats(min_value=0.011, max_value=1.0, allow_nan=False, allow_infinity=False)
@@ -195,11 +189,6 @@ def invalid_dqn_pipeline_configs(draw):
     return DQNPipelineConfig(**config_kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Property DQN-1: YAML Configuration Round-Trip
-# ---------------------------------------------------------------------------
-
-
 class TestYAMLConfigurationRoundTrip:
     """Property DQN-1: YAML configuration round-trip.
 
@@ -219,8 +208,6 @@ class TestYAMLConfigurationRoundTrip:
         """
         config_dict = asdict(config)
 
-        # Convert tuples to lists for YAML-safe serialization (yaml.safe_load
-        # cannot handle Python-specific tuple tags)
         yaml_dict = {}
         for key, value in config_dict.items():
             if isinstance(value, tuple):
@@ -246,7 +233,6 @@ class TestYAMLConfigurationRoundTrip:
                         f"original={original_value}, loaded={loaded_value}"
                     )
                 elif isinstance(original_value, tuple):
-                    # from_yaml converts lists back to tuples for betas
                     assert tuple(loaded_value) == original_value, (
                         f"Field '{field_name}' differs after round-trip: "
                         f"original={original_value}, loaded={loaded_value}"
@@ -258,11 +244,6 @@ class TestYAMLConfigurationRoundTrip:
                     )
         finally:
             os.unlink(tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-2: CLI Argument Generation
-# ---------------------------------------------------------------------------
 
 
 class TestCLIArgumentGeneration:
@@ -286,15 +267,12 @@ class TestCLIArgumentGeneration:
 
         cli_args = config.to_cli_args()
 
-        # All elements must be strings
         assert isinstance(cli_args, list)
         assert all(isinstance(a, str) for a in cli_args)
 
-        # Parse with load_config (needs --config pointing to a valid YAML)
         full_args = ["--config", "deepqnetwork/config.yaml"] + cli_args
         parsed = load_config(full_args)
 
-        # Verify key fields match (fields that to_cli_args() emits)
         assert parsed.symbol == config.symbol
         assert parsed.gamma == config.gamma
         assert parsed.batch_size == config.batch_size
@@ -317,24 +295,15 @@ class TestCLIArgumentGeneration:
         assert parsed.loss_function == config.loss_function
         assert parsed.mode == "train"
 
-        # Learning rate depends on training mode
         if config.training_mode == "finetune":
             assert parsed.learning_rate == config.finetune_learning_rate
         else:
             assert parsed.learning_rate == config.learning_rate
 
-        # Num episodes depends on training mode
         if config.training_mode == "finetune":
             assert parsed.num_episodes_per_range == config.finetune_num_episodes_per_range
         else:
             assert parsed.num_episodes_per_range == config.num_episodes_per_range
-
-        # Dueling flag
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-3: Parameter Validation Rejects Invalid Configs
-# ---------------------------------------------------------------------------
 
 
 class TestParameterValidationRejectsInvalid:

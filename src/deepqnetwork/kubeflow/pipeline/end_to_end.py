@@ -33,19 +33,11 @@ from deepqnetwork.kubeflow.pipeline.dqn_pipeline import (
     resolve_dqn_config,
 )
 
-# ---------------------------------------------------------------------------
-# Constants, degradation gate thresholds from thesis
-# ---------------------------------------------------------------------------
 
 MODEL_REGISTRY_URL = "http://model-registry-service.kubeflow.svc.cluster.local:8080"
-SHARPE_ABSOLUTE_THRESHOLD = 1.0  # Must beat buy & hold baseline
-PNL_ABSOLUTE_THRESHOLD = 0.0  # Must be profitable in absolute terms
-SHARPE_DEGRADATION_THRESHOLD = 0.1  # Max relative degradation vs production
-
-
-# ---------------------------------------------------------------------------
-# Degradation Gate Helper Functions
-# ---------------------------------------------------------------------------
+SHARPE_ABSOLUTE_THRESHOLD = 1.0
+PNL_ABSOLUTE_THRESHOLD = 0.0
+SHARPE_DEGRADATION_THRESHOLD = 0.1
 
 
 def evaluate_degradation_gate(
@@ -74,7 +66,6 @@ def evaluate_degradation_gate(
         Tuple of (gate_passed, reason). gate_passed is True if the model
         should be promoted, False if blocked. reason explains the decision.
     """
-    # Absolute threshold checks
     if candidate_sharpe < SHARPE_ABSOLUTE_THRESHOLD:
         return (
             False,
@@ -89,7 +80,6 @@ def evaluate_degradation_gate(
             f"{PNL_ABSOLUTE_THRESHOLD}",
         )
 
-    # Relative checks (only when production model exists)
     if production_sharpe is not None:
         degradation = production_sharpe - candidate_sharpe
         if degradation > SHARPE_DEGRADATION_THRESHOLD:
@@ -108,11 +98,6 @@ def evaluate_degradation_gate(
             )
 
     return (True, "All degradation gate checks passed")
-
-
-# ---------------------------------------------------------------------------
-# Lightweight Python component for Model Registry registration + promotion
-# ---------------------------------------------------------------------------
 
 
 @dsl.component(
@@ -159,7 +144,6 @@ def register_and_promote(
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
-    # Degradation gate constants
     SHARPE_ABSOLUTE_THRESHOLD = 1.0
     PNL_ABSOLUTE_THRESHOLD = 0.0
     SHARPE_DEGRADATION_THRESHOLD = 0.1
@@ -176,7 +160,6 @@ def register_and_promote(
             entry.update(extra)
         print(json.dumps(entry), file=sys.stdout)
 
-    # Step 1: Read backtest metrics from S3 ----------------------------------
     _log("Reading backtest metrics", extra={"uri": backtest_metrics.uri})
 
     import boto3
@@ -222,10 +205,6 @@ def register_and_promote(
         )
         return
 
-    # Extract candidate metrics. The backtest component nests the scalars under
-    # a "backtest_metrics" object (alongside "degradation_gate",
-    # "episode_details", etc.); reading them from the top level always yielded
-    # 0.0 and silently failed the gate.
     metrics_block = backtest_data.get("backtest_metrics", {})
     candidate_sharpe = float(metrics_block.get("sharpe_ratio", 0.0))
     candidate_pnl = float(metrics_block.get("cumulative_pnl", 0.0))
@@ -242,18 +221,11 @@ def register_and_promote(
         },
     )
 
-    # Step 2: Connect to Model Registry and check for production model -------
     try:
         from urllib.parse import urlsplit
 
         from model_registry import ModelRegistry
 
-        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
-        # defaults is_secure=True and refuses without a token even for http.
-        # The SDK builds its endpoint as f"{server_address}:{port}", so the
-        # port must go through the `port` kwarg, embedding it in
-        # server_address collides with the default port and yields a broken
-        # "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
@@ -278,7 +250,6 @@ def register_and_promote(
 
     model_name = f"dqn-agent-{symbol.lower()}"
 
-    # Ensure the registered model exists
     try:
         registered_model = registry.get_registered_model(model_name)
     except Exception:
@@ -288,7 +259,6 @@ def register_and_promote(
             description=f"DQN trading agent for {symbol}",
         )
 
-    # Check for existing production model
     production_sharpe = None
     production_pnl = None
     has_production = False
@@ -318,14 +288,11 @@ def register_and_promote(
         },
     )
 
-    # Step 3: Evaluate degradation gate --------------------------------------
     if not has_production:
-        # Bootstrap: no production model exists, auto-promote
         gate_passed = True
         gate_reason = "Bootstrap: no production model exists; auto-promoting"
         _log(gate_reason)
     else:
-        # Absolute threshold checks
         gate_passed = True
         gate_reason = "All degradation gate checks passed"
 
@@ -362,10 +329,9 @@ def register_and_promote(
         extra={"gate_passed": gate_passed, "reason": gate_reason},
     )
 
-    # Step 4: Register model in Model Registry (always, regardless of gate) --
     version_id = str(uuid.uuid4())
     config = json.loads(config_json)
-    lifecycle_stage = "staging"  # Always register as staging first
+    lifecycle_stage = "staging"
 
     custom_properties = {
         "version_id": version_id,
@@ -429,10 +395,8 @@ def register_and_promote(
         )
         return
 
-    # Step 5: Promote to production if gate passed ---------------------------
     if gate_passed:
         try:
-            # Demote current production model (if any)
             if has_production:
                 versions = registry.get_model_versions(model_name)
                 for v in versions:
@@ -454,7 +418,6 @@ def register_and_promote(
                         )
                         break
 
-            # Promote new model to production
             versions = registry.get_model_versions(model_name)
             for v in versions:
                 props = (
@@ -476,11 +439,6 @@ def register_and_promote(
                 },
             )
 
-            # Note: standalone DQN KServe InferenceService is deprecated
-            # (kubeflow-ml-pipeline spec, Requirement 15). The dqnpf-intraday
-            # combined predictor's hot-reload watcher (Task 30.3) resolves the
-            # new production checkpoint on its next poll; no KServe patching
-            # is performed from this pipeline step.
 
         except Exception as e:
             _log(
@@ -506,11 +464,6 @@ def register_and_promote(
     )
 
 
-# ---------------------------------------------------------------------------
-# End-to-End Pipeline Definition
-# ---------------------------------------------------------------------------
-
-
 @dsl.pipeline(
     name="dqn-pipeline-e2e",
     description=(
@@ -531,9 +484,6 @@ def dqn_pipeline_e2e(
     checkpoint: str = "",
     date_start: str = "",
     date_end: str = "",
-    # Out-of-sample eval window for the gate backtest, MUST be disjoint from the
-    # training range [date_start, date_end] so the gate measures generalisation,
-    # not memorisation. Default 2015-Q1 (after the 2012-2014 training span).
     eval_date_start: str = "2015-01-05",
     eval_date_end: str = "2015-03-31",
     hour_of_day_start: int = 0,
@@ -590,18 +540,7 @@ def dqn_pipeline_e2e(
             gamma, batch_size, target_update_freq, dropout.
         model_registry_url: URL of the Kubeflow Model Registry server.
     """
-    # Note: Katib parameter injection is handled at submission time via
-    # build_dqn_pipeline_e2e_config(). The katib_best_params_json is also
-    # passed to resolve_dqn_config for in-cluster validation. The pipeline
-    # parameters (learning_rate, batch_size, etc.) should already reflect
 
-    # -----------------------------------------------------------------------
-    # Step 1: Config resolution and validation (lightweight Python component)
-    # -----------------------------------------------------------------------
-    # The components moved to a date-window interface (date_start/date_end/
-    # hour-of-day) and dropped the legacy episode_start_ts/episode_end_ts
-    # params; resolve_dqn_config validates and re-emits the window so the
-    # downstream container components receive identical values.
     config_task = resolve_dqn_config(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
@@ -616,15 +555,8 @@ def dqn_pipeline_e2e(
         hour_of_day_start=hour_of_day_start,
         hour_of_day_end=hour_of_day_end,
     )
-    # Disable caching across the DAG. Training/backtest produce versioned
-    # artifacts whose KFP cache key didn't change between image rebuilds;
-    # the cache served stale outputs and broke registration. Same posture as
-    # dqn_pipeline.
     config_task.set_caching_options(enable_caching=False)
 
-    # -----------------------------------------------------------------------
-    # Step 2: DQN Training (with modelenv sidecar, 1 GPU, 16Gi memory)
-    # -----------------------------------------------------------------------
     training_task = dqn_training(
         symbol=symbol,
         episode_start_ts=0,
@@ -646,13 +578,8 @@ def dqn_pipeline_e2e(
     training_task.set_caching_options(enable_caching=False)
     training_task.set_memory_request("16Gi")
     training_task.set_memory_limit("16Gi")
-    # See dqn_pipeline.py: count alone (set_gpu_limit) is dropped by the KFP
-    # v2 driver; the accelerator *type* is required for the nvidia.com/gpu
-    # limit to actually reach the pod.
     training_task.set_accelerator_limit(1)
     training_task.set_accelerator_type("nvidia.com/gpu")
-    # Warm-cache the modelenv market-data PVC and mount MinIO creds so the
-    # checkpoint's minio:// URI can be written (mirrors dqn_pipeline).
     kubernetes.mount_pvc(
         training_task,
         pvc_name=MODELENV_CACHE_PVC,
@@ -661,9 +588,6 @@ def dqn_pipeline_e2e(
     _mount_minio_creds(training_task)
     _pin_to_spark(training_task)
 
-    # -----------------------------------------------------------------------
-    # Step 3: DQN Backtest (CPU-only, 4Gi memory)
-    # -----------------------------------------------------------------------
     backtest_task = dqn_backtest(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         symbol=symbol,
@@ -671,8 +595,6 @@ def dqn_pipeline_e2e(
         episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
-        # Evaluate the gate OUT-OF-SAMPLE: the eval_date_* window, NOT the training
-        # range (config_task date_start/date_end). Same trained session hours.
         date_start=eval_date_start,
         date_end=eval_date_end,
         hour_of_day_start=config_task.outputs["hour_of_day_start"],
@@ -689,9 +611,6 @@ def dqn_pipeline_e2e(
     )
     _mount_minio_creds(backtest_task)
 
-    # -----------------------------------------------------------------------
-    # Step 4: Model Registry Registration and Promotion
-    # -----------------------------------------------------------------------
     reg_task = register_and_promote(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         backtest_metrics=backtest_task.outputs["backtest_metrics"],
@@ -703,14 +622,7 @@ def dqn_pipeline_e2e(
     reg_task.set_caching_options(enable_caching=False)
     reg_task.set_memory_request("256Mi")
     reg_task.set_memory_limit("512Mi")
-    # register_and_promote reads the backtest_metrics artifact via boto3; it
-    # needs MinIO creds to fetch the minio:// URI the KFP driver advertises.
     _mount_minio_creds(reg_task)
-
-
-# ---------------------------------------------------------------------------
-# Client-side helpers for pipeline submission
-# ---------------------------------------------------------------------------
 
 
 def build_dqn_pipeline_e2e_config(
@@ -756,7 +668,6 @@ def build_dqn_pipeline_e2e_config(
     Raises:
         ValueError: If configuration validation fails.
     """
-    # Apply Katib best params if enabled
     effective_lr = learning_rate
     effective_batch_size = batch_size
 
@@ -767,7 +678,6 @@ def build_dqn_pipeline_e2e_config(
         if "batch_size" in katib_params:
             effective_batch_size = int(katib_params["batch_size"])
 
-    # Build and validate config
     config = DQNPipelineConfig()
     config = config.override(
         symbol=symbol,
@@ -781,13 +691,10 @@ def build_dqn_pipeline_e2e_config(
         hour_of_day_end=hour_of_day_end,
     )
 
-    # Reduced LR for finetune (mode-independent).
     if training_mode == "finetune":
         config = config.override(learning_rate=config.finetune_learning_rate)
         effective_lr = config.finetune_learning_rate
 
-    # The episode-count knob is mode-specific; set only the applicable one so
-    # validate() doesn't reject a cross-mode knob.
     if date_start and date_end:
         config = config.override(repeats_per_date=repeats_per_date)
     else:
@@ -798,7 +705,6 @@ def build_dqn_pipeline_e2e_config(
         )
         config = config.override(num_episodes_per_range=episodes)
 
-    # Validate
     errors = config.validate()
     if training_mode == "finetune" and not checkpoint:
         errors.append("Finetune mode requires a checkpoint path")

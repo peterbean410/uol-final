@@ -80,11 +80,8 @@ def _download_uri_to_local(uri: str) -> str:
     parsed = urlparse(uri)
     scheme = (parsed.scheme or "").lower()
     if scheme not in ("minio", "s3"):
-        # Already a local path, nothing to do.
         return uri
 
-    # Lazy import so unit tests / dev environments that lack the helper still
-    # work for local paths.
     from probabilisticforecaster.artifact_io import get_object_bytes
 
     data = get_object_bytes(uri)
@@ -93,7 +90,6 @@ def _download_uri_to_local(uri: str) -> str:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
     except Exception:
-        # Best-effort cleanup on write failure.
         try:
             os.unlink(local_path)
         except OSError:
@@ -102,8 +98,6 @@ def _download_uri_to_local(uri: str) -> str:
     return local_path
 
 
-# ScreenedAction-dict key -> KServe v2 output tensor datatype. Single source
-# of truth for the gRPC response shape; the executor decodes by tensor name.
 _INFER_OUTPUT_DATATYPES: dict[str, str] = {
     "action": "INT64",
     "action_name": "BYTES",
@@ -236,14 +230,8 @@ class DqnpfIntradayPredictor(kserve.Model):
         self._layers: dict[str, IntegrationLayer] = {}
         self._bridges: dict[str, ForecasterBridge] = {}
         self._caches: dict[str, SignalCache] = {}
-        # Profit-gate: last modelenv session-start timestamp seen per symbol.
-        # The live session boundary is the authoritative `session_start_ts` that
-        # modelenv surfaces on the Reference (the same anchor that drives
-        # end-of-session liquidation); when it advances we roll the gate via
-        # IntegrationLayer.begin_session().
         self._session_start_ts: dict[str, int] = {}
 
-        # Hot-reload state
         self._model_lock = threading.RLock()
         self._current_dqn_path: str | None = None
         self._current_fc_path: str | None = None
@@ -276,11 +264,6 @@ class DqnpfIntradayPredictor(kserve.Model):
             self._grpc_address,
         )
 
-        # Resolve production checkpoint paths from Model Registry.
-        # resolve_production_checkpoint's 2nd positional arg is registry_url,
-        # not a lifecycle stage; it always resolves the production-stage
-        # version. Passing "production" here made it the URL (is_secure=True →
-        # "user token required"). Omit it so the in-cluster default URL is used.
         dqn_path = resolve_production_checkpoint(self._dqn_registry_name)
         fc_path = resolve_production_checkpoint(self._forecaster_registry_name)
 
@@ -288,28 +271,22 @@ class DqnpfIntradayPredictor(kserve.Model):
             "Resolved checkpoints: dqn=%s, forecaster=%s", dqn_path, fc_path
         )
 
-        # Instantiate shared components
         self._env_client = _ServingEnvClient(
             address=self._grpc_address, timeout=30.0
         )
         self._preprocessor = StatePreprocessor(device=self._device)
 
-        # Resolve URIs (minio://, s3://) to local files before handing to
-        # torch.load-based loaders, which only accept local paths.
         local_dqn_path = _download_uri_to_local(dqn_path)
         local_fc_path = _download_uri_to_local(fc_path)
 
         self._dqn = DQNAdvisor(checkpoint_path=local_dqn_path, device=self._device)
 
-        # Use forecast_horizon from the first config (all symbols share the same
-        # forecaster checkpoint; horizon is a model-level parameter)
         first_config = next(iter(self._configs.values()))
         self._forecaster = ForecasterInference(
             model_path=local_fc_path,
             config=ForecasterConfig(forecast_horizon=first_config.forecast_horizon),
         )
 
-        # Build per-symbol integration layers
         for symbol, cfg in self._configs.items():
             cache = SignalCache()
             bridge = ForecasterBridge(self._forecaster, symbol, self._env_client)
@@ -318,7 +295,6 @@ class DqnpfIntradayPredictor(kserve.Model):
             self._bridges[symbol] = bridge
             self._caches[symbol] = cache
 
-        # Track current checkpoint paths for hot-reload comparison
         self._current_dqn_path = dqn_path
         self._current_fc_path = fc_path
 
@@ -328,7 +304,6 @@ class DqnpfIntradayPredictor(kserve.Model):
             list(self._configs.keys()),
         )
 
-        # Start registry watcher for hot-reload
         self._start_registry_watcher()
 
         return True
@@ -363,14 +338,11 @@ class DqnpfIntradayPredictor(kserve.Model):
             ValueError: On unknown symbol, malformed observation, or
                 insufficient bars (mapped to HTTP 400 by kserve).
         """
-        # KServe v2 gRPC path: decode the InferRequest into the dict payload
-        # form so both protocols share the screening logic below.
         infer_request = None
         if not isinstance(payload, dict):
             infer_request = payload
             payload = _payload_from_infer_request(payload)
 
-        # Parse symbol from payload
         symbol = self._extract_symbol(payload)
 
         if symbol not in self._layers:
@@ -379,15 +351,11 @@ class DqnpfIntradayPredictor(kserve.Model):
                 f"Available symbols: {list(self._configs.keys())}"
             )
 
-        # Acquire lock to ensure we see a consistent model snapshot
         with self._model_lock:
-            # Get state vector
             state = self._resolve_state(payload, symbol)
 
-            # Get DQN action recommendation
             dqn_result = self._dqn.recommend_action(state)  # type: ignore[union-attr]
 
-            # Get (mu, sigma) from forecaster via cache
             bridge = self._bridges[symbol]
             cache = self._caches[symbol]
             latest_ts = self._resolve_latest_bar_ts(payload, symbol)
@@ -395,13 +363,6 @@ class DqnpfIntradayPredictor(kserve.Model):
 
             layer = self._layers[symbol]
 
-            # Profit gate (when enabled): drive the session boundary off the
-            # authoritative `session_start_ts` modelenv surfaces on the Reference
-            # (the same anchor as end-of-session liquidation) rather than a
-            # client-side heuristic. When it advances, roll the prior session's
-            # screen counterfactual and re-decide whether the screen stays
-            # active; pass the latest M5 close (from the same Reference) so the
-            # gate can mark its next-bar counterfactual.
             reference = self._env_client.reference_data(symbol)  # type: ignore[union-attr]
             sess_ts = int(getattr(reference, "session_start_ts", 0) or 0)
             if sess_ts and self._session_start_ts.get(symbol) != sess_ts:
@@ -409,24 +370,16 @@ class DqnpfIntradayPredictor(kserve.Model):
                 self._session_start_ts[symbol] = sess_ts
             screen_price = _m5_close_from_reference(reference)
 
-            # Screen the action through the integration layer. Pass the latest
-            # bar timestamp so the risk budget resets per UTC day in production
-            # (without it the budget accumulates for the pod lifetime); the same
-            # timestamp already keys the signal cache above.
             screened = layer.screen(
                 dqn_result, mu, sigma, timestamp_ns=latest_ts, price=screen_price
             )
 
-        # Build response
         response = asdict(screened)
         response["mu"] = mu
         if infer_request is not None:
             return _screened_to_infer_response(self.name, infer_request, response)
         return response
 
-    # -------------------------------------------------------------------------
-    # Hot-reload: registry-driven model swap
-    # -------------------------------------------------------------------------
 
     def _start_registry_watcher(self) -> None:
         """Start a background daemon thread that polls the Model Registry.
@@ -497,7 +450,6 @@ class DqnpfIntradayPredictor(kserve.Model):
         start_time = time.monotonic()
 
         try:
-            # Load new model instances outside the lock (IO-heavy)
             local_dqn_path = _download_uri_to_local(new_dqn_path)
             local_fc_path = _download_uri_to_local(new_fc_path)
 
@@ -508,7 +460,6 @@ class DqnpfIntradayPredictor(kserve.Model):
                 config=ForecasterConfig(forecast_horizon=first_config.forecast_horizon),
             )
 
-            # Build new per-symbol bridges and layers, preserving budget state
             new_layers: dict[str, IntegrationLayer] = {}
             new_bridges: dict[str, ForecasterBridge] = {}
 
@@ -517,24 +468,15 @@ class DqnpfIntradayPredictor(kserve.Model):
                     new_forecaster, symbol, self._env_client
                 )
 
-                # Preserve existing SignalCache (will be invalidated on next bar)
                 cache = self._caches[symbol]
 
                 new_layer = IntegrationLayer(new_dqn, new_bridge, cache, cfg)
 
-                # Preserve budget state from the old layer. _current_day must be
-                # carried over alongside the counters: the layer resets the
-                # budget on each UTC day boundary, so a fresh (None) day on the
-                # new layer would zero the just-preserved counters on the very
-                # next screen, defeating the preservation.
                 old_layer = self._layers.get(symbol)
                 if old_layer is not None:
                     new_layer._risk_long_units = old_layer._risk_long_units
                     new_layer._risk_short_units = old_layer._risk_short_units
                     new_layer._current_day = old_layer._current_day
-                    # Preserve the profit gate's rolling counterfactual memory
-                    # across the swap; otherwise a hot-reload would reset the
-                    # trailing-window history and re-arm the screen from scratch.
                     new_layer._cf_history = old_layer._cf_history
                     new_layer._session_cf = old_layer._session_cf
                     new_layer._pending = old_layer._pending
@@ -544,7 +486,6 @@ class DqnpfIntradayPredictor(kserve.Model):
                 new_layers[symbol] = new_layer
                 new_bridges[symbol] = new_bridge
 
-            # Atomic swap under the lock
             with self._model_lock:
                 self._dqn = new_dqn
                 self._forecaster = new_forecaster
@@ -584,9 +525,6 @@ class DqnpfIntradayPredictor(kserve.Model):
             )
             sys.exit(1)
 
-    # -------------------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------------------
 
     def _extract_symbol(self, payload: dict[str, Any]) -> str:
         """Extract symbol from either payload format.
@@ -623,7 +561,6 @@ class DqnpfIntradayPredictor(kserve.Model):
         """
         observation = payload.get("observation")
         if observation is None:
-            # Check instances format
             instances = payload.get("instances")
             if instances and isinstance(instances, list) and len(instances) > 0:
                 instance = instances[0]
@@ -631,7 +568,6 @@ class DqnpfIntradayPredictor(kserve.Model):
                     observation = instance.get("observation")
 
         if observation is not None:
-            # Validate and convert provided observation
             try:
                 state = np.asarray(observation, dtype=np.float32)
             except (TypeError, ValueError) as exc:
@@ -646,7 +582,6 @@ class DqnpfIntradayPredictor(kserve.Model):
                 )
             return state
 
-        # Pull from modelenv sidecar
         obs = self._env_client.reference_data(symbol)  # type: ignore[union-attr]
         return self._preprocessor.process(obs).numpy()  # type: ignore[union-attr]
 
@@ -670,20 +605,17 @@ class DqnpfIntradayPredictor(kserve.Model):
                     recent_bars = instance.get("recent_bars_m5")
 
         if recent_bars is not None:
-            # Validate bar count
             if not isinstance(recent_bars, list) or len(recent_bars) < 36:
                 bar_count = len(recent_bars) if isinstance(recent_bars, list) else 0
                 raise ValueError(
                     f"Insufficient M5 bars: got {bar_count}, need at least 36"
                 )
-            # Extract timestamp from last bar
             last_bar = recent_bars[-1]
             if isinstance(last_bar, dict):
                 ts = last_bar.get("timestamp_ns") or last_bar.get("Timestamp", 0)
                 return int(ts)
             return int(last_bar)
 
-        # Pull from modelenv sidecar
         response = self._env_client.recent_bars(symbol)  # type: ignore[union-attr]
         bars = getattr(response, "bars", None)
         if bars is None or "M5" not in bars:

@@ -49,15 +49,10 @@ def _compute_zscore(series: pd.Series, window: int) -> pd.Series:
     rolling_mean = series.rolling(window=window, min_periods=window).mean()
     rolling_std = series.rolling(window=window, min_periods=window).std(ddof=0)
 
-    # Use a relative tolerance to detect near-zero std (floating-point noise)
-    # When the std is negligible relative to the mean, treat it as zero
     abs_mean = rolling_mean.abs()
-    # Threshold: std is considered zero if it's less than 1e-10 * |mean|
-    # or less than 1e-14 in absolute terms (for series near zero)
     is_zero_std = (rolling_std < 1e-14) | (rolling_std < abs_mean * 1e-10)
 
     zscore = (series - rolling_mean) / rolling_std
-    # When std is effectively zero, set z-score to 0
     zscore = zscore.where(~is_zero_std, 0.0)
     return zscore
 
@@ -72,11 +67,9 @@ def _check_zero_prices(series: pd.Series, name: str) -> None:
     Raises:
         ValueError: If any previous price is zero.
     """
-    # Check previous prices (shifted series) for zeros
     prev = series.shift(1)
     zero_mask = prev == 0
     if zero_mask.any():
-        # Find the first index where previous price is zero
         first_zero_idx = zero_mask.idxmax()
         raise ValueError(
             f"Zero price at index {first_zero_idx}, cannot compute return"
@@ -104,7 +97,6 @@ def compute_features(
     """
     _validate_input(df, historical_window)
 
-    # Work with a copy, reset index for positional access
     data = df.copy().reset_index(drop=True)
 
     high = data["High"]
@@ -112,21 +104,17 @@ def compute_features(
     close = data["Close"]
     timestamp = pd.to_datetime(data["Timestamp"])
 
-    # --- Check for zero prices before computing returns ---
     _check_zero_prices(high, "High")
     _check_zero_prices(low, "Low")
     _check_zero_prices(close, "Close")
 
-    # --- Z-Score Features (8) ---
     z_high = _compute_zscore(high, historical_window)
     z_low = _compute_zscore(low, historical_window)
     z_close = _compute_zscore(close, historical_window)
 
-    # Z-score of high-low spread
     hl_spread = high - low
     z_hl_spread = _compute_zscore(hl_spread, historical_window)
 
-    # Z-score of EMAs
     ema5 = close.ewm(span=5, adjust=False).mean()
     ema20 = close.ewm(span=20, adjust=False).mean()
     ema30 = close.ewm(span=30, adjust=False).mean()
@@ -137,12 +125,10 @@ def compute_features(
     z_ema30 = _compute_zscore(ema30, historical_window)
     z_ema60 = _compute_zscore(ema60, historical_window)
 
-    # --- Return Features (3) ---
-    ret_high = high.pct_change()  # (x_t - x_{t-1}) / x_{t-1}
+    ret_high = high.pct_change()
     ret_low = low.pct_change()
     ret_close = close.pct_change()
 
-    # --- Volatility Features (3) ---
     vol_high = ret_high.rolling(
         window=historical_window, min_periods=historical_window
     ).std(ddof=0)
@@ -153,14 +139,12 @@ def compute_features(
         window=historical_window, min_periods=historical_window
     ).std(ddof=0)
 
-    # --- Time Features (2) ---
     hours = timestamp.dt.hour
     minutes = timestamp.dt.minute
     time_fraction = (hours * 60 + minutes) / 1440.0
     time_sin = np.sin(time_fraction * 2 * np.pi)
     time_cos = np.cos(time_fraction * 2 * np.pi)
 
-    # --- Assemble output DataFrame ---
     features = pd.DataFrame(
         {
             "z_high": z_high,
@@ -182,11 +166,8 @@ def compute_features(
         }
     )
 
-    # Set Timestamp as index
     features.index = timestamp
 
-    # Drop rows with insufficient history (first historical_window rows)
     features = features.iloc[historical_window:]
 
     return features
-# trigger forecaster build 202605162228

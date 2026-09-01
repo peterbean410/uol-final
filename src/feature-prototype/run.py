@@ -27,12 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-# --- make both the forex packages and the sibling prototype modules importable
 _THIS = Path(__file__).resolve()
 _PROTO_DIR = _THIS.parent
-# The package root is whichever ancestor holds `dqnpf/`, `src/` in the
-# repository, `/app` in the container. Searching for it rather than counting
-# parents keeps this working in both.
 _PKG_ROOT = next(
     (p for p in _THIS.parents if (p / "dqnpf").is_dir()), _PROTO_DIR.parent
 )
@@ -81,7 +77,7 @@ def _make_config() -> IntegrationConfig:
         max_risk_long_units=2,
         max_risk_short_units=1,
         forecaster_risk_aversion=0.1,
-        forecaster_position_size=100_000.0,  # match VOLUME_PER_UNIT for comparability
+        forecaster_position_size=100_000.0,
         screen_profit_window_sessions=3,
         pip_size=data_mod.PIP_SIZE,
     )
@@ -116,9 +112,6 @@ def _summarise(arm) -> dict:
     }
 
 
-# --------------------------------------------------------------------------- #
-# Figures
-# --------------------------------------------------------------------------- #
 def fig_price_and_sigma(close, info_sig, coll_sig, path):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 5.5), sharex=True)
     ax1.plot(close, lw=0.8, color="#222")
@@ -198,12 +191,12 @@ def fig_gate_timeline(results: dict, path):
 def fig_sigma_calibration(close, info_sig, coll_sig, warmup, path):
     n = len(close)
     fwd = np.zeros(n)
-    fwd[:-1] = np.abs((close[1:] - close[:-1]) / close[:-1]) * 1e4  # |fwd ret| bps
+    fwd[:-1] = np.abs((close[1:] - close[:-1]) / close[:-1]) * 1e4
     fig, ax = plt.subplots(figsize=(7, 4))
     for sig, name, col in ((info_sig, "informative", "#1f77b4"), (coll_sig, "collapsed", "#d62728")):
         s = sig.sigma_bps[warmup : n - 1]
         f = fwd[warmup : n - 1]
-        if np.ptp(s) < 1e-6:  # constant sigma -> single point
+        if np.ptp(s) < 1e-6:
             ax.scatter([s.mean()], [f.mean()], color=col, s=60, label=f"{name} (flat)")
             continue
         qs = np.quantile(s, np.linspace(0, 1, 9))
@@ -232,8 +225,6 @@ def main() -> None:
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    # The integration layer logs every budget-exhausted suppression at INFO; quiet
-    # it so the prototype's own progress is readable.
     logging.getLogger("dqnpf.integration").setLevel(logging.WARNING)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -247,18 +238,12 @@ def main() -> None:
     ts_ns = price.frame["timestamp_ns"].to_numpy()
     logger.info("data: source=%s n_bars=%d span=%s", price.source, price.n_bars, price.span)
 
-    # A compact replay env over the real M5 slice, rebuilt fresh per arm.
     def env_factory():
         return ReplayTradingEnv(close)
 
-    # Inference-only DQN stand-in (no training), shared across every config so the
-    # screen's effect is isolated.
     policy = InferencePolicy()
     policy_info = {"type": "inference-only momentum/mean-reversion stand-in (no training)"}
 
-    # Inference-only forecaster signals (no training); the real causal-Transformer
-    # PF is a production component (Ch3). `informative` = EWMA-vol sigma;
-    # `collapsed` = constant sigma (the production failure mode).
     info_sig = sig_mod.informative_signals(close)
     coll_sig = sig_mod.collapsed_signals(close)
 
@@ -280,7 +265,6 @@ def main() -> None:
             config=cfg,
         )
 
-    # --- figures ----------------------------------------------------------
     warmup = env_factory().warmup
     fig_price_and_sigma(close, info_sig, coll_sig, FIG_DIR / "fig1_price_sigma.png")
     fig_equity(results, data_mod.PIP_SIZE, FIG_DIR / "fig2_equity_curves.png")
@@ -291,7 +275,6 @@ def main() -> None:
     )
     fig_sigma_calibration(close, info_sig, coll_sig, warmup, FIG_DIR / "fig5_sigma_calibration.png")
 
-    # --- formal evaluation tests on the prototype's own outputs -----------
     nbar = len(close)
     fwd = np.zeros(nbar)
     fwd[:-1] = (close[1:] - close[:-1]) / close[:-1]
@@ -308,7 +291,6 @@ def main() -> None:
         "headline_dsr_over_n_trials": stats_tests.deflated_sharpe_ratio(head_pnl, trial_sharpes),
     }
 
-    # --- metrics JSON -----------------------------------------------------
     out = {
         "meta": {
             "git_sha": _git_sha(),
@@ -326,7 +308,6 @@ def main() -> None:
     metrics_path.write_text(json.dumps(out, indent=2))
     logger.info("wrote %s", metrics_path)
 
-    # --- console summary --------------------------------------------------
     print("\n================ PROTOTYPE SUMMARY ================")
     print(f"data={price.source}  bars={price.n_bars}  span={price.span}")
     print(f"policy: {policy_info['type']}")

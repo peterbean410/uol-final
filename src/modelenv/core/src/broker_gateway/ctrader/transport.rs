@@ -52,9 +52,7 @@ impl Transport {
         let tcp = TcpStream::connect((host, port))
             .await
             .with_context(|| format!("TCP connect to cTrader {host}:{port} failed"))?;
-        // cTrader sends frequent small frames (heartbeats, ticks); disable
-        // Nagle so requests/heartbeats are not delayed.
-        tcp.set_nodelay(true).ok();
+                        tcp.set_nodelay(true).ok();
 
         let stream = connector
             .connect(server_name, tcp)
@@ -115,15 +113,9 @@ mod tests {
         assert_eq!(DEMO_HOST, "demo.ctraderapi.com");
     }
 
-    // Building the rustls client config (root store + connector) must not panic;
-    // this exercises everything up to the socket, with no network dependency.
-    // A refused connection on loopback returns immediately (vs. a non-routable
-    // address which would hang on SYN retries), so the test stays fast.
-    #[tokio::test]
+                    #[tokio::test]
     async fn connect_to_refused_port_errors_cleanly() {
-        // Bind then immediately drop a listener to obtain a definitely-closed
-        // local port, then connect to it, instant ECONNREFUSED.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let res = Transport::connect("127.0.0.1", port).await;

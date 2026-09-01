@@ -229,8 +229,6 @@ def run_live_executor(
     if stop_event is None:
         stop_event = threading.Event()
 
-    # One-time bootstrap: broker position sync + initial observation. The
-    # episode fields are training-only and ignored by modelenv in Live mode.
     env_client.reset(
         symbol=config.symbol,
         episode_start_ts=0,
@@ -275,9 +273,6 @@ def run_live_executor(
                     f"Aborting after {consecutive_errors} consecutive "
                     "failed iterations"
                 )
-        # wait() doubles as the inter-step pause and the shutdown latch: a
-        # SIGTERM during the pause exits immediately instead of after a full
-        # interval.
         stop_event.wait(config.step_interval_seconds)
 
     logger.info("live executor stopped after %d steps", steps)

@@ -66,8 +66,6 @@ def test_cache_miss_invokes_compute_and_updates(
 
     expected_calls = 0
     for i, ts in enumerate(timestamps):
-        # Each unique ts forces a recompute; use mu/sigma derived from ts so
-        # we can assert the cache returns the correct value after update.
         unique_mu = mu + i
         unique_sigma = sigma + i
         compute = _Counter(unique_mu, unique_sigma)
@@ -76,7 +74,6 @@ def test_cache_miss_invokes_compute_and_updates(
         assert compute.calls == 1
         assert result == (unique_mu, unique_sigma)
 
-        # Subsequent call with the same ts must NOT recompute.
         compute2 = _Counter(99.0, 99.0)
         result2 = cache.get_or_compute(ts, compute2)
         assert compute2.calls == 0

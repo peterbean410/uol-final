@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import patch, MagicMock
 
-# Mock the model_registry package before importing registry_client
 _mock_model_registry = MagicMock()
 sys.modules["model_registry"] = _mock_model_registry
 sys.modules["model_registry.types"] = MagicMock()
@@ -31,11 +30,6 @@ from deepqnetwork.kubeflow.registry.dqn_registry_client import (
     _DQN_VALID_TRANSITIONS,
 )
 from deepqnetwork.kubeflow.registry.dqn_lifecycle import DQNLifecycleManager
-
-
-# ---------------------------------------------------------------------------
-# In-memory fake Model Registry
-# ---------------------------------------------------------------------------
 
 
 class FakeModelVersion:
@@ -105,11 +99,6 @@ class FakeModelRegistry:
         version.custom_properties = custom_properties
 
 
-# ---------------------------------------------------------------------------
-# Helper: create a DQNRegistryClient with the fake registry
-# ---------------------------------------------------------------------------
-
-
 def create_test_client() -> DQNRegistryClient:
     """Create a DQNRegistryClient backed by the in-memory fake."""
     with patch(
@@ -126,10 +115,6 @@ def create_test_lifecycle_manager() -> tuple[DQNLifecycleManager, DQNRegistryCli
     manager = DQNLifecycleManager(registry_client=client)
     return manager, client
 
-
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
 
 symbols = st.sampled_from(["USDJPY", "AUDJPY", "EURUSD", "GBPUSD"])
 step_sizes = st.sampled_from([60, 300, 900, 3600])
@@ -184,11 +169,6 @@ def dqn_model_metadata(draw):
     )
 
 
-# ---------------------------------------------------------------------------
-# Property DQN-11: DQN model registry metadata completeness
-# ---------------------------------------------------------------------------
-
-
 class TestDQNMetadataCompleteness:
     """Property DQN-11: Registered DQN models return complete metadata and lineage.
 
@@ -214,13 +194,11 @@ class TestDQNMetadataCompleteness:
             metadata=metadata,
         )
 
-        # Query back the model
         results = client.query_models(symbol=metadata.symbol)
 
         assert len(results) == 1, f"Expected 1 result, got {len(results)}"
         result = results[0]
 
-        # Verify all metadata fields are present and correct
         assert result.symbol == metadata.symbol
         assert result.episode_start_ts == metadata.episode_start_ts
         assert result.episode_end_ts == metadata.episode_end_ts
@@ -232,10 +210,8 @@ class TestDQNMetadataCompleteness:
         assert result.win_rate == metadata.win_rate
         assert result.hyperparameters == metadata.hyperparameters
 
-        # Verify lineage fields
         assert result.pipeline_run_id == metadata.pipeline_run_id
 
-        # Verify lifecycle stage
         assert result.lifecycle_stage == "staging"
 
     @given(metadata=dqn_model_metadata())
@@ -253,13 +229,7 @@ class TestDQNMetadataCompleteness:
             metadata=metadata,
         )
 
-        # Must be a valid UUID
         uuid.UUID(version_id)
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-12: DQN model lifecycle state transitions
-# ---------------------------------------------------------------------------
 
 
 class TestDQNLifecycleStateTransitions:
@@ -311,8 +281,6 @@ class TestDQNLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # Standalone DQN KServe is deprecated, promote_to_production
-        # only updates registry metadata; no K8s patching to mock out.
         result = client.promote_to_production(version_id)
 
         assert result is True, "Promotion from staging to production should succeed"
@@ -332,10 +300,8 @@ class TestDQNLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # First promote to production (KServe push deprecated; metadata-only)
         client.promote_to_production(version_id)
 
-        # Second promote should fail (already in production)
         result = client.promote_to_production(version_id)
 
         assert result is False, "Promotion from production to production should fail"
@@ -392,10 +358,8 @@ class TestDQNLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # First archive the model
         manager.transition_stage(version_id, "archived")
 
-        # Attempt to promote from archived should fail
         result = manager.transition_stage(version_id, "production")
         assert result is False, "Transition archived→production should fail (archived is terminal)"
 
@@ -412,11 +376,6 @@ class TestDQNLifecycleStateTransitions:
     def test_production_can_only_transition_to_archived(self):
         """Production can only transition to archived."""
         assert _DQN_VALID_TRANSITIONS["production"] == {"archived"}
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-13: DQN retention policy enforcement
-# ---------------------------------------------------------------------------
 
 
 class TestDQNRetentionPolicyEnforcement:
@@ -446,9 +405,7 @@ class TestDQNRetentionPolicyEnforcement:
             metadata=metadata,
         )
 
-        # Patch the created_at to be `age_days` days ago
         created_at = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
-        # Find the version and update its created_at
         for rm in client.registry.get_registered_models():
             for mv in client.registry.get_model_versions(rm.name):
                 if mv.custom_properties.get("version_id") == version_id:
@@ -477,9 +434,7 @@ class TestDQNRetentionPolicyEnforcement:
             metadata=metadata,
         )
 
-        # Patch the created_at to be `age_days` days ago
         created_at = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
-        # Find the version and update its created_at
         for rm in client.registry.get_registered_models():
             for mv in client.registry.get_model_versions(rm.name):
                 if mv.custom_properties.get("version_id") == version_id:

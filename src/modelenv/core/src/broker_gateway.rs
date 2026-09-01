@@ -1,4 +1,3 @@
-// Broker Gateway module for Production Mode operation
 pub mod ctrader;
 
 use anyhow::Result;
@@ -127,8 +126,7 @@ pub fn create_broker_gateway_instance(
     refresh_token: Option<String>,
     account_id: Option<String>,
     symbol: &str,
-    // cTrader lots per modelenv position unit (default 0.01 if <= 0).
-    lot_size_per_unit: f64,
+        lot_size_per_unit: f64,
 ) -> Result<Box<dyn BrokerGateway + Send + Sync>> {
     match broker_type.to_lowercase().as_str() {
         "ctrader" => {

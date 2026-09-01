@@ -83,7 +83,6 @@ def get_logger(name: str, component: str = "unknown") -> logging.Logger:
     """
     logger = logging.getLogger(name)
 
-    # Avoid adding duplicate handlers on repeated calls.
     if logger.handlers:
         return logger
 
@@ -95,7 +94,6 @@ def get_logger(name: str, component: str = "unknown") -> logging.Logger:
 
     logger.addHandler(handler)
 
-    # Prevent propagation to root logger to avoid duplicate output.
     logger.propagate = False
 
     return logger

@@ -14,11 +14,6 @@ from probabilisticforecaster.features import compute_features
 TWO_PI = 2 * np.pi
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-# Use a smaller historical window for faster PBT execution
 HIST_WINDOW = 50
 
 
@@ -35,10 +30,7 @@ def ohlc_dataframes(draw, min_bars=HIST_WINDOW + 10, max_bars=HIST_WINDOW + 50):
     """
     n = draw(st.integers(min_value=min_bars, max_value=max_bars))
 
-    # Generate a base close price series via random walk with guaranteed variation
     start_price = draw(st.floats(min_value=80.0, max_value=150.0))
-    # Use increments from two disjoint ranges to guarantee non-zero variation
-    # without filtering
     increments = draw(
         st.lists(
             st.one_of(
@@ -54,12 +46,10 @@ def ohlc_dataframes(draw, min_bars=HIST_WINDOW + 10, max_bars=HIST_WINDOW + 50):
     for i, inc in enumerate(increments):
         close[i + 1] = close[i] + inc
 
-    # Ensure all close prices are strictly positive
     min_close = close.min()
     if min_close <= 1.0:
         close = close - min_close + 10.0
 
-    # Generate high and low with valid OHLC relationship
     spreads = draw(
         st.lists(
             st.floats(min_value=0.05, max_value=1.5),
@@ -72,10 +62,8 @@ def ohlc_dataframes(draw, min_bars=HIST_WINDOW + 10, max_bars=HIST_WINDOW + 50):
     high = close + spreads
     low = close - spreads
 
-    # Ensure low is strictly positive
     low = np.maximum(low, 0.01)
 
-    # Open is between low and high
     open_ = (high + low) / 2.0
 
     timestamps = pd.date_range("2023-01-01", periods=n, freq="5min")
@@ -117,11 +105,6 @@ def constant_price_dataframes(draw, min_bars=HIST_WINDOW + 10, max_bars=HIST_WIN
     )
 
 
-# ---------------------------------------------------------------------------
-# Property 1: Z-Score Computation Correctness
-# ---------------------------------------------------------------------------
-
-
 class TestZScoreComputationCorrectness:
     """Property 1: Z-Score Computation Correctness.
 
@@ -143,7 +126,6 @@ class TestZScoreComputationCorrectness:
         """
         features = compute_features(df, historical_window=HIST_WINDOW)
 
-        # Reconstruct the raw series used for z-score computation
         data = df.reset_index(drop=True)
         high = data["High"]
         low = data["Low"]
@@ -165,32 +147,23 @@ class TestZScoreComputationCorrectness:
             "z_ema60": ema60,
         }
 
-        # Check a sample of positions in the output
-        # Output starts at index HIST_WINDOW in the original data
         output_len = len(features)
-        # Check up to 5 random positions to keep test fast
         positions_to_check = min(5, output_len)
         rng = np.random.default_rng(42)
         check_indices = rng.choice(output_len, size=positions_to_check, replace=False)
 
         for feat_name, series in raw_series.items():
             for out_idx in check_indices:
-                # Map output index to original data index
                 t = out_idx + HIST_WINDOW
 
-                # Manual z-score: window is [t - window + 1, t + 1)
-                # i.e. indices t-49 to t inclusive (50 elements)
                 window_data = series.iloc[t - HIST_WINDOW + 1: t + 1].values
                 mean_val = np.mean(window_data)
                 std_val = np.std(window_data, ddof=0)
 
-                # Use same tolerance as implementation: std is considered zero
-                # if it's negligible relative to the mean or in absolute terms
                 abs_mean = abs(mean_val)
                 is_zero_std = (std_val < 1e-14) or (abs_mean > 0 and std_val < abs_mean * 1e-10)
 
                 if is_zero_std:
-                    # When std is effectively zero, implementation returns 0
                     expected = 0.0
                 else:
                     expected = (series.iloc[t] - mean_val) / std_val
@@ -223,11 +196,6 @@ class TestZScoreComputationCorrectness:
             )
 
 
-# ---------------------------------------------------------------------------
-# Property 2: Return Computation Correctness
-# ---------------------------------------------------------------------------
-
-
 class TestReturnComputationCorrectness:
     """Property 2: Return Computation Correctness.
 
@@ -254,12 +222,9 @@ class TestReturnComputationCorrectness:
 
         output_len = len(features)
 
-        # Check all positions in the output
         for out_idx in range(output_len):
-            # Map output index to original data index
             t = out_idx + HIST_WINDOW
 
-            # Manual return: (x_t - x_{t-1}) / x_{t-1}
             expected_ret_high = (high.iloc[t] - high.iloc[t - 1]) / high.iloc[t - 1]
             expected_ret_low = (low.iloc[t] - low.iloc[t - 1]) / low.iloc[t - 1]
             expected_ret_close = (close.iloc[t] - close.iloc[t - 1]) / close.iloc[t - 1]
@@ -282,11 +247,6 @@ class TestReturnComputationCorrectness:
             )
 
 
-# ---------------------------------------------------------------------------
-# Strategy: OHLC DataFrames with varied starting timestamps
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def ohlc_dataframes_varied_timestamps(draw, min_bars=HIST_WINDOW + 10, max_bars=HIST_WINDOW + 50):
     """Generate valid OHLC DataFrames with varied starting timestamps.
@@ -297,7 +257,6 @@ def ohlc_dataframes_varied_timestamps(draw, min_bars=HIST_WINDOW + 10, max_bars=
     """
     n = draw(st.integers(min_value=min_bars, max_value=max_bars))
 
-    # Generate a random starting timestamp (any hour/minute combination)
     start_year = draw(st.integers(min_value=2020, max_value=2024))
     start_month = draw(st.integers(min_value=1, max_value=12))
     start_day = draw(st.integers(min_value=1, max_value=28))
@@ -309,7 +268,6 @@ def ohlc_dataframes_varied_timestamps(draw, min_bars=HIST_WINDOW + 10, max_bars=
         hour=start_hour, minute=start_minute
     )
 
-    # Generate a base close price series via random walk
     start_price = draw(st.floats(min_value=80.0, max_value=150.0))
     increments = draw(
         st.lists(
@@ -326,12 +284,10 @@ def ohlc_dataframes_varied_timestamps(draw, min_bars=HIST_WINDOW + 10, max_bars=
     for i, inc in enumerate(increments):
         close[i + 1] = close[i] + inc
 
-    # Ensure all close prices are strictly positive
     min_close = close.min()
     if min_close <= 1.0:
         close = close - min_close + 10.0
 
-    # Generate high and low with valid OHLC relationship
     spreads = draw(
         st.lists(
             st.floats(min_value=0.05, max_value=1.5),
@@ -359,11 +315,6 @@ def ohlc_dataframes_varied_timestamps(draw, min_bars=HIST_WINDOW + 10, max_bars=
             "Volume": volume,
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# Property 3: Time Feature Trigonometric Identity
-# ---------------------------------------------------------------------------
 
 
 class TestTimeFeatureTrigonometricIdentity:
@@ -404,7 +355,6 @@ class TestTimeFeatureTrigonometricIdentity:
         """
         features = compute_features(df, historical_window=HIST_WINDOW)
 
-        # Reconstruct expected values from timestamps
         timestamps = features.index
         hours = timestamps.hour
         minutes = timestamps.minute

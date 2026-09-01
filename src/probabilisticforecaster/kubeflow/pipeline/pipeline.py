@@ -26,16 +26,9 @@ from kfp.dsl import Dataset, Input, Metrics, Model, Output
 
 from probabilisticforecaster.kubeflow.pipeline.config_schema import PipelineConfig
 
-# Compile-time pin for the training + backtesting steps onto the spark GPU
-# node that does NOT host the gemma LLM predictors (those live on spark-4214).
-# Requires the multi-arch (arm64) forecaster images from
-# forecaster-images-build.yml. Mirrors deepqnetwork's dqn_pipeline so all
-# training/backtesting workloads co-locate on one node. Override the host with
-# FORECASTER_SPARK_NODE_HOSTNAME.
 SPARK_NODE_HOSTNAME: str = os.getenv(
     "FORECASTER_SPARK_NODE_HOSTNAME", "spark-5790"
 ).strip()
-# NoExecute taints carried by the spark nodes.
 SPARK_TAINTS = (
     ("workload", "ml"),
     ("arch", "arm64"),
@@ -79,13 +72,7 @@ def _mount_minio_creds(task) -> None:
         },
     )
 
-# ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
-
-
-# ---------------------------------------------------------------------------
-# Container Components
-# ---------------------------------------------------------------------------
 
 
 @dsl.container_component
@@ -206,11 +193,6 @@ def backtesting(
     )
 
 
-# ---------------------------------------------------------------------------
-# Lightweight Python component for config resolution at runtime
-# ---------------------------------------------------------------------------
-
-
 @dsl.component(base_image="python:3.11-slim", packages_to_install=["pyyaml"])
 def resolve_config(
     symbol: str,
@@ -311,7 +293,6 @@ def resolve_config(
         training_mode=training_mode,
     )
 
-    # Apply Katib best hyperparameters when provided
     if katib_best_params_json:
         katib_params = json.loads(katib_best_params_json)
         katib_overrides = {
@@ -322,12 +303,10 @@ def resolve_config(
         for k, v in katib_overrides.items():
             setattr(cfg, k, v)
 
-    # Apply training mode adjustments
     if training_mode == "finetune":
         cfg.epochs = cfg.finetune_epochs
         cfg.learning_rate = cfg.finetune_learning_rate
 
-    # Resolve date ranges
     if snapshot_date:
         end_d = date.fromisoformat(snapshot_date)
         start_d = date.fromisoformat(cfg.data_start)
@@ -342,9 +321,6 @@ def resolve_config(
         cfg.test_start = test_start_d.isoformat()
         cfg.test_end = test_end_d.isoformat()
 
-    # Explicit window overrides win over both the rolling split and the static
-    # defaults (e.g. train through 2026-04-17 with the last quarter held out,
-    # mirroring the DQN adhoc convention).
     if train_start:
         cfg.train_start = train_start
     if train_end:
@@ -354,7 +330,6 @@ def resolve_config(
     if test_end:
         cfg.test_end = test_end
 
-    # Validate
     errors: list = []
     if cfg.symbol not in ("USDJPY", "AUDJPY"):
         errors.append(f"Invalid symbol: {cfg.symbol}")
@@ -394,11 +369,6 @@ def resolve_config(
     )
 
 
-# ---------------------------------------------------------------------------
-# Config Helpers (client-side, for use at submission time)
-# ---------------------------------------------------------------------------
-
-
 def build_pipeline_config(
     symbol: str = "USDJPY",
     forecast_horizon: int = 1,
@@ -433,7 +403,6 @@ def build_pipeline_config(
     """
     config = PipelineConfig()
 
-    # Apply pipeline parameter overrides
     config = config.override(
         symbol=symbol,
         forecast_horizon=forecast_horizon,
@@ -443,18 +412,15 @@ def build_pipeline_config(
         training_mode=training_mode,
     )
 
-    # Apply training mode adjustments
     if training_mode == "finetune":
         config = config.override(
             epochs=config.finetune_epochs,
             learning_rate=config.finetune_learning_rate,
         )
 
-    # Resolve date ranges based on snapshot_date
     resolved_snapshot = snapshot_date if snapshot_date else None
     config = config.resolve_date_ranges(resolved_snapshot)
 
-    # Validate configuration
     errors = config.validate()
     if errors:
         raise ValueError(
@@ -462,11 +428,6 @@ def build_pipeline_config(
         )
 
     return config
-
-
-# ---------------------------------------------------------------------------
-# Lightweight Python component for resolving the current production checkpoint
-# ---------------------------------------------------------------------------
 
 
 @dsl.component(
@@ -522,10 +483,6 @@ def resolve_production_checkpoint(
     try:
         from urllib.parse import urlsplit
 
-        # The SDK builds its endpoint as f"{server_address}:{port}", so the
-        # port must go through the `port` kwarg, embedding it in
-        # server_address collides with the default port and yields a broken
-        # "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
@@ -546,8 +503,6 @@ def resolve_production_checkpoint(
     production_uri = ""
     for v in versions:
         props = v.custom_properties if hasattr(v, "custom_properties") else {}
-        # custom_properties values may be wrapped (MetadataStringValue) or
-        # plain, read both shapes.
         stage_raw = props.get("lifecycle_stage")
         if hasattr(stage_raw, "string_value"):
             stage = stage_raw.string_value
@@ -566,11 +521,6 @@ def resolve_production_checkpoint(
         },
     )
     return production_uri
-
-
-# ---------------------------------------------------------------------------
-# Lightweight Python component for Model Registry registration
-# ---------------------------------------------------------------------------
 
 
 @dsl.component(
@@ -632,7 +582,6 @@ def model_registration(
             entry.update(extra)
         print(json.dumps(entry), file=sys.stdout)
 
-    # Step 1: Read evaluation metrics ----------------------------------------
     _log("Reading evaluation metrics", extra={"uri": evaluation_metrics_uri})
 
     import boto3
@@ -673,7 +622,6 @@ def model_registration(
         )
         raise
 
-    # Step 2: Check degradation gate -----------------------------------------
     gate = eval_data.get("degradation_gate", {})
     gate_passed = gate.get("gate_passed", False)
     gate_skipped = gate.get("gate_skipped", False)
@@ -696,7 +644,6 @@ def model_registration(
         )
         return
 
-    # Step 3: Register model in Model Registry -------------------------------
     _log(
         "Gate passed; registering model in Model Registry",
         extra={"registry_url": registry_url},
@@ -707,10 +654,6 @@ def model_registration(
 
         from model_registry import ModelRegistry
 
-        # The SDK builds its endpoint as f"{server_address}:{port}", so the
-        # port must go through the `port` kwarg, embedding it in
-        # server_address collides with the default port and yields a broken
-        # "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
@@ -721,18 +664,14 @@ def model_registration(
             user_token="",
         )
 
-        # Build model name from symbol and horizon
         model_name = (
             f"probabilistic-transformer-{symbol.lower()}-h{forecast_horizon}"
         )
 
-        # Build metadata
         version_id = str(uuid.uuid4())
         config = json.loads(config_json)
         test_metrics = eval_data.get("test_metrics", {})
 
-        # Look up any existing production version *before* registering this one,
-        # so we can demote it after the new version lands.
         existing_production: list = []
         try:
             for v in registry.get_model_versions(model_name):
@@ -741,7 +680,6 @@ def model_registration(
                 ) == "production":
                     existing_production.append(v)
         except Exception:
-            # Registered model does not exist yet, first deployment.
             pass
 
         has_production = bool(existing_production)
@@ -771,14 +709,10 @@ def model_registration(
             ),
             "pipeline_run_id": pipeline_run_id,
             "data_snapshot_path": "",
-            # New version starts in production on bootstrap; otherwise staging
-            # until we demote the incumbent below.
             "lifecycle_stage": "production" if not has_production else "staging",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Single SDK call registers (or upserts) the RegisteredModel and creates
-        # the ModelVersion with the supplied custom properties.
         registry.register_model(
             name=model_name,
             uri=model_checkpoint_uri,
@@ -803,8 +737,6 @@ def model_registration(
             },
         )
 
-        # Promote: demote the prior production version (if any) and ensure the
-        # new version is marked production.
         if has_production:
             new_version = registry.get_model_version(model_name, version_id)
             if new_version is not None:
@@ -828,11 +760,6 @@ def model_registration(
             extra={"version_id": version_id, "model_name": model_name},
         )
 
-        # Note: standalone Forecaster KServe InferenceService is deprecated
-        # (kubeflow-ml-pipeline spec, Requirement 5). The dqnpf-intraday
-        # combined predictor's hot-reload watcher (Task 30.3) resolves the
-        # new production checkpoint on its next poll; no KServe patching
-        # is performed from this pipeline step.
 
         _log(
             "Model registration component completed successfully",
@@ -855,11 +782,6 @@ def model_registration(
             extra={"error": str(e)},
         )
         raise
-
-
-# ---------------------------------------------------------------------------
-# Pipeline Definition
-# ---------------------------------------------------------------------------
 
 
 @dsl.pipeline(
@@ -930,9 +852,6 @@ def forecaster_pipeline(
             so explicit windows can end before the snapshot without losing
             the consolidated full history.
     """
-    # -----------------------------------------------------------------------
-    # Step 0: Config resolution and validation (lightweight Python component)
-    # -----------------------------------------------------------------------
     config_task = resolve_config(
         symbol=symbol,
         forecast_horizon=forecast_horizon,
@@ -948,9 +867,6 @@ def forecaster_pipeline(
         test_end=test_end,
     )
 
-    # -----------------------------------------------------------------------
-    # Step 1: Data Preparation
-    # -----------------------------------------------------------------------
     dp_task = data_preparation(
         symbol=symbol,
         train_start=config_task.outputs["train_start"],
@@ -966,23 +882,12 @@ def forecaster_pipeline(
     dp_task.set_caching_options(enable_caching=True)
     _mount_minio_creds(dp_task)
 
-    # -----------------------------------------------------------------------
-    # Step 1b: Resolve the current production checkpoint (for finetune mode)
-    # -----------------------------------------------------------------------
-    # Always runs, when no production version exists yet, returns "" and
-    # model_training (in scratch mode) ignores it. When training_mode is
-    # "finetune", the trainer requires a non-empty URI and will fail with a
-    # clear ValueError if this is empty (i.e. you tried to fine-tune before
-    # any production model existed).
     prod_ckpt_task = resolve_production_checkpoint(
         registry_url=model_registry_url,
         symbol=symbol,
         forecast_horizon=forecast_horizon,
     )
 
-    # -----------------------------------------------------------------------
-    # Step 2: Model Training
-    # -----------------------------------------------------------------------
     mt_task = model_training(
         train_dataset=dp_task.outputs["train_dataset"],
         config_json=config_task.outputs["config_json"],
@@ -991,13 +896,8 @@ def forecaster_pipeline(
     )
     mt_task.set_retry(num_retries=3)
     _mount_minio_creds(mt_task)
-    # Keep training off the LLM-serving spark node (and off the busy amd64
-    # nodes), co-located with the other training/backtesting workloads.
     _pin_to_spark(mt_task)
 
-    # -----------------------------------------------------------------------
-    # Step 3: Model Evaluation
-    # -----------------------------------------------------------------------
     me_task = model_evaluation(
         model_checkpoint=mt_task.outputs["model_checkpoint"],
         test_dataset=dp_task.outputs["test_dataset"],
@@ -1006,12 +906,6 @@ def forecaster_pipeline(
     me_task.set_retry(num_retries=3)
     _mount_minio_creds(me_task)
 
-    # -----------------------------------------------------------------------
-    # Step 4: Model Registration (after evaluation)
-    # -----------------------------------------------------------------------
-    # pipeline_run_id identifies this run for lineage tracking in the Model
-    # Registry. Uses the pipeline job name placeholder which KFP resolves
-    # to the actual job name at runtime.
     reg_task = model_registration(
         model_checkpoint=mt_task.outputs["model_checkpoint"],
         evaluation_metrics=me_task.outputs["evaluation_metrics"],
@@ -1023,9 +917,6 @@ def forecaster_pipeline(
     )
     _mount_minio_creds(reg_task)
 
-    # -----------------------------------------------------------------------
-    # Step 5: Backtesting (runs in parallel with evaluation + registration)
-    # -----------------------------------------------------------------------
     bt_task = backtesting(
         model_checkpoint=mt_task.outputs["model_checkpoint"],
         test_dataset=dp_task.outputs["test_dataset"],
@@ -1033,5 +924,4 @@ def forecaster_pipeline(
     )
     bt_task.set_retry(num_retries=3)
     _mount_minio_creds(bt_task)
-    # Backtesting joins training on the non-LLM spark node.
     _pin_to_spark(bt_task)

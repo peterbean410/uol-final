@@ -25,10 +25,6 @@ from dqnpf.kubeflow.pipeline.config_schema import (
 _INTEGRATION_FIELDS = {f.name for f in fields(IntegrationConfig)}
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 _valid_config = st.builds(
     DqnpfPipelineConfig,
     symbol=st.sampled_from(["USDJPY", "AUDJPY", "EURUSD"]),
@@ -44,11 +40,6 @@ _valid_config = st.builds(
     seed=st.integers(min_value=0, max_value=2**31 - 1),
     max_wall_time_hours=st.integers(min_value=1, max_value=48),
 )
-
-
-# ---------------------------------------------------------------------------
-# DQNPF-CFG-1: YAML round-trip
-# ---------------------------------------------------------------------------
 
 
 @given(cfg=_valid_config)
@@ -76,19 +67,12 @@ def test_default_yaml_loads_cleanly() -> None:
     assert cfg.dqn_model_registry_name == "deepqnetwork-usdjpy"
 
 
-# ---------------------------------------------------------------------------
-# DQNPF-CFG-2: CLI argv generation
-# ---------------------------------------------------------------------------
-
-
 @given(cfg=_valid_config)
 def test_cli_argv_round_trips_via_load_config(
     cfg: DqnpfPipelineConfig, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     """to_cli_args produces argv that load_config parses back to the same IntegrationConfig."""
     tmp_path = tmp_path_factory.mktemp("dqnpf_cli_argv")
-    # Point load_config at a non-existent config file so YAML defaults don't
-    # contaminate the round-trip; CLI flags are the sole source of truth.
     empty_config_path = tmp_path / "missing.yaml"
 
     argv = ["--config", str(empty_config_path)] + cfg.to_cli_args()
@@ -112,13 +96,6 @@ def test_cli_argv_only_covers_integration_fields(cfg: DqnpfPipelineConfig) -> No
     assert flags == expected_flags
 
 
-# ---------------------------------------------------------------------------
-# Mirror integrity: DqnpfPipelineConfig must declare every IntegrationConfig
-# field, or to_integration_config() raises AttributeError at runtime (it
-# iterates the live IntegrationConfig field set and getattr()s each off self).
-# ---------------------------------------------------------------------------
-
-
 def test_pipeline_config_mirrors_every_integration_field() -> None:
     """Every IntegrationConfig field is mirrored on DqnpfPipelineConfig."""
     pipeline_fields = {f.name for f in fields(DqnpfPipelineConfig)}
@@ -135,11 +112,6 @@ def test_default_pipeline_config_builds_integration_config() -> None:
     ic = DqnpfPipelineConfig().to_integration_config()
     for name in _INTEGRATION_FIELDS:
         assert getattr(ic, name) == getattr(DqnpfPipelineConfig(), name), name
-
-
-# ---------------------------------------------------------------------------
-# DQNPF-CFG-3: Invalid configs surface errors
-# ---------------------------------------------------------------------------
 
 
 @given(threshold=st.floats(max_value=-1e-9, allow_nan=False, allow_infinity=False))

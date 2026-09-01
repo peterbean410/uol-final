@@ -59,14 +59,9 @@ def test_get_price_ticks_invalid_quote_type_raises():
 
 def test_get_price_ticks_none_quote_type_does_not_raise_validation():
     """Verify quote_type=None passes validation (does not raise ValueError)."""
-    # We only test that None is accepted as a valid quote_type value.
-    # The full None integration test (fetching both BID+ASK) is in
-    # test_price_ticks_none.py to avoid Twisted reactor reuse issues.
     try:
         get_price_ticks("USDJPY", num_ticks=1, quote_type=None)
     except ValueError:
         pytest.fail("quote_type=None should be accepted")
     except RuntimeError:
-        # RuntimeError from reactor reuse is expected in the same process;
-        # the important thing is no ValueError was raised.
         pass

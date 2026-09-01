@@ -25,7 +25,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-# Add parent paths so we can import the probabilisticforecaster package
 sys.path.insert(0, "/app")
 
 from probabilisticforecaster.config import ForecasterConfig, S3_BUCKET
@@ -35,13 +34,11 @@ from probabilisticforecaster.kubeflow.monitoring.metrics import get_logger
 
 logger = get_logger(__name__, component="model_evaluation")
 
-# Degradation thresholds (from pipeline config)
 DEFAULT_NLL_DEGRADATION_THRESHOLD = 0.1
 DEFAULT_DA_DEGRADATION_THRESHOLD = 0.05
 DEFAULT_NLL_ABSOLUTE_THRESHOLD = 3.5
 DEFAULT_DA_ABSOLUTE_THRESHOLD = 0.50
 
-# Fixed seed for forgetting check sampling
 FORGETTING_CHECK_SEED = 42
 FORGETTING_CHECK_SAMPLE_RATIO = 0.10
 
@@ -191,14 +188,13 @@ def collect_predictions(
 
     with torch.no_grad():
         for features, labels in loader:
-            features = features.to(device)  # (batch, lookback, 16)
+            features = features.to(device)
 
             mu, sigma = model(features)
 
-            # Use only the last position for evaluation
-            mu_last = mu[:, -1, 0]  # (batch,)
-            sigma_last = sigma[:, -1, 0]  # (batch,)
-            actual = labels[:, 0]  # (batch,)
+            mu_last = mu[:, -1, 0]
+            sigma_last = sigma[:, -1, 0]
+            actual = labels[:, 0]
 
             all_mu.append(mu_last.cpu().numpy())
             all_sigma.append(sigma_last.cpu().numpy())
@@ -313,7 +309,6 @@ def forgetting_check(
     n_total = len(train_dataset)
     n_sample = max(1, int(n_total * sample_ratio))
 
-    # Use fixed seed for reproducible sampling
     rng = np.random.default_rng(seed)
     indices = rng.choice(n_total, size=n_sample, replace=False).tolist()
 
@@ -386,7 +381,6 @@ def degradation_gate(
 
     reasons = []
 
-    # Relative degradation checks
     if nll_delta > nll_threshold:
         reasons.append(
             f"NLL degraded: current={current_metrics.nll:.6f}, "
@@ -399,7 +393,6 @@ def degradation_gate(
             f"production={prod_da:.4f}, delta={da_delta:.4f} > threshold={da_threshold}"
         )
 
-    # Absolute quality checks (thesis benchmarks: NLL 2.404, DA 0.505)
     if current_metrics.nll > nll_absolute_threshold:
         reasons.append(
             f"NLL below absolute floor: current={current_metrics.nll:.6f} > "
@@ -677,16 +670,13 @@ def main() -> None:
         },
     )
 
-    # Determine device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device selected", extra={"device": str(device)})
 
-    # Step 1: Load model checkpoint from S3
     checkpoint = load_checkpoint_from_s3(
         args.model_checkpoint_path, bucket=args.bucket
     )
 
-    # Reconstruct model config from checkpoint
     if "config" in checkpoint:
         config = ForecasterConfig(**checkpoint["config"])
     else:
@@ -700,7 +690,6 @@ def main() -> None:
             dropout=args.dropout,
         )
 
-    # Instantiate and load model
     model = ProbabilisticTransformer(config)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
@@ -716,10 +705,8 @@ def main() -> None:
         },
     )
 
-    # Step 2: Load test dataset from S3
     test_dataset = load_dataset_from_s3(args.test_dataset_path, bucket=args.bucket)
 
-    # Step 3: Compute evaluation metrics on test dataset
     logger.info(
         "Evaluating model on test dataset",
         extra={"num_test_samples": len(test_dataset)},
@@ -738,7 +725,6 @@ def main() -> None:
         },
     )
 
-    # Step 4: Forgetting check (if train dataset path provided)
     forgetting_metrics = None
     if args.train_dataset_path:
         logger.info("Loading train dataset for forgetting check")
@@ -749,13 +735,11 @@ def main() -> None:
             model, train_dataset, args.batch_size, device
         )
 
-    # Step 5: Degradation gate
     gate_passed = True
     gate_skipped = False
     gate_reason = ""
 
     if not args.production_metrics_path:
-        # Initial deployment bootstrap: no production model → skip gate, auto-promote
         gate_passed = True
         gate_skipped = True
         gate_reason = "Initial deployment: no production model exists, auto-promoting"
@@ -764,7 +748,6 @@ def main() -> None:
             extra={"gate_passed": True, "gate_skipped": True},
         )
     else:
-        # Load production metrics and compare
         try:
             production_metrics = load_production_metrics_from_s3(
                 args.production_metrics_path, bucket=args.bucket
@@ -785,7 +768,6 @@ def main() -> None:
                 },
             )
         except FileNotFoundError:
-            # Production metrics file doesn't exist, treat as initial deployment
             gate_passed = True
             gate_skipped = True
             gate_reason = (
@@ -800,7 +782,6 @@ def main() -> None:
                 },
             )
 
-    # Step 6: Assemble output
     timestamp = datetime.now(timezone.utc).isoformat()
 
     output = {
@@ -837,10 +818,8 @@ def main() -> None:
             "seed": FORGETTING_CHECK_SEED,
         }
 
-    # Step 7: Upload metrics to S3
     upload_metrics_to_s3(output, args.output_path, bucket=args.bucket)
 
-    # Log final summary
     if not gate_passed:
         logger.warning(
             "Model evaluation completed, GATE FAILED (flagged for manual review)",

@@ -21,15 +21,10 @@ from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-REPO_ROOT = Path(__file__).resolve().parents[4]  # forex/
+REPO_ROOT = Path(__file__).resolve().parents[4]
 REQUIREMENTS_FILE = REPO_ROOT / "deepqnetwork" / "kubeflow" / "base" / "requirements-dqn-base.txt"
 PROTO_FILE = REPO_ROOT / "modelenv" / "proto" / "proto" / "environment.proto"
 
-# Mapping from pip package names to their Python import names
 _PACKAGE_TO_IMPORT = {
     "torch": "torch",
     "numpy": "numpy",
@@ -40,20 +35,12 @@ _PACKAGE_TO_IMPORT = {
     "PyYAML": "yaml",
 }
 
-# The modules that the Dockerfile expects to be importable in the built image
 _REQUIRED_MODULES = ["torch", "grpc", "numpy", "boto3", "environment_pb2"]
 
-# Possible locations for gRPC stubs (Dockerfile copies to /app/stubs/ in image;
-# in the repo they live at the root level for development use)
 _STUB_LOCATIONS = [
     REPO_ROOT / "environment_pb2.py",
     REPO_ROOT / "environment_pb2_grpc.py",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _parse_requirements(path: Path) -> list[tuple[str, str]]:
@@ -66,30 +53,18 @@ def _parse_requirements(path: Path) -> list[tuple[str, str]]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        # Split on == to get package name and version
         match = re.match(r"^([A-Za-z0-9_-]+)==(.+)$", line)
         if match:
             packages.append((match.group(1), match.group(2)))
     return packages
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-# Strategy that draws from the actual packages in requirements-dqn-base.txt
 _packages = _parse_requirements(REQUIREMENTS_FILE)
 _package_names = [pkg for pkg, _ in _packages]
 
 package_strategy = st.sampled_from(_package_names)
 
-# Strategy that draws from the required modules list
 required_module_strategy = st.sampled_from(_REQUIRED_MODULES)
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-4: Base image Python imports
-# ---------------------------------------------------------------------------
 
 
 class TestDQNBaseImageDependencyConsistency:
@@ -141,7 +116,6 @@ class TestDQNBaseImageDependencyConsistency:
 
         **Validates: Requirements DQN-R4**
         """
-        # environment_pb2 is a generated stub, import from repo root
         if module_name == "environment_pb2":
             import sys
             repo_root_str = str(REPO_ROOT)
@@ -212,9 +186,6 @@ class TestDQNBaseImageDependencyConsistency:
         packages = _parse_requirements(REQUIREMENTS_FILE)
         package_names = {pkg.lower() for pkg, _ in packages}
 
-        # Map required modules to their pip package names. torch is excluded;
-        # the Dockerfile installs it from the arch-matching CUDA index, not the
-        # shared (arch-agnostic) requirements file.
         module_to_package = {
             "grpc": "grpcio",
             "numpy": "numpy",

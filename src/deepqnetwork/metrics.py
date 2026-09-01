@@ -12,7 +12,6 @@ import os
 from collections import deque
 from pathlib import Path
 
-# Optional TensorBoard support
 try:
     from torch.utils.tensorboard import SummaryWriter
 
@@ -44,19 +43,15 @@ class MetricsLogger:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.log_interval = log_interval
 
-        # CSV file paths
         self._episode_csv_path = self.checkpoint_dir / "episode_metrics.csv"
         self._step_csv_path = self.checkpoint_dir / "step_metrics.csv"
 
-        # Track whether CSV headers have been written
         self._episode_csv_initialized = False
         self._step_csv_initialized = False
 
-        # Rolling reward tracking
         self._reward_history: deque[float] = deque(maxlen=100)
         self._best_reward: float = float("-inf")
 
-        # TensorBoard writer (optional)
         self._tb_writer: SummaryWriter | None = None
         if TENSORBOARD_AVAILABLE:
             tb_log_dir = self.checkpoint_dir / "tensorboard"
@@ -91,12 +86,10 @@ class MetricsLogger:
             epsilon: Final epsilon value at end of episode.
             duration: Wall-clock duration of the episode in seconds.
         """
-        # Update rolling stats
         self._reward_history.append(reward)
         if reward > self._best_reward:
             self._best_reward = reward
 
-        # Console logging
         logger.info(
             "Episode %d | Reward: %.4f | Length: %d | Avg Loss: %.6f | "
             "Epsilon: %.4f | Duration: %.2fs",
@@ -108,10 +101,8 @@ class MetricsLogger:
             duration,
         )
 
-        # CSV logging
         self._write_episode_csv(episode, reward, length, avg_loss, epsilon, duration)
 
-        # TensorBoard logging
         if self._tb_writer is not None:
             self._tb_writer.add_scalar("episode/reward", reward, episode)
             self._tb_writer.add_scalar("episode/length", length, episode)
@@ -145,7 +136,6 @@ class MetricsLogger:
 
         loss_val = loss if loss is not None else 0.0
 
-        # Console logging (at DEBUG level to avoid flooding)
         logger.debug(
             "Step %d | Action: %d | Reward: %.4f | Q-value: %.4f | "
             "Epsilon: %.4f | Loss: %.6f",
@@ -157,10 +147,8 @@ class MetricsLogger:
             loss_val,
         )
 
-        # CSV logging
         self._write_step_csv(step, action, reward, q_value, epsilon, loss_val)
 
-        # TensorBoard logging
         if self._tb_writer is not None:
             self._tb_writer.add_scalar("step/reward", reward, step)
             self._tb_writer.add_scalar("step/q_value", q_value, step)
@@ -181,7 +169,6 @@ class MetricsLogger:
                 internal rolling history.
         """
         if rewards_history is not None:
-            # Use the last 100 from the provided history
             recent = rewards_history[-100:]
         else:
             recent = list(self._reward_history)
@@ -201,7 +188,6 @@ class MetricsLogger:
             avg_reward,
         )
 
-        # TensorBoard logging
         if self._tb_writer is not None:
             self._tb_writer.add_scalar("summary/best_reward", best_reward, episode)
             self._tb_writer.add_scalar("summary/avg_reward_100", avg_reward, episode)

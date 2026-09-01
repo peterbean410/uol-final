@@ -193,8 +193,7 @@ impl Normaliser {
 
     /// Return the default [`ColumnConfig`] for a named column.
     fn default_config(name: &str) -> ColumnConfig {
-        // --- Price-level (ratio → z-score, window 252, clip ±4) ---
-        if name.ends_with("_bar_close")
+                if name.ends_with("_bar_close")
             || name.ends_with("_ta_sma_")
             || name.ends_with("_ta_ema_")
             || name.contains("_ta_ichimoku_")
@@ -209,39 +208,32 @@ impl Normaliser {
             return ColumnConfig::new(FeatureCategory::PriceLevel, 252, 4.0);
         }
 
-        // --- Bounded oscillators ( / 100) ---
-        if name.contains("_ta_rsi_") || name.contains("_ta_adx_") {
+                if name.contains("_ta_rsi_") || name.contains("_ta_adx_") {
             return ColumnConfig::new(FeatureCategory::BoundedOsc, 0, 0.0);
         }
 
-        // --- Unbounded oscillators (z-score, window 252, clip ±4) ---
-        if name.contains("_ta_cci_")
+                if name.contains("_ta_cci_")
             || name.contains("_ta_macd")
         {
             return ColumnConfig::new(FeatureCategory::UnboundedOsc, 252, 4.0);
         }
 
-        // --- Volume (log(1+x) → z-score, window 252, clip ±4) ---
-        if name.ends_with("_bar_volume") {
+                if name.ends_with("_bar_volume") {
             return ColumnConfig::new(FeatureCategory::Volume, 252, 4.0);
         }
 
-        // --- P&L (z-score, window 504, clip ±5) ---
-        if name == "session_realised_pnl" || name == "unrealised_pnl" {
+                if name == "session_realised_pnl" || name == "unrealised_pnl" {
             return ColumnConfig::new(FeatureCategory::PnL, 504, 5.0);
         }
 
-        // --- Counts ( / cap ) ---
-        if name.contains("num_positions") {
+                if name.contains("num_positions") {
             return ColumnConfig::new(FeatureCategory::Count { cap: 5.0 }, 0, 0.0);
         }
         if name == "tick_count" {
             return ColumnConfig::new(FeatureCategory::Count { cap: 100.0 }, 0, 0.0);
         }
 
-        // --- Passthrough ---
-        // tick_spread, swap_fees, sin_hour, cos_hour, done
-        ColumnConfig::new(FeatureCategory::Passthrough, 0, 0.0)
+                        ColumnConfig::new(FeatureCategory::Passthrough, 0, 0.0)
     }
 
     /// Total number of columns.
@@ -347,16 +339,15 @@ mod tests {
     fn count_divides_by_cap() {
         let names = vec!["num_positions_buy".to_string(), "tick_count".to_string()];
         let normaliser = Normaliser::new(&names);
-        assert_eq!(normaliser.normalise_by_index(0, 3.0), 0.6); // 3 / 5
-        assert_eq!(normaliser.normalise_by_index(1, 50.0), 0.5); // 50 / 100
+        assert_eq!(normaliser.normalise_by_index(0, 3.0), 0.6);
+        assert_eq!(normaliser.normalise_by_index(1, 50.0), 0.5);
     }
 
     #[test]
     fn zscore_returns_zero_when_stats_not_ready() {
         let names = vec!["M5_bar_close".to_string()];
         let normaliser = Normaliser::new(&names);
-        // No updates → stats not ready → returns 0.0
-        assert_eq!(normaliser.normalise_by_index(0, 1.0005), 0.0);
+                assert_eq!(normaliser.normalise_by_index(0, 1.0005), 0.0);
     }
 
     #[test]
@@ -364,20 +355,14 @@ mod tests {
         let names = vec!["M5_bar_close".to_string()];
         let mut normaliser = Normaliser::new(&names);
 
-        // Feed 252 identical values to warm up (μ=1.0005, σ≈0).
-        // After warmup, normalise a fresh value.
-        // With identical values σ≈0, so the normalise will fail the sd>1e-12 check → 0.0.
-        // Feed values with small variance instead.
-        for i in 0..252 {
+                                        for i in 0..252 {
             let v = 1.0 + (i as f64 % 10.0) * 0.0001;
             normaliser.columns[0].update(v);
         }
 
-        // Stats are ready now.  Normalise a value near the mean.
-        let result = normaliser.normalise_by_index(0, 1.00045);
-        // Should be a finite z-score, not 0.0
-        assert!(result.abs() > 0.0);
-        assert!(result.abs() <= 4.0); // clipped
+                let result = normaliser.normalise_by_index(0, 1.00045);
+                assert!(result.abs() > 0.0);
+        assert!(result.abs() <= 4.0);
     }
 
     #[test]
@@ -385,13 +370,10 @@ mod tests {
         let names = vec!["M5_bar_volume".to_string()];
         let mut normaliser = Normaliser::new(&names);
 
-        // Feed 252 values of volume=100.0 → log(101) ≈ 4.615
-        for _ in 0..252 {
+                for _ in 0..252 {
             normaliser.columns[0].update(100.0);
         }
-        // With identical values, σ≈0 → z-score returns 0.0 (sd check fails).
-        // This is expected; no variance means no signal.
-        let result = normaliser.normalise_by_index(0, 100.0);
+                        let result = normaliser.normalise_by_index(0, 100.0);
         assert_eq!(result, 0.0);
     }
 
@@ -401,6 +383,5 @@ mod tests {
         let mut normaliser = Normaliser::new(&names);
         let raw: Vec<f64> = vec![1.0; names.len()];
         normaliser.update(&raw);
-        // Should not panic, passthrough/osc/count columns ignore updates.
-    }
+            }
 }

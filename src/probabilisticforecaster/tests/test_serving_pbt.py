@@ -24,9 +24,6 @@ from hypothesis.extra.numpy import arrays
 from probabilisticforecaster.config import ForecasterConfig
 from probabilisticforecaster.model import ProbabilisticTransformer
 
-# ---------------------------------------------------------------------------
-# Mock kserve before importing the predictor module
-# ---------------------------------------------------------------------------
 
 _kserve_mock = ModuleType("kserve")
 
@@ -44,10 +41,6 @@ sys.modules.setdefault("kserve", _kserve_mock)
 
 from probabilisticforecaster.kubeflow.serving.predictor import ForecasterPredictor  # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
 
 NUM_FEATURES = 16
 VALID_LOOKBACK_WINDOWS = [24, 36, 48]
@@ -107,7 +100,7 @@ def valid_feature_tensors(draw):
                 ),
             )
         )
-    else:  # mixed
+    else:
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -126,11 +119,6 @@ def valid_feature_tensors(draw):
         )
 
     return lookback_window, arr.tolist()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_predictor(lookback_window: int) -> ForecasterPredictor:
@@ -155,13 +143,11 @@ def _create_predictor(lookback_window: int) -> ForecasterPredictor:
     predictor = ForecasterPredictor(name="test-forecaster", model_path=f.name)
     predictor.load()
 
-    # Clean up temp file after loading
     os.unlink(f.name)
 
     return predictor
 
 
-# Cache predictors by lookback_window to avoid recreating them for every example
 _predictor_cache: dict[int, ForecasterPredictor] = {}
 
 
@@ -170,11 +156,6 @@ def _get_predictor(lookback_window: int) -> ForecasterPredictor:
     if lookback_window not in _predictor_cache:
         _predictor_cache[lookback_window] = _create_predictor(lookback_window)
     return _predictor_cache[lookback_window]
-
-
-# ---------------------------------------------------------------------------
-# Property 6: Inference request/response contract
-# ---------------------------------------------------------------------------
 
 
 class TestInferenceRequestResponseContract:
@@ -212,7 +193,6 @@ class TestInferenceRequestResponseContract:
         payload = {"instances": features}
         response = predictor.predict(payload)
 
-        # Response must contain "predictions" list
         assert "predictions" in response, (
             f"Response missing 'predictions' key. Got keys: {list(response.keys())}"
         )
@@ -222,7 +202,6 @@ class TestInferenceRequestResponseContract:
         )
         assert len(predictions) > 0, "predictions list must not be empty"
 
-        # Each prediction must have finite mu and positive finite sigma
         for i, pred in enumerate(predictions):
             assert "mu" in pred, f"Prediction {i} missing 'mu' key"
             assert "sigma" in pred, f"Prediction {i} missing 'sigma' key"
@@ -230,7 +209,6 @@ class TestInferenceRequestResponseContract:
             mu = pred["mu"]
             sigma = pred["sigma"]
 
-            # mu must be a finite float
             assert isinstance(mu, float), (
                 f"Prediction {i}: mu must be a float, got {type(mu).__name__}"
             )
@@ -238,7 +216,6 @@ class TestInferenceRequestResponseContract:
                 f"Prediction {i}: mu must be finite, got {mu}"
             )
 
-            # sigma must be a positive finite float
             assert isinstance(sigma, float), (
                 f"Prediction {i}: sigma must be a float, got {type(sigma).__name__}"
             )
@@ -248,11 +225,6 @@ class TestInferenceRequestResponseContract:
             assert sigma > 0, (
                 f"Prediction {i}: sigma must be positive, got {sigma}"
             )
-
-
-# ---------------------------------------------------------------------------
-# Property 7: Malformed request rejection
-# ---------------------------------------------------------------------------
 
 
 @st.composite
@@ -283,18 +255,15 @@ def malformed_payloads(draw):
     )
 
     if violation_type == "missing_instances":
-        # Payload without 'instances' key
         payload = draw(
             st.fixed_dictionaries({"data": st.just([[0.0] * 16] * lookback_window)})
         )
     elif violation_type == "wrong_features":
-        # Wrong number of features (not 16)
         num_features = draw(st.integers(min_value=1, max_value=32).filter(lambda x: x != 16))
         payload = {
             "instances": [[0.1] * num_features for _ in range(lookback_window)]
         }
     elif violation_type == "wrong_sequence_length":
-        # Wrong sequence length (not matching any valid lookback_window)
         wrong_length = draw(
             st.integers(min_value=1, max_value=100).filter(
                 lambda x: x not in VALID_LOOKBACK_WINDOWS
@@ -302,23 +271,18 @@ def malformed_payloads(draw):
         )
         payload = {"instances": [[0.1] * 16 for _ in range(wrong_length)]}
     elif violation_type == "non_numeric":
-        # Non-numeric data
         payload = {
             "instances": [["not_a_number"] * 16 for _ in range(lookback_window)]
         }
     elif violation_type == "nan_values":
-        # NaN values in instances
         row = [float("nan")] + [0.1] * 15
         payload = {"instances": [row for _ in range(lookback_window)]}
     elif violation_type == "inf_values":
-        # Inf values in instances
         row = [float("inf")] + [0.1] * 15
         payload = {"instances": [row for _ in range(lookback_window)]}
     elif violation_type == "wrong_dimensionality_1d":
-        # 1D input (flat list)
         payload = {"instances": [0.1] * 16}
-    else:  # instances_not_list
-        # instances is not a list/array
+    else:
         payload = {"instances": "not_a_list"}
 
     return lookback_window, payload
@@ -360,6 +324,5 @@ class TestMalformedRequestRejection:
         with pytest.raises(ValueError) as exc_info:
             predictor.predict(payload)
 
-        # Error message must be non-empty and descriptive
         error_msg = str(exc_info.value)
         assert len(error_msg) > 0, "Error message must not be empty"

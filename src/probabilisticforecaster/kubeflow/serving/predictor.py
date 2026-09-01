@@ -70,19 +70,16 @@ class ForecasterPredictor(kserve.Model):
             ValueError: If payload is malformed, has wrong shape, or contains
                 non-finite values. KServe maps these to HTTP 400 responses.
         """
-        # Validate 'instances' field exists
         instances = payload.get("instances")
         if instances is None:
             raise ValueError("Missing 'instances' field in request payload")
 
-        # Validate instances is a list/array
         if not isinstance(instances, (list, np.ndarray)):
             raise ValueError(
                 "'instances' must be a list or array, "
                 f"got {type(instances).__name__}"
             )
 
-        # Convert to tensor, catching non-numeric data
         try:
             tensor = torch.tensor(instances, dtype=torch.float32)
         except (TypeError, ValueError) as e:
@@ -90,14 +87,12 @@ class ForecasterPredictor(kserve.Model):
                 f"Failed to convert 'instances' to numeric tensor: {e}"
             )
 
-        # Validate all values are finite (no NaN or Inf)
         if not torch.isfinite(tensor).all():
             raise ValueError(
                 "Input contains non-finite values (NaN or Inf). "
                 "All feature values must be finite floats."
             )
 
-        # Handle dimensionality: (lookback_window, 16) → (1, lookback_window, 16)
         if tensor.dim() == 2:
             tensor = tensor.unsqueeze(0)
         elif tensor.dim() != 3:
@@ -106,14 +101,12 @@ class ForecasterPredictor(kserve.Model):
                 "Shape must be (lookback_window, 16) or (batch, lookback_window, 16)."
             )
 
-        # Validate feature dimension
         if tensor.shape[-1] != 16:
             raise ValueError(
                 f"Expected 16 features in last dimension, got {tensor.shape[-1]}. "
                 "Input shape must be (lookback_window, 16) or (batch, lookback_window, 16)."
             )
 
-        # Validate lookback_window dimension
         if tensor.shape[1] != self.config.lookback_window:
             raise ValueError(
                 f"Expected sequence length (lookback_window) of "
@@ -121,15 +114,12 @@ class ForecasterPredictor(kserve.Model):
                 f"Input must have exactly {self.config.lookback_window} time steps."
             )
 
-        # Run inference
         with torch.no_grad():
             mu, sigma = self.model(tensor)
 
-        # Extract last position predictions
         mu_vals = mu[:, -1, 0].numpy().tolist()
         sigma_vals = sigma[:, -1, 0].numpy().tolist()
 
-        # Validate output is finite and sigma is positive
         predictions = []
         for m, s in zip(mu_vals, sigma_vals):
             if not math.isfinite(m) or not math.isfinite(s):

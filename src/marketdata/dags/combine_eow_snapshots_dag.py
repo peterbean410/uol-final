@@ -110,7 +110,6 @@ with DAG(
             ),
         ],
         container_resources=k8s.V1ResourceRequirements(
-            # W1 frames are tiny (~760 weekly bars full-history); 1Gi is ample.
             requests={"cpu": "100m", "memory": "256Mi"},
             limits={"cpu": "500m", "memory": "1Gi"},
         ),

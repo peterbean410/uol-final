@@ -1,16 +1,10 @@
-# Deep Q-Network Trading Agent - Default Configuration
 
-# Environment
 grpc_address: "localhost:50051"
 symbol: "USDJPY"
 episode_start_ts: 0
 episode_end_ts: 0
 step_size_seconds: 5
 
-# Agent
-# Horizon 1/(1-gamma) ~= 1000 steps, spanning most of the 1440-step (24h, 60s)
-# session so the policy can value holding toward end-of-session liquidation.
-# Was 0.99 (~100-step horizon, too myopic for a full-session episode).
 gamma: 0.999
 epsilon_start: 1.0
 epsilon_end: 0.05               # sustained exploration floor (~5% random actions throughout)
@@ -21,7 +15,6 @@ target_update_freq: 1000
 train_freq: 4
 tau: 1.0
 
-# Network
 hidden_dims: [256, 256, 128]
 activation: "relu"
 dropout: 0.0
@@ -32,23 +25,15 @@ weight_decay: 0.0
 grad_clip_norm: 10.0
 loss_function: "huber"
 
-# Training
-# Episode-count knobs are mode-specific and mutually exclusive, set at most the
-# one matching your mode (setting the other is rejected). Left unset = effective
-# defaults (3000 fixed-window / 3 date-range).
-# num_episodes_per_range: 3000  # fixed-window mode only
-# repeats_per_date: 3           # date-range mode only (replays per date)
 max_steps_per_episode: 30000
 checkpoint_interval: 50
 checkpoint_dir: "deepqnetwork/checkpoints/"
 log_interval: 10                # episodes between episode-summary logs
 progress_log_interval: 1000     # steps between intra-episode progress logs (0 disables)
 
-# Mode
 mode: "train"
 checkpoint: null
 device: "auto"
 
-# S3
 s3_checkpoint_prefix: null
 model_version: null

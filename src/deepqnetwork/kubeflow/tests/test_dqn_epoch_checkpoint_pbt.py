@@ -29,15 +29,10 @@ from deepqnetwork.config import DQNConfig
 from deepqnetwork.network import QNetwork
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-STATE_DIM = 53  # modelenv observation dimension
-ACTION_DIM = 5  # HOLD, BUY_1, BUY_2, SELL_1, SELL_2
+STATE_DIM = 53
+ACTION_DIM = 5
 HIDDEN_DIMS = [256, 256, 128]
 
-# Required fields in every DQN checkpoint
 REQUIRED_CHECKPOINT_FIELDS = {
     "q_network_state_dict",
     "target_network_state_dict",
@@ -49,11 +44,6 @@ REQUIRED_CHECKPOINT_FIELDS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def checkpoint_intervals(draw):
     """Generate valid checkpoint interval configurations.
@@ -63,15 +53,9 @@ def checkpoint_intervals(draw):
     clean division for checkpoint counting.
     """
     interval = draw(st.integers(min_value=1, max_value=10))
-    # num_episodes_per_range is interval * multiplier so we get exact checkpoint counts
     multiplier = draw(st.integers(min_value=1, max_value=10))
     num_episodes_per_range = interval * multiplier
     return num_episodes_per_range, interval
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_config(
@@ -122,7 +106,6 @@ def _simulate_training_checkpoints(
     saved_checkpoints: list[dict] = []
 
     for episode in range(config.num_episodes_per_range):
-        # Checkpoint saving at configurable intervals (mirrors train.py logic)
         if episode > 0 and episode % config.checkpoint_interval == 0:
             checkpoint_dict = {
                 "q_network_state_dict": agent.q_network.state_dict(),
@@ -135,7 +118,6 @@ def _simulate_training_checkpoints(
             }
             saved_checkpoints.append(checkpoint_dict)
 
-    # Final checkpoint at end of training
     final_checkpoint = {
         "q_network_state_dict": agent.q_network.state_dict(),
         "target_network_state_dict": agent.target_network.state_dict(),
@@ -156,11 +138,6 @@ def _save_checkpoint_to_tempfile(checkpoint: dict) -> str:
     torch.save(checkpoint, tmp.name)
     tmp.close()
     return tmp.name
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-17: DQN epoch checkpoint persistence
-# ---------------------------------------------------------------------------
 
 
 class TestDQNEpochCheckpointPersistence:
@@ -195,17 +172,13 @@ class TestDQNEpochCheckpointPersistence:
         )
         agent = _create_agent(config)
 
-        # Simulate checkpoint saving
         checkpoints = _simulate_training_checkpoints(agent, config)
 
-        # Expected interval checkpoints: episodes that satisfy
-        # episode > 0 and episode % checkpoint_interval == 0
         expected_interval_count = len([
             e for e in range(num_episodes_per_range)
             if e > 0 and e % checkpoint_interval == 0
         ])
 
-        # Total checkpoints = interval checkpoints + 1 final
         expected_total = expected_interval_count + 1
 
         assert len(checkpoints) == expected_total, (
@@ -244,7 +217,6 @@ class TestDQNEpochCheckpointPersistence:
                 f"Checkpoint {i} missing required fields: {missing}"
             )
 
-            # Verify field types
             assert isinstance(ckpt["q_network_state_dict"], dict), (
                 f"Checkpoint {i}: q_network_state_dict is not a dict"
             )
@@ -290,20 +262,14 @@ class TestDQNEpochCheckpointPersistence:
         checkpoints = _simulate_training_checkpoints(agent, config)
 
         for i, ckpt in enumerate(checkpoints):
-            # Create a fresh agent and load the checkpoint state
             fresh_agent = _create_agent(config)
 
-            # Load Q-network weights
             fresh_agent.q_network.load_state_dict(ckpt["q_network_state_dict"])
-            # Load target network weights
             fresh_agent.target_network.load_state_dict(ckpt["target_network_state_dict"])
-            # Load optimizer state
             fresh_agent.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-            # Restore epsilon and step count
             fresh_agent.epsilon = ckpt["epsilon"]
             fresh_agent.step_count = ckpt["step_count"]
 
-            # Verify the loaded agent can perform a forward pass
             dummy_state = torch.randn(1, STATE_DIM)
             with torch.no_grad():
                 q_values = fresh_agent.q_network(dummy_state)
@@ -316,7 +282,6 @@ class TestDQNEpochCheckpointPersistence:
                 f"Checkpoint {i}: loaded Q-network produced non-finite values"
             )
 
-            # Verify target network also works
             with torch.no_grad():
                 target_q = fresh_agent.target_network(dummy_state)
 
@@ -351,18 +316,14 @@ class TestDQNEpochCheckpointPersistence:
         checkpoints = _simulate_training_checkpoints(agent, config)
 
         for i, ckpt in enumerate(checkpoints):
-            # Save checkpoint to a temp file (DQNAdvisor loads from file path)
             tmp_path = _save_checkpoint_to_tempfile(ckpt)
 
             try:
-                # Load via DQNAdvisor.from_checkpoint
                 advisor = DQNAdvisor.from_checkpoint(tmp_path, device="cpu")
 
-                # Verify advisor can produce recommendations
                 dummy_state = np.random.randn(STATE_DIM).astype(np.float32)
                 result = advisor.recommend_action(dummy_state)
 
-                # Verify result structure
                 assert 0 <= result.action < ACTION_DIM, (
                     f"Checkpoint {i}: advisor action {result.action} out of range"
                 )
@@ -382,7 +343,6 @@ class TestDQNEpochCheckpointPersistence:
                     f"Checkpoint {i}: confidence is not a float"
                 )
             finally:
-                # Clean up temp file
                 Path(tmp_path).unlink(missing_ok=True)
 
     @given(params=checkpoint_intervals())
@@ -406,7 +366,6 @@ class TestDQNEpochCheckpointPersistence:
         agent = _create_agent(config)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a CheckpointManager with no S3 (local only)
             mgr = CheckpointManager(
                 checkpoint_dir=tmpdir,
                 s3_prefix=None,
@@ -414,7 +373,6 @@ class TestDQNEpochCheckpointPersistence:
 
             saved_paths: list[str] = []
 
-            # Simulate the training loop checkpoint logic
             for episode in range(num_episodes_per_range):
                 if episode > 0 and episode % checkpoint_interval == 0:
                     path = mgr.save(
@@ -428,7 +386,6 @@ class TestDQNEpochCheckpointPersistence:
                     )
                     saved_paths.append(path)
 
-            # Final checkpoint
             final_path = mgr.save(
                 episode=num_episodes_per_range - 1,
                 q_network=agent.q_network,
@@ -440,7 +397,6 @@ class TestDQNEpochCheckpointPersistence:
             )
             saved_paths.append(final_path)
 
-            # Verify each saved checkpoint is loadable
             for i, path in enumerate(saved_paths):
                 loaded = mgr.load(path)
                 assert loaded, (

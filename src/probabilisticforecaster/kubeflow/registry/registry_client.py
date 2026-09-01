@@ -38,14 +38,13 @@ class ModelMetadata:
     hyperparameters: dict
     pipeline_run_id: str
     data_snapshot_path: str
-    lifecycle_stage: str = "staging"  # staging | production | archived
+    lifecycle_stage: str = "staging"
 
 
-# Valid lifecycle stage transitions
 _VALID_TRANSITIONS = {
     "staging": {"production", "archived"},
     "production": {"archived"},
-    "archived": set(),  # terminal state
+    "archived": set(),
 }
 
 
@@ -65,12 +64,6 @@ class ForecasterRegistryClient:
         Args:
             registry_url: URL of the Kubeflow Model Registry server.
         """
-        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
-        # defaults is_secure=True and refuses without a token even for http.
-        # The SDK builds its endpoint as f"{server_address}:{port}", so the
-        # port must go through the `port` kwarg, embedding it in
-        # server_address collides with the default port and yields a broken
-        # "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         self.registry = ModelRegistry(
@@ -99,10 +92,9 @@ class ForecasterRegistryClient:
         try:
             return self.registry.get_registered_model(name)
         except Exception:
-            # Model doesn't exist yet, create it
             return self.registry.register_model(
                 name,
-                uri="",  # URI set per version
+                uri="",
                 description=(
                     f"ProbabilisticTransformer for {symbol} "
                     f"with forecast horizon {horizon}"
@@ -127,12 +119,10 @@ class ForecasterRegistryClient:
         """
         version_id = str(uuid.uuid4())
 
-        # Ensure the parent registered model exists
         registered_model = self._ensure_registered_model(
             metadata.symbol, metadata.forecast_horizon
         )
 
-        # Build custom properties dict with all metadata and lineage
         custom_properties = {
             "version_id": version_id,
             "symbol": metadata.symbol,
@@ -148,7 +138,6 @@ class ForecasterRegistryClient:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Register the model version with the registry
         model_version = self.registry.register_model_version(
             name=version_id,
             version=version_id,
@@ -197,7 +186,6 @@ class ForecasterRegistryClient:
 
         current_stage = version_data.get("lifecycle_stage", "staging")
 
-        # Validate state transition
         if "production" not in _VALID_TRANSITIONS.get(current_stage, set()):
             logger.warning(
                 "Invalid transition from %s to production for version %s",
@@ -206,14 +194,10 @@ class ForecasterRegistryClient:
             )
             return False
 
-        # Demote current production model to staging (only one production at a time)
         self._demote_current_production(
             version_data["symbol"], int(version_data["forecast_horizon"])
         )
 
-        # Update lifecycle stage to production. The dqnpf-intraday predictor's
-        # hot-reload watcher (Task 30.3) will resolve the new production-stage
-        # checkpoint on its next poll and atomically swap in the model.
         self._update_lifecycle_stage(version_id, "production")
 
         logger.info(
@@ -251,13 +235,11 @@ class ForecasterRegistryClient:
         """
         results = []
 
-        # Determine which registered models to query
         registered_models = self._list_registered_models()
 
         for rm in registered_models:
             versions = self._list_versions_for_model(rm)
             for version_data in versions:
-                # Apply filters
                 if symbol and version_data.get("symbol") != symbol:
                     continue
                 if horizon and int(version_data.get("forecast_horizon", 0)) != horizon:
@@ -273,7 +255,6 @@ class ForecasterRegistryClient:
                 if stage and version_data.get("lifecycle_stage") != stage:
                     continue
 
-                # Build ModelMetadata from stored properties
                 metadata = ModelMetadata(
                     symbol=version_data["symbol"],
                     forecast_horizon=int(version_data["forecast_horizon"]),
@@ -321,9 +302,6 @@ class ForecasterRegistryClient:
 
         return age_days >= self.RETENTION_DAYS
 
-    # -------------------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------------------
 
     def _get_version_data(self, version_id: str) -> Optional[dict]:
         """Retrieve custom properties for a model version by its version_id.
@@ -421,5 +399,5 @@ class ForecasterRegistryClient:
                         props.get("version_id"),
                     )
         except Exception:
-            pass  # No existing production model
+            pass
 

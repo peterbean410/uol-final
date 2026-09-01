@@ -26,7 +26,6 @@ _ECR_IMAGE = (
     "/forex-marketdata-download-interval-price-data:latest"
 )
 
-# forexnewsapi.com expects dash-separated pairs (e.g. "USD-JPY").
 FX_CURRENCY_PAIRS = ["USD-JPY", "EUR-USD", "XAU-USD"]
 
 

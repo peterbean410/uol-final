@@ -1,4 +1,3 @@
-// Configuration module for FX RL Model Environment
 use anyhow::Result;
 use log::info;
 use std::env;
@@ -273,8 +272,7 @@ impl Config {
     }
 
     fn parse_args(&mut self, args: &[String]) -> Result<()> {
-        // Parse arguments manually (no external crate dependency)
-        let mut i = 1; // Skip program name
+                let mut i = 1;
         while i < args.len() {
             match args[i].as_str() {
                 "--mode" => {
@@ -523,20 +521,17 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
-        // Mode
-        if let Some(mode_env) = Self::non_empty_env(env_get, "MODELENV_MODE") {
+                if let Some(mode_env) = Self::non_empty_env(env_get, "MODELENV_MODE") {
             if let Ok(mode) = Mode::from_str(&mode_env) {
                 self.mode = mode;
             }
         }
 
-        // Address
-        if let Some(addr_env) = Self::non_empty_env(env_get, "MODELENV_ADDR") {
+                if let Some(addr_env) = Self::non_empty_env(env_get, "MODELENV_ADDR") {
             self.addr = addr_env;
         }
 
-        // S3 prefix
-        if let Some(s3_prefix_env) = Self::non_empty_env(env_get, "MODELENV_S3_PREFIX") {
+                if let Some(s3_prefix_env) = Self::non_empty_env(env_get, "MODELENV_S3_PREFIX") {
             self.s3_prefix = s3_prefix_env;
         }
 
@@ -553,13 +548,11 @@ impl Config {
             self.local_cache_dir = local_cache_dir_env;
         }
 
-        // Symbol
-        if let Some(symbol_env) = Self::non_empty_env(env_get, "MODELENV_SYMBOL") {
+                if let Some(symbol_env) = Self::non_empty_env(env_get, "MODELENV_SYMBOL") {
             self.symbol = symbol_env;
         }
 
-        // Broker gateway configuration
-        if let Some(broker_gateway_env) = Self::non_empty_env(env_get, "MODELENV_BROKER_GATEWAY") {
+                if let Some(broker_gateway_env) = Self::non_empty_env(env_get, "MODELENV_BROKER_GATEWAY") {
             self.broker_gateway.broker_gateway = Some(broker_gateway_env);
         }
 
@@ -587,8 +580,7 @@ impl Config {
             self.broker_gateway.ctrader_account = Some(ctrader_account);
         }
 
-        // cTrader lots per modelenv position unit; invalid values keep the default.
-        if let Some(lot) = Self::non_empty_env(env_get, "CTRADER_LOT_SIZE_PER_UNIT") {
+                if let Some(lot) = Self::non_empty_env(env_get, "CTRADER_LOT_SIZE_PER_UNIT") {
             match lot.trim().parse::<f64>() {
                 Ok(v) if v.is_finite() && v > 0.0 => {
                     self.broker_gateway.ctrader_lot_size_per_unit = v
@@ -616,8 +608,7 @@ impl Config {
             self.broker_gateway.set_ctrader_gateway_if_unset();
         }
 
-        // Reward function configuration
-        if let Some(reward_lambda_env) = Self::non_empty_env(env_get, "MODELENV_REWARD_LAMBDA") {
+                if let Some(reward_lambda_env) = Self::non_empty_env(env_get, "MODELENV_REWARD_LAMBDA") {
             if let Ok(value) = reward_lambda_env.parse::<f64>() {
                 self.reward_lambda = value;
             }

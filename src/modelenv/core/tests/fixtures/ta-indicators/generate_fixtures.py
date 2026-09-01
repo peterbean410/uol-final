@@ -22,11 +22,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Add the project root to the path so we can import the ta package
 PROJECT_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Import ta package modules
 from ta.momentum import rsi as rsi_mod
 from ta.momentum import cci as cci_mod
 from ta.trend import adx as adx_mod
@@ -50,33 +48,26 @@ def generate_synthetic_ohlcv(n: int = 200, seed: int = 42) -> pd.DataFrame:
     """
     np.random.seed(seed)
     
-    # Generate close prices as a random walk
     returns = np.random.normal(0.0001, 0.01, n)
     close = 100.0 * np.exp(np.cumsum(returns))
     
-    # Generate high/low with random spread around close
     spread = np.abs(np.random.normal(0, 0.005, n)) * close
     high = close + spread * np.random.uniform(0.5, 1.5, n)
     low = close - spread * np.random.uniform(0.5, 1.5, n)
     
-    # Ensure high >= close >= low
     high = np.maximum(high, close)
     low = np.minimum(low, close)
     
-    # Generate open from previous close with small gap
     open_prices = np.roll(close, 1)
     open_prices[0] = close[0]
     open_prices = open_prices * (1 + np.random.normal(0, 0.001, n))
     
-    # Ensure open is within high/low range
     open_prices = np.clip(open_prices, low, high)
     
-    # Generate volume
     volume = np.random.randint(1000, 100000, n).astype(float)
     
-    # Generate timestamps (nanoseconds since epoch)
-    base_ts = 1704067200000000000  # 2024-01-01 00:00:00 UTC in nanoseconds
-    interval_ns = 3600000000000  # 1 hour in nanoseconds
+    base_ts = 1704067200000000000
+    interval_ns = 3600000000000
     timestamp_ns = [base_ts + i * interval_ns for i in range(n)]
     
     return pd.DataFrame({
@@ -310,12 +301,10 @@ def generate_fibonacci_fixture(df: pd.DataFrame, window: int, output_dir: Path):
 
 def generate_double_bottom_fixture(df: pd.DataFrame, output_dir: Path):
     """Generate double bottom pattern fixture."""
-    # The pattern detection expects a Timestamp column
     patterns_df, latest_min, latest_max = db_mod.detect_double_bottoms(
         df, window=5, tolerance_pct=0.3, min_width=5
     )
     
-    # Convert patterns to list of dicts
     patterns = []
     for _, row in patterns_df.iterrows():
         pattern = {
@@ -363,7 +352,6 @@ def generate_double_top_fixture(df: pd.DataFrame, output_dir: Path):
         df, window=5, tolerance_pct=0.3, min_width=5
     )
     
-    # Convert patterns to list of dicts
     patterns = []
     for _, row in patterns_df.iterrows():
         pattern = {
@@ -407,32 +395,27 @@ def generate_double_top_fixture(df: pd.DataFrame, output_dir: Path):
 
 def main():
     """Generate all fixtures."""
-    # Determine output directory (same as this script)
     output_dir = Path(__file__).parent
     
     print("Generating TA indicator fixtures...")
     print(f"Output directory: {output_dir}")
     print()
     
-    # Generate synthetic OHLCV data
     print("Generating synthetic OHLCV data (200 bars)...")
     df = generate_synthetic_ohlcv(n=200, seed=42)
     print(f"  Price range: {df['Close'].min():.2f} - {df['Close'].max():.2f}")
     print()
     
-    # Generate momentum indicator fixtures
     print("Generating momentum indicator fixtures...")
     generate_rsi_fixture(df, period=14, output_dir=output_dir)
     generate_cci_fixture(df, period=14, output_dir=output_dir)
     print()
     
-    # Generate trend indicator fixtures
     print("Generating trend indicator fixtures...")
     generate_adx_fixture(df, period=14, output_dir=output_dir)
     generate_macd_fixture(df, fast=12, slow=26, signal=9, output_dir=output_dir)
     print()
     
-    # Generate moving average fixtures
     print("Generating moving average fixtures...")
     generate_ma_fixture(df, kind="SMA", period=10, output_dir=output_dir)
     generate_ma_fixture(df, kind="EMA", period=20, output_dir=output_dir)
@@ -443,22 +426,18 @@ def main():
     generate_ma_fixture(df, kind="TRIMA", period=20, output_dir=output_dir)
     print()
     
-    # Generate Ichimoku fixture
     print("Generating Ichimoku Cloud fixture...")
     generate_ichimoku_fixture(df, tenkan=9, kijun=26, senkou_b=52, output_dir=output_dir)
     print()
     
-    # Generate volatility indicator fixtures
     print("Generating volatility indicator fixtures...")
     generate_bollinger_fixture(df, period=20, nbdev=2.0, output_dir=output_dir)
     print()
     
-    # Generate support indicator fixtures
     print("Generating support indicator fixtures...")
     generate_fibonacci_fixture(df, window=50, output_dir=output_dir)
     print()
     
-    # Generate pattern detection fixtures
     print("Generating pattern detection fixtures...")
     generate_double_bottom_fixture(df, output_dir=output_dir)
     generate_double_top_fixture(df, output_dir=output_dir)

@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import patch, MagicMock
 
-# Mock the model_registry package before importing registry_client
 _mock_model_registry = MagicMock()
 sys.modules["model_registry"] = _mock_model_registry
 sys.modules["model_registry.types"] = MagicMock()
@@ -31,11 +30,6 @@ from probabilisticforecaster.kubeflow.registry.registry_client import (
     ModelMetadata,
     _VALID_TRANSITIONS,
 )
-
-
-# ---------------------------------------------------------------------------
-# In-memory fake Model Registry
-# ---------------------------------------------------------------------------
 
 
 class FakeModelVersion:
@@ -105,11 +99,6 @@ class FakeModelRegistry:
         version.custom_properties = custom_properties
 
 
-# ---------------------------------------------------------------------------
-# Helper: create a ForecasterRegistryClient with the fake registry
-# ---------------------------------------------------------------------------
-
-
 def create_test_client() -> ForecasterRegistryClient:
     """Create a ForecasterRegistryClient backed by the in-memory fake."""
     with patch(
@@ -119,10 +108,6 @@ def create_test_client() -> ForecasterRegistryClient:
         client = ForecasterRegistryClient(registry_url="http://fake:8080")
     return client
 
-
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
 
 symbols = st.sampled_from(["USDJPY", "AUDJPY", "EURUSD", "GBPUSD"])
 horizons = st.sampled_from([1, 3, 6, 12])
@@ -163,11 +148,6 @@ def model_metadata(draw):
     )
 
 
-# ---------------------------------------------------------------------------
-# Property 8: Model registry metadata and lineage completeness
-# ---------------------------------------------------------------------------
-
-
 class TestMetadataAndLineageCompleteness:
     """Property 8: Registered models return complete metadata and lineage.
 
@@ -193,7 +173,6 @@ class TestMetadataAndLineageCompleteness:
             metadata=metadata,
         )
 
-        # Query back the model
         results = client.query_models(
             symbol=metadata.symbol,
             horizon=metadata.forecast_horizon,
@@ -202,7 +181,6 @@ class TestMetadataAndLineageCompleteness:
         assert len(results) == 1, f"Expected 1 result, got {len(results)}"
         result = results[0]
 
-        # Verify all metadata fields are present and correct
         assert result.symbol == metadata.symbol
         assert result.forecast_horizon == metadata.forecast_horizon
         assert result.training_timestamp == metadata.training_timestamp
@@ -211,17 +189,10 @@ class TestMetadataAndLineageCompleteness:
         assert result.directional_accuracy == metadata.directional_accuracy
         assert result.hyperparameters == metadata.hyperparameters
 
-        # Verify lineage fields
         assert result.pipeline_run_id == metadata.pipeline_run_id
         assert result.data_snapshot_path == metadata.data_snapshot_path
 
-        # Verify lifecycle stage
         assert result.lifecycle_stage == "staging"
-
-
-# ---------------------------------------------------------------------------
-# Property 9: Unique version identifier generation
-# ---------------------------------------------------------------------------
 
 
 class TestUniqueVersionIdentifiers:
@@ -254,19 +225,12 @@ class TestUniqueVersionIdentifiers:
             )
             version_ids.append(vid)
 
-        # All IDs must be unique
         assert len(set(version_ids)) == n, (
             f"Expected {n} unique IDs, got {len(set(version_ids))} unique out of {version_ids}"
         )
 
-        # Each ID must be a valid UUID
         for vid in version_ids:
-            uuid.UUID(vid)  # Raises ValueError if not valid UUID
-
-
-# ---------------------------------------------------------------------------
-# Property 10: Model lifecycle state transitions
-# ---------------------------------------------------------------------------
+            uuid.UUID(vid)
 
 
 class TestLifecycleStateTransitions:
@@ -296,10 +260,8 @@ class TestLifecycleStateTransitions:
         is_valid = target_stage in valid_targets
 
         if is_valid:
-            # Valid transition: target is in the allowed set
             assert target_stage in valid_targets
         else:
-            # Invalid transition: target is NOT in the allowed set
             assert target_stage not in valid_targets
 
     @given(metadata=model_metadata())
@@ -317,8 +279,6 @@ class TestLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # Standalone Forecaster KServe is deprecated, promote_to_production
-        # only updates registry metadata; no K8s patching to mock out.
         result = client.promote_to_production(version_id)
 
         assert result is True, "Promotion from staging to production should succeed"
@@ -338,10 +298,8 @@ class TestLifecycleStateTransitions:
             metadata=metadata,
         )
 
-        # First promote to production (KServe push deprecated; metadata-only)
         client.promote_to_production(version_id)
 
-        # Second promote should fail (already in production)
         result = client.promote_to_production(version_id)
 
         assert result is False, "Promotion from production to production should fail"
@@ -359,11 +317,6 @@ class TestLifecycleStateTransitions:
     def test_production_can_only_transition_to_archived(self):
         """Production can only transition to archived."""
         assert _VALID_TRANSITIONS["production"] == {"archived"}
-
-
-# ---------------------------------------------------------------------------
-# Property 11: Model registry query filtering
-# ---------------------------------------------------------------------------
 
 
 class TestQueryFiltering:
@@ -391,20 +344,17 @@ class TestQueryFiltering:
         """All returned models match every specified filter."""
         client = create_test_client()
 
-        # Register all models
         for meta in metadata_list:
             client.register_model(
                 model_path="s3://bucket/models/checkpoint.pt",
                 metadata=meta,
             )
 
-        # Query with filters
         results = client.query_models(
             symbol=filter_symbol,
             stage=filter_stage,
         )
 
-        # Verify all results match the filters
         for result in results:
             if filter_symbol is not None:
                 assert result.symbol == filter_symbol, (
@@ -428,17 +378,14 @@ class TestQueryFiltering:
         """No model that matches all filters is excluded from results."""
         client = create_test_client()
 
-        # Register all models
         for meta in metadata_list:
             client.register_model(
                 model_path="s3://bucket/models/checkpoint.pt",
                 metadata=meta,
             )
 
-        # Query with symbol filter
         results = client.query_models(symbol=filter_symbol)
 
-        # Count how many registered models match the filter
         expected_count = sum(
             1 for meta in metadata_list if meta.symbol == filter_symbol
         )
@@ -499,11 +446,6 @@ class TestQueryFiltering:
             assert len(results) == 0, "Model above NLL threshold should be excluded"
 
 
-# ---------------------------------------------------------------------------
-# Property 12: Retention policy enforcement
-# ---------------------------------------------------------------------------
-
-
 class TestRetentionPolicyEnforcement:
     """Property 12: Models <90 days cannot be archived, models ≥90 days can.
 
@@ -531,9 +473,7 @@ class TestRetentionPolicyEnforcement:
             metadata=metadata,
         )
 
-        # Patch the created_at to be `age_days` days ago
         created_at = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
-        # Find the version and update its created_at
         for rm in client.registry.get_registered_models():
             for mv in client.registry.get_model_versions(rm.name):
                 if mv.custom_properties.get("version_id") == version_id:
@@ -562,9 +502,7 @@ class TestRetentionPolicyEnforcement:
             metadata=metadata,
         )
 
-        # Patch the created_at to be `age_days` days ago
         created_at = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
-        # Find the version and update its created_at
         for rm in client.registry.get_registered_models():
             for mv in client.registry.get_model_versions(rm.name):
                 if mv.custom_properties.get("version_id") == version_id:

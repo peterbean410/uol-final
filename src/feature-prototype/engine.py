@@ -53,7 +53,7 @@ class ArmResults:
     gate_enabled: bool
     combined: list[StepRecord]
     baseline: list[StepRecord]
-    gate_active_series: list[tuple[int, bool]]  # (timestamp_ns, gate_active) per combined step
+    gate_active_series: list[tuple[int, bool]]
     comparison: BacktestComparison
     report: ThresholdReport
     meta: dict
@@ -103,7 +103,7 @@ def _run_policy_arm(env, policy, mu_bps, sigma_bps, ts_ns, close, config, integr
                 reason=reason,
                 mu=mu,
                 sigma=sigma,
-                reward=float(out.raw_pnl_delta),  # money == reward proxy in the prototype
+                reward=float(out.raw_pnl_delta),
                 high_sigma=bool(sigma > config.variance_threshold),
                 raw_pnl_delta=float(out.raw_pnl_delta),
                 max_total_margin=float(abs(out.net_position)) * float(close[t]),

@@ -33,13 +33,11 @@ pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 /// `ProtoPayloadType` enums in the vendored protos; only the values this client
 /// sends or routes on are named here.
 pub mod payload_type {
-    // Common (OpenApiCommonModelMessages)
-    pub const PROTO_MESSAGE: u32 = 5;
+        pub const PROTO_MESSAGE: u32 = 5;
     pub const ERROR_RES: u32 = 50;
     pub const HEARTBEAT_EVENT: u32 = 51;
 
-    // cTrader Open API (OpenApiModelMessages), requests/responses/events
-    pub const APPLICATION_AUTH_REQ: u32 = 2100;
+        pub const APPLICATION_AUTH_REQ: u32 = 2100;
     pub const APPLICATION_AUTH_RES: u32 = 2101;
     pub const ACCOUNT_AUTH_REQ: u32 = 2102;
     pub const ACCOUNT_AUTH_RES: u32 = 2103;
@@ -61,8 +59,7 @@ pub mod payload_type {
     pub const OA_ERROR_RES: u32 = 2142;
     pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ: u32 = 2149;
     pub const GET_ACCOUNTS_BY_ACCESS_TOKEN_RES: u32 = 2150;
-    // Spot (streaming bid/ask) subscription + unsolicited spot events.
-    pub const SUBSCRIBE_SPOTS_REQ: u32 = 2127;
+        pub const SUBSCRIBE_SPOTS_REQ: u32 = 2127;
     pub const SUBSCRIBE_SPOTS_RES: u32 = 2128;
     pub const SPOT_EVENT: u32 = 2131;
 }
@@ -148,8 +145,7 @@ mod tests {
     fn envelope_round_trips_through_a_frame() {
         let msg = sample_envelope();
         let frame = encode_frame(&msg);
-        // first 4 bytes are the BE length of the remaining body
-        let (len_bytes, body) = frame.split_at(4);
+                let (len_bytes, body) = frame.split_at(4);
         let n = parse_len(len_bytes.try_into().unwrap()).unwrap();
         assert_eq!(n, body.len());
         let decoded = decode_body(body).unwrap();
@@ -160,13 +156,12 @@ mod tests {
 
     #[test]
     fn inner_application_message_nests_and_unnests() {
-        // Encode a real ProtoOANewOrderReq into the envelope payload and recover it.
-        let order = ProtoOaNewOrderReq {
+                let order = ProtoOaNewOrderReq {
             ctid_trader_account_id: 42,
-            symbol_id: 4, // USDJPY on most cTrader brokers
-            order_type: 1, // MARKET
-            trade_side: 1, // BUY
-            volume: 100,   // 1.00 lots in cTrader cents-of-lot units
+            symbol_id: 4,
+            order_type: 1,
+            trade_side: 1,
+            volume: 100,
             ..Default::default()
         };
         let env = envelope(
@@ -205,9 +200,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_frame_reassembles_a_split_frame() {
-        // Write the length prefix and body in separate chunks with a yield in
-        // between, so read_frame must reassemble across reads.
-        let frame = encode_frame(&sample_envelope());
+                        let frame = encode_frame(&sample_envelope());
         let (mut a, mut b) = tokio::io::duplex(1024);
         let writer = tokio::spawn(async move {
             a.write_all(&frame[..2]).await.unwrap();

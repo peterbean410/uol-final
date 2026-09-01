@@ -20,9 +20,6 @@ from deepqnetwork.checkpoint_manager import CheckpointManager
 from deepqnetwork.network import QNetwork
 
 
-# Feature: deepqnetwork, Property 13: Checkpoint save/load round-trip
-
-
 @settings(max_examples=100, deadline=None)
 @given(
     state_dim=st.integers(min_value=10, max_value=53),
@@ -48,12 +45,9 @@ def test_checkpoint_save_load_round_trip(
 
     **Validates: Requirements 8.1, 8.6**
     """
-    # Create Q-Network and Target Network with random weights
     q_network = QNetwork(state_dim=state_dim, action_dim=5, hidden_dims=hidden_dims)
     target_network = QNetwork(state_dim=state_dim, action_dim=5, hidden_dims=hidden_dims)
 
-    # Randomise weights by running a forward pass with random data and backprop
-    # to ensure optimizer state is non-trivial
     optimizer = torch.optim.Adam(q_network.parameters(), lr=learning_rate)
     dummy_input = torch.randn(4, state_dim)
     dummy_target = torch.randn(4, 5)
@@ -62,7 +56,6 @@ def test_checkpoint_save_load_round_trip(
     optimizer.step()
     optimizer.zero_grad()
 
-    # Capture original state dicts
     original_q_state = {
         k: v.clone() for k, v in q_network.state_dict().items()
     }
@@ -71,7 +64,6 @@ def test_checkpoint_save_load_round_trip(
     }
     original_optimizer_state = _deep_copy_optimizer_state(optimizer.state_dict())
 
-    # Save checkpoint using a temporary directory (no S3)
     with tempfile.TemporaryDirectory() as tmp_dir:
         manager = CheckpointManager(checkpoint_dir=tmp_dir, s3_prefix=None)
 
@@ -84,29 +76,23 @@ def test_checkpoint_save_load_round_trip(
             step_count=step_count,
         )
 
-        # Load checkpoint back
         loaded = manager.load(saved_path)
 
-    # Verify all values are restored identically
     assert loaded != {}, "Checkpoint load returned empty dict"
 
-    # Verify epsilon
     assert loaded["epsilon"] == epsilon, (
         f"Epsilon mismatch: expected {epsilon}, got {loaded['epsilon']}"
     )
 
-    # Verify step_count
     assert loaded["step_count"] == step_count, (
         f"step_count mismatch: expected {step_count}, got {loaded['step_count']}"
     )
 
-    # Verify episode_count
     assert loaded["episode_count"] == episode_count, (
         f"episode_count mismatch: expected {episode_count}, "
         f"got {loaded['episode_count']}"
     )
 
-    # Verify Q-Network state dict
     loaded_q_state = loaded["q_network_state_dict"]
     for key in original_q_state:
         assert key in loaded_q_state, f"Missing Q-Network key: {key}"
@@ -114,7 +100,6 @@ def test_checkpoint_save_load_round_trip(
             f"Q-Network state mismatch for key '{key}'"
         )
 
-    # Verify Target Network state dict
     loaded_target_state = loaded["target_network_state_dict"]
     for key in original_target_state:
         assert key in loaded_target_state, f"Missing Target Network key: {key}"
@@ -122,7 +107,6 @@ def test_checkpoint_save_load_round_trip(
             f"Target Network state mismatch for key '{key}'"
         )
 
-    # Verify optimizer state dict
     loaded_optimizer_state = loaded["optimizer_state_dict"]
     _assert_optimizer_states_equal(
         original_optimizer_state, loaded_optimizer_state
@@ -144,7 +128,6 @@ def _deep_copy_optimizer_state(state_dict: dict) -> dict:
 
 def _assert_optimizer_states_equal(original: dict, loaded: dict) -> None:
     """Assert that two optimizer state dicts are equal."""
-    # Compare param_groups (excluding 'params' which are just indices)
     assert len(original["param_groups"]) == len(loaded["param_groups"]), (
         "Optimizer param_groups count mismatch"
     )
@@ -159,7 +142,6 @@ def _assert_optimizer_states_equal(original: dict, loaded: dict) -> None:
                 f"{orig_group[key]} vs {load_group[key]}"
             )
 
-    # Compare per-parameter state
     assert len(original["state"]) == len(loaded["state"]), (
         "Optimizer state count mismatch"
     )
@@ -184,9 +166,6 @@ def _assert_optimizer_states_equal(original: dict, loaded: dict) -> None:
                 )
 
 
-# Feature: deepqnetwork, Property 14: S3 checkpoint timestamp formatting
-
-
 @settings(max_examples=100)
 @given(
     dt=st.datetimes(timezones=st.just(timezone.utc)),
@@ -204,7 +183,6 @@ def test_s3_filename_matches_timestamp_pattern(dt: datetime) -> None:
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
         filename = mgr._generate_s3_filename()
 
-    # Verify the filename matches the expected regex pattern
     pattern = r"^\d{8}T\d{2}0000Z\.pt$"
     assert re.match(pattern, filename), (
         f"Filename '{filename}' does not match pattern '{pattern}' "
@@ -229,7 +207,6 @@ def test_s3_filename_date_matches_generated_datetime(dt: datetime) -> None:
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
         filename = mgr._generate_s3_filename()
 
-    # Extract YYYYMMDD from filename
     date_part = filename[:8]
     expected_date = dt.strftime("%Y%m%d")
 
@@ -256,7 +233,6 @@ def test_s3_filename_hour_matches_generated_datetime(dt: datetime) -> None:
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
         filename = mgr._generate_s3_filename()
 
-    # Extract HH from filename (position 9-10, after "YYYYMMDDT")
     hour_part = filename[9:11]
     expected_hour = f"{dt.hour:02d}"
 
@@ -283,7 +259,6 @@ def test_s3_filename_minutes_seconds_always_zeroed(dt: datetime) -> None:
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
         filename = mgr._generate_s3_filename()
 
-    # Extract minutes/seconds part (position 11-14, after "YYYYMMDDTHH")
     min_sec_part = filename[11:15]
 
     assert min_sec_part == "0000", (

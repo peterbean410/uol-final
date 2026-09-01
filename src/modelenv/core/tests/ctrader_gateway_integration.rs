@@ -16,7 +16,7 @@ fn create_mock_ctrader_gateway(
         Some("refresh-token".to_string()),
         Some("account".to_string()),
         "USDJPY",
-        0.01, // lots per unit
+        0.01,
     )?;
 
     Ok(Arc::from(gateway))
@@ -53,9 +53,6 @@ fn first_row_value(columns: &[String], values: &[f64], name: &str) -> f64 {
     values[col_index(columns, name)]
 }
 
-// Needs a reachable broker (demo/live) or a pub MockBrokerGateway to drive the
-// live Reset/Step arms; the old version relied on the removed in-client
-// simulation. Tracked as T-9.2-06 (env integration test with a mock gateway).
 #[ignore = "needs a reachable demo/live broker or a pub MockBrokerGateway (T-9.2-06)"]
 #[tokio::test]
 async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Result<()> {
@@ -78,8 +75,7 @@ async fn live_environment_reset_and_step_use_ctrader_gateway_end_to_end() -> Res
     let vals = &obs.state_data[0].values;
     assert!(!cols.is_empty());
     assert_eq!(vals.len(), cols.len());
-    // tick_ask is present (z-scored → 0.0 before warmup)
-    assert!(cols.contains(&"tick_ask".to_string()));
+        assert!(cols.contains(&"tick_ask".to_string()));
     assert!(first_row_value(cols, vals, "tick_ask").is_finite());
 
     let step_response = environment

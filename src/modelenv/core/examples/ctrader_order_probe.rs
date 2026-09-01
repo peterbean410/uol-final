@@ -47,9 +47,9 @@ async fn main() -> anyhow::Result<()> {
         payload_type: Some(wire::payload_type::NEW_ORDER_REQ as i32),
         ctid_trader_account_id: account_id,
         symbol_id,
-        order_type: 1, // MARKET
-        trade_side: 1, // BUY
-        volume: 1000,  // 0.01 lot
+        order_type: 1,
+        trade_side: 1,
+        volume: 1000,
         client_order_id: Some("probe".into()),
         ..Default::default()
     };
@@ -59,8 +59,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     println!("[probe] correlated reply: {}", describe(&reply));
 
-    // Drain follow-up events for ~10s.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {

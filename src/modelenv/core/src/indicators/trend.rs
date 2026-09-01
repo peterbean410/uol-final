@@ -104,8 +104,7 @@ pub fn ichimoku(
 ) -> Result<IchimokuOutput, IndicatorError> {
     let n = close.len();
 
-    // Check for length mismatch first
-    if high.len() != n {
+        if high.len() != n {
         return Err(IndicatorError::LengthMismatch {
             expected: n,
             actual: high.len(),
@@ -120,8 +119,7 @@ pub fn ichimoku(
         });
     }
 
-    // Check for invalid periods
-    if tenkan_period == 0 {
+        if tenkan_period == 0 {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "tenkan",
             value: 0,
@@ -143,8 +141,7 @@ pub fn ichimoku(
         });
     }
 
-    // Handle empty input
-    if n == 0 {
+        if n == 0 {
         return Ok(IchimokuOutput {
             tenkan: Vec::new(),
             kijun: Vec::new(),
@@ -154,18 +151,11 @@ pub fn ichimoku(
         });
     }
 
-    // Compute Tenkan-sen (Conversion Line)
-    // tenkan[i] = (max(high[i-tenkan+1..=i]) + min(low[i-tenkan+1..=i])) / 2
-    let tenkan_line = compute_midpoint_line(high, low, tenkan_period);
+            let tenkan_line = compute_midpoint_line(high, low, tenkan_period);
 
-    // Compute Kijun-sen (Base Line)
-    // kijun[i] = (max(high[i-kijun+1..=i]) + min(low[i-kijun+1..=i])) / 2
-    let kijun_line = compute_midpoint_line(high, low, kijun_period);
+            let kijun_line = compute_midpoint_line(high, low, kijun_period);
 
-    // Compute Senkou Span A
-    // senkou_a[i] = (tenkan[i-kijun] + kijun[i-kijun]) / 2 for i >= kijun
-    // This is the average of tenkan and kijun, shifted forward by kijun periods
-    let mut senkou_a = vec![f64::NAN; n];
+                let mut senkou_a = vec![f64::NAN; n];
     for i in kijun_period..n {
         let src_idx = i - kijun_period;
         let tenkan_val = tenkan_line[src_idx];
@@ -175,22 +165,14 @@ pub fn ichimoku(
         }
     }
 
-    // Compute Senkou Span B
-    // senkou_b[i] = (max(high[i-kijun-senkou_b+1..=i-kijun]) + min(low[i-kijun-senkou_b+1..=i-kijun])) / 2
-    // This is the midpoint of senkou_b_period window, shifted forward by kijun periods
-    // Per Python: senkou_b = ((high.rolling(senkou_b).max() + low.rolling(senkou_b).min()) / 2).shift(kijun)
-    let senkou_b_unshifted = compute_midpoint_line(high, low, senkou_b_period);
+                    let senkou_b_unshifted = compute_midpoint_line(high, low, senkou_b_period);
     let mut senkou_b = vec![f64::NAN; n];
     for i in kijun_period..n {
         let src_idx = i - kijun_period;
         senkou_b[i] = senkou_b_unshifted[src_idx];
     }
 
-    // Compute Chikou Span (Lagging Span)
-    // chikou[i] = close[i + kijun] when i + kijun < n, NaN otherwise
-    // Per Python: chikou = close.shift(-kijun)
-    // shift(-kijun) means chikou[i] = close[i + kijun]
-    let mut chikou = vec![f64::NAN; n];
+                    let mut chikou = vec![f64::NAN; n];
     for i in 0..n {
         if i + kijun_period < n {
             chikou[i] = close[i + kijun_period];
@@ -221,10 +203,9 @@ fn compute_midpoint_line(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
         return result;
     }
 
-    // For each index i >= period - 1, compute the rolling max/min over [i - period + 1, i]
-    for i in (period - 1)..n {
+        for i in (period - 1)..n {
         let start = i + 1 - period;
-        let end = i + 1; // exclusive
+        let end = i + 1;
 
         let mut max_high = f64::NEG_INFINITY;
         let mut min_low = f64::INFINITY;
@@ -234,8 +215,7 @@ fn compute_midpoint_line(high: &[f64], low: &[f64], period: usize) -> Vec<f64> {
             let l = low[j];
 
             if h.is_nan() || l.is_nan() {
-                // If any value in the window is NaN, the result is NaN
-                max_high = f64::NAN;
+                                max_high = f64::NAN;
                 min_low = f64::NAN;
                 break;
             }
@@ -380,8 +360,7 @@ pub fn macd(
 ) -> Result<MacdOutput, IndicatorError> {
     let n = close.len();
 
-    // Check for invalid parameters
-    if fast == 0 {
+        if fast == 0 {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "fast",
             value: 0,
@@ -410,8 +389,7 @@ pub fn macd(
         });
     }
 
-    // Handle empty input
-    if n == 0 {
+        if n == 0 {
         return Ok(MacdOutput {
             macd: Vec::new(),
             signal: Vec::new(),
@@ -419,9 +397,7 @@ pub fn macd(
         });
     }
 
-    // MACD lookback is slow + signal - 2 (first valid index is slow + signal - 2)
-    // Per requirements: return all-NaN if close.len() < slow + signal - 1
-    let min_required = slow + signal - 1;
+            let min_required = slow + signal - 1;
     if n < min_required {
         return Ok(MacdOutput {
             macd: vec![f64::NAN; n],
@@ -430,33 +406,24 @@ pub fn macd(
         });
     }
 
-    // talib-rs requires fast >= 2 and slow >= 2
-    // If fast == 1, we need to handle it specially
-    if fast < 2 || slow < 2 {
-        // For periods < 2, talib-rs will return InvalidParameter
-        // Return all-NaN as a fallback
-        return Ok(MacdOutput {
+            if fast < 2 || slow < 2 {
+                        return Ok(MacdOutput {
             macd: vec![f64::NAN; n],
             signal: vec![f64::NAN; n],
             hist: vec![f64::NAN; n],
         });
     }
 
-    // Call talib-rs MACD function
-    match talib_macd(close, fast, slow, signal) {
+        match talib_macd(close, fast, slow, signal) {
         Ok((macd_line, signal_line, histogram)) => {
-            // talib-rs should return vectors of the same length as input
-            // with leading NaNs for the warm-up period
-            if macd_line.len() == n && signal_line.len() == n && histogram.len() == n {
+                                    if macd_line.len() == n && signal_line.len() == n && histogram.len() == n {
                 Ok(MacdOutput {
                     macd: macd_line,
                     signal: signal_line,
                     hist: histogram,
                 })
             } else {
-                // If talib-rs returns different lengths, pad with NaNs
-                // This shouldn't happen with talib-rs 0.1.2, but handle it defensively
-                let mut macd_out = vec![f64::NAN; n];
+                                                let mut macd_out = vec![f64::NAN; n];
                 let mut signal_out = vec![f64::NAN; n];
                 let mut hist_out = vec![f64::NAN; n];
 
@@ -489,24 +456,21 @@ pub fn macd(
             }
         }
         Err(talib_rs::error::TaError::InsufficientData { .. }) => {
-            // If talib-rs says insufficient data, return all-NaN
-            Ok(MacdOutput {
+                        Ok(MacdOutput {
                 macd: vec![f64::NAN; n],
                 signal: vec![f64::NAN; n],
                 hist: vec![f64::NAN; n],
             })
         }
         Err(talib_rs::error::TaError::InvalidParameter { name, reason, .. }) => {
-            // Map talib-rs invalid parameter to our InvalidPeriod
-            Err(IndicatorError::InvalidPeriod {
+                        Err(IndicatorError::InvalidPeriod {
                 param_name: name,
-                value: fast, // Use fast as a representative value
+                value: fast,
                 reason,
             })
         }
         Err(_) => {
-            // On any other error from talib-rs, return all-NaN
-            Ok(MacdOutput {
+                        Ok(MacdOutput {
                 macd: vec![f64::NAN; n],
                 signal: vec![f64::NAN; n],
                 hist: vec![f64::NAN; n],
@@ -569,8 +533,7 @@ pub fn adx(
 ) -> Result<Vec<f64>, IndicatorError> {
     let n = close.len();
 
-    // Check for length mismatch first (before period validation)
-    if high.len() != n {
+        if high.len() != n {
         return Err(IndicatorError::LengthMismatch {
             expected: n,
             actual: high.len(),
@@ -585,8 +548,7 @@ pub fn adx(
         });
     }
 
-    // Check for invalid period
-    if period == 0 {
+        if period == 0 {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "period",
             value: 0,
@@ -594,31 +556,22 @@ pub fn adx(
         });
     }
 
-    // Handle empty input
-    if n == 0 {
+        if n == 0 {
         return Ok(Vec::new());
     }
 
-    // ADX lookback is 2*period - 1
-    let lookback = 2 * period - 1;
+        let lookback = 2 * period - 1;
 
-    // Handle insufficient data: close.len() < lookback
-    // Return all-NaN vector per requirements
-    if n < lookback {
+            if n < lookback {
         return Ok(vec![f64::NAN; n]);
     }
 
-    // Call talib-rs ADX function
-    match talib_adx(high, low, close, period) {
+        match talib_adx(high, low, close, period) {
         Ok(result) => {
-            // talib-rs should return a vector of the same length as input
-            // with leading NaNs for the warm-up period
-            if result.len() == n {
+                                    if result.len() == n {
                 Ok(result)
             } else {
-                // If talib-rs returns a different length, pad with NaNs
-                // This shouldn't happen with talib-rs 0.1.2, but handle it defensively
-                let mut output = vec![f64::NAN; n];
+                                                let mut output = vec![f64::NAN; n];
                 let start_idx = n.saturating_sub(result.len());
                 for (i, &val) in result.iter().enumerate() {
                     if start_idx + i < n {
@@ -629,28 +582,24 @@ pub fn adx(
             }
         }
         Err(talib_rs::error::TaError::InsufficientData { .. }) => {
-            // If talib-rs says insufficient data, return all-NaN
-            Ok(vec![f64::NAN; n])
+                        Ok(vec![f64::NAN; n])
         }
         Err(talib_rs::error::TaError::LengthMismatch { expected, got }) => {
-            // This shouldn't happen since we check lengths above, but handle it
-            Err(IndicatorError::LengthMismatch {
+                        Err(IndicatorError::LengthMismatch {
                 expected,
                 actual: got,
                 param_name: "input slices",
             })
         }
         Err(talib_rs::error::TaError::InvalidParameter { name, reason, .. }) => {
-            // Map talib-rs invalid parameter to our InvalidPeriod
-            Err(IndicatorError::InvalidPeriod {
+                        Err(IndicatorError::InvalidPeriod {
                 param_name: name,
                 value: period,
                 reason,
             })
         }
         Err(_) => {
-            // On any other error from talib-rs, return all-NaN
-            Ok(vec![f64::NAN; n])
+                        Ok(vec![f64::NAN; n])
         }
     }
 }
@@ -711,8 +660,7 @@ pub fn moving_average(
 ) -> Result<Vec<f64>, IndicatorError> {
     let n = close.len();
 
-    // Check for invalid period
-    if period == 0 {
+        if period == 0 {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "period",
             value: 0,
@@ -720,22 +668,17 @@ pub fn moving_average(
         });
     }
 
-    // Check for empty input
-    if n == 0 {
+        if n == 0 {
         return Err(IndicatorError::EmptyInput);
     }
 
-    // Check if input contains NaN values - we need to handle NaN propagation
-    let has_nan = close.iter().any(|&x| x.is_nan());
+        let has_nan = close.iter().any(|&x| x.is_nan());
 
-    // If input has NaN values, we need to handle NaN propagation manually
-    // since talib-rs may not handle NaN inputs correctly
-    if has_nan {
+            if has_nan {
         return compute_ma_with_nan_propagation(close, kind, period);
     }
 
-    // Call the appropriate talib-rs function based on the kind
-    let result = match kind {
+        let result = match kind {
         MovingAverageKind::Sma => sma(close, period),
         MovingAverageKind::Ema => ema(close, period),
         MovingAverageKind::Wma => wma(close, period),
@@ -747,13 +690,10 @@ pub fn moving_average(
 
     match result {
         Ok(output) => {
-            // talib-rs should return a vector of the same length as input
-            // with leading NaNs for the warm-up period
-            if output.len() == n {
+                                    if output.len() == n {
                 Ok(output)
             } else {
-                // If talib-rs returns a different length, pad with NaNs
-                let mut padded = vec![f64::NAN; n];
+                                let mut padded = vec![f64::NAN; n];
                 let start_idx = n.saturating_sub(output.len());
                 for (i, &val) in output.iter().enumerate() {
                     if start_idx + i < n {
@@ -764,20 +704,17 @@ pub fn moving_average(
             }
         }
         Err(talib_rs::error::TaError::InsufficientData { .. }) => {
-            // If talib-rs says insufficient data, return all-NaN
-            Ok(vec![f64::NAN; n])
+                        Ok(vec![f64::NAN; n])
         }
         Err(talib_rs::error::TaError::InvalidParameter { name, reason, .. }) => {
-            // Map talib-rs invalid parameter to our InvalidPeriod
-            Err(IndicatorError::InvalidPeriod {
+                        Err(IndicatorError::InvalidPeriod {
                 param_name: name,
                 value: period,
                 reason,
             })
         }
         Err(_) => {
-            // On any other error from talib-rs, return all-NaN
-            Ok(vec![f64::NAN; n])
+                        Ok(vec![f64::NAN; n])
         }
     }
 }
@@ -793,15 +730,10 @@ fn compute_ma_with_nan_propagation(
 ) -> Result<Vec<f64>, IndicatorError> {
     let n = close.len();
 
-    // First, compute the MA on the original data (talib-rs may produce incorrect results with NaN)
-    // We'll compute on a cleaned version and then apply NaN propagation
+        
+            let close_cleaned: Vec<f64> = close.iter().map(|&x| if x.is_nan() { 0.0 } else { x }).collect();
 
-    // Create a version of close with NaN replaced by 0.0 for computation
-    // (we'll overwrite the affected indices with NaN afterward)
-    let close_cleaned: Vec<f64> = close.iter().map(|&x| if x.is_nan() { 0.0 } else { x }).collect();
-
-    // Compute the MA on cleaned data
-    let result = match kind {
+        let result = match kind {
         MovingAverageKind::Sma => sma(&close_cleaned, period),
         MovingAverageKind::Ema => ema(&close_cleaned, period),
         MovingAverageKind::Wma => wma(&close_cleaned, period),
@@ -841,13 +773,7 @@ fn compute_ma_with_nan_propagation(
         }
     };
 
-    // Now propagate NaN: for each output index, check if any input in its window is NaN
-    // The window size depends on the MA type, but we use a conservative approach:
-    // - For SMA/WMA/TRIMA: window is exactly `period` elements
-    // - For EMA/KAMA: technically uses all previous data, but we approximate with `period`
-    // - For DEMA: uses 2*period elements approximately
-    // - For TEMA: uses 3*period elements approximately
-
+                        
     let window_size = match kind {
         MovingAverageKind::Sma | MovingAverageKind::Wma | MovingAverageKind::Trima => period,
         MovingAverageKind::Ema | MovingAverageKind::Kama => period,
@@ -855,14 +781,12 @@ fn compute_ma_with_nan_propagation(
         MovingAverageKind::Tema => 3 * period,
     };
 
-    // For each output index, check if any input in the window contains NaN
-    for i in 0..n {
+        for i in 0..n {
         if output[i].is_nan() {
-            continue; // Already NaN, skip
+            continue;
         }
 
-        // Check the window [i - window_size + 1, i] for NaN values
-        let start = i.saturating_sub(window_size - 1);
+                let start = i.saturating_sub(window_size - 1);
         for j in start..=i {
             if close[j].is_nan() {
                 output[i] = f64::NAN;
@@ -920,14 +844,11 @@ pub fn moving_average_matrix(
 ) -> Result<HashMap<String, Vec<f64>>, IndicatorError> {
     let mut result = HashMap::new();
 
-    // Iterate over the cartesian product of kinds and periods
-    for kind in kinds {
+        for kind in kinds {
         for &period in periods {
-            // Compute the moving average for this (kind, period) pair
-            let ma_values = moving_average(close, *kind, period)?;
+                        let ma_values = moving_average(close, *kind, period)?;
 
-            // Format the key as "{KIND}_{period}" in uppercase
-            let key = format!("{}_{}", kind, period);
+                        let key = format!("{}_{}", kind, period);
 
             result.insert(key, ma_values);
         }
@@ -940,8 +861,7 @@ pub fn moving_average_matrix(
 mod tests {
     use super::*;
 
-    // ==================== MACD Tests ====================
-
+    
     #[test]
     fn macd_returns_correct_length() {
         let close: Vec<f64> = (1..=50).map(|x| x as f64).collect();
@@ -955,8 +875,7 @@ mod tests {
     fn macd_leading_nans() {
         let close: Vec<f64> = (1..=50).map(|x| x as f64).collect();
         let result = macd(&close, 12, 26, 9).unwrap();
-        // First slow + signal - 2 = 26 + 9 - 2 = 33 elements should be NaN
-        let lookback = 26 + 9 - 2;
+                let lookback = 26 + 9 - 2;
         for i in 0..lookback {
             assert!(result.macd[i].is_nan(), "Expected NaN macd at index {}", i);
             assert!(
@@ -966,8 +885,7 @@ mod tests {
             );
             assert!(result.hist[i].is_nan(), "Expected NaN hist at index {}", i);
         }
-        // From index lookback onwards, should have values
-        assert!(
+                assert!(
             !result.macd[lookback].is_nan(),
             "Expected non-NaN macd at index {}",
             lookback
@@ -988,8 +906,7 @@ mod tests {
     fn macd_histogram_identity() {
         let close: Vec<f64> = (1..=50).map(|x| x as f64).collect();
         let result = macd(&close, 12, 26, 9).unwrap();
-        // Verify hist[i] == macd[i] - signal[i] within tolerance for all finite indices
-        for i in 0..result.macd.len() {
+                for i in 0..result.macd.len() {
             if !result.macd[i].is_nan() && !result.signal[i].is_nan() && !result.hist[i].is_nan() {
                 let expected_hist = result.macd[i] - result.signal[i];
                 let diff = (result.hist[i] - expected_hist).abs();
@@ -1016,9 +933,7 @@ mod tests {
 
     #[test]
     fn macd_insufficient_data() {
-        // close.len() < slow + signal - 1 should return all-NaN
-        // slow + signal - 1 = 26 + 9 - 1 = 34
-        let close: Vec<f64> = (1..=33).map(|x| x as f64).collect();
+                        let close: Vec<f64> = (1..=33).map(|x| x as f64).collect();
         let result = macd(&close, 12, 26, 9).unwrap();
         assert_eq!(result.macd.len(), 33);
         assert_eq!(result.signal.len(), 33);
@@ -1100,18 +1015,15 @@ mod tests {
 
     #[test]
     fn macd_custom_periods() {
-        // Test with different periods
-        let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
+                let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = macd(&close, 5, 10, 3).unwrap();
         assert_eq!(result.macd.len(), 100);
-        // lookback = slow + signal - 2 = 10 + 3 - 2 = 11
-        let lookback = 10 + 3 - 2;
+                let lookback = 10 + 3 - 2;
         assert!(result.macd[lookback - 1].is_nan());
         assert!(!result.macd[lookback].is_nan());
     }
 
-    // ==================== ADX Tests ====================
-
+    
     #[test]
     fn adx_returns_correct_length() {
         let high = vec![
@@ -1145,12 +1057,10 @@ mod tests {
             44.5, 44.0, 44.5, 45.0, 45.5, 45.0,
         ];
         let result = adx(&high, &low, &close, 5).unwrap();
-        // First 2*period - 1 = 9 elements should be NaN
-        for i in 0..9 {
+                for i in 0..9 {
             assert!(result[i].is_nan(), "Expected NaN at index {}", i);
         }
-        // From index 9 onwards, should have values
-        assert!(
+                assert!(
             !result[9].is_nan(),
             "Expected non-NaN ADX at index 9"
         );
@@ -1171,8 +1081,7 @@ mod tests {
             44.5, 44.0, 44.5, 45.0, 45.5, 45.0,
         ];
         let result = adx(&high, &low, &close, 5).unwrap();
-        // ADX values should be in [0.0, 100.0]
-        for i in 9..result.len() {
+                for i in 9..result.len() {
             assert!(
                 !result[i].is_nan(),
                 "Expected non-NaN ADX at index {}",
@@ -1198,8 +1107,7 @@ mod tests {
 
     #[test]
     fn adx_insufficient_data() {
-        // close.len() < 2*period - 1 should return all-NaN
-        let high = vec![45.0, 45.5, 46.0];
+                let high = vec![45.0, 45.5, 46.0];
         let low = vec![44.0, 44.5, 45.0];
         let close = vec![44.5, 45.0, 45.5];
         let result = adx(&high, &low, &close, 5).unwrap();
@@ -1223,7 +1131,7 @@ mod tests {
 
     #[test]
     fn adx_length_mismatch_high() {
-        let high = vec![45.0, 45.5]; // Different length
+        let high = vec![45.0, 45.5];
         let low = vec![44.0, 44.5, 45.0];
         let close = vec![44.5, 45.0, 45.5];
         let result = adx(&high, &low, &close, 2);
@@ -1239,7 +1147,7 @@ mod tests {
     #[test]
     fn adx_length_mismatch_low() {
         let high = vec![45.0, 45.5, 46.0];
-        let low = vec![44.0, 44.5]; // Different length
+        let low = vec![44.0, 44.5];
         let close = vec![44.5, 45.0, 45.5];
         let result = adx(&high, &low, &close, 2);
         assert!(matches!(
@@ -1253,8 +1161,7 @@ mod tests {
 
     #[test]
     fn adx_period_one_returns_error() {
-        // talib-rs ADX requires period >= 2
-        let high = vec![
+                let high = vec![
             45.0, 45.5, 46.0, 45.5, 46.0, 45.5, 45.0, 44.5, 45.0, 45.5,
         ];
         let low = vec![
@@ -1264,15 +1171,13 @@ mod tests {
             44.5, 45.0, 45.5, 45.0, 45.5, 45.0, 44.5, 44.0, 44.5, 45.0,
         ];
         let result = adx(&high, &low, &close, 1);
-        // talib-rs requires period >= 2, so period == 1 returns InvalidPeriod
-        assert!(matches!(
+                assert!(matches!(
             result,
             Err(IndicatorError::InvalidPeriod { .. })
         ));
     }
 
-    // ==================== Moving Average Tests ====================
-
+    
     #[test]
     fn moving_average_sma_returns_correct_length() {
         let close: Vec<f64> = (1..=20).map(|x| x as f64).collect();
@@ -1284,12 +1189,10 @@ mod tests {
     fn moving_average_sma_leading_nans() {
         let close: Vec<f64> = (1..=20).map(|x| x as f64).collect();
         let result = moving_average(&close, MovingAverageKind::Sma, 5).unwrap();
-        // First period - 1 = 4 elements should be NaN for SMA
-        for i in 0..4 {
+                for i in 0..4 {
             assert!(result[i].is_nan(), "Expected NaN at index {}", i);
         }
-        // From index 4 onwards, should have values
-        assert!(!result[4].is_nan(), "Expected non-NaN SMA at index 4");
+                assert!(!result[4].is_nan(), "Expected non-NaN SMA at index 4");
     }
 
     #[test]
@@ -1353,17 +1256,13 @@ mod tests {
 
     #[test]
     fn moving_average_nan_propagation() {
-        // Test that NaN values in input propagate to output
-        let mut close: Vec<f64> = (1..=20).map(|x| x as f64).collect();
-        close[10] = f64::NAN; // Insert NaN at index 10
+                let mut close: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        close[10] = f64::NAN;
 
         let result = moving_average(&close, MovingAverageKind::Sma, 5).unwrap();
         assert_eq!(result.len(), close.len());
 
-        // The NaN at index 10 should propagate to indices 10-14 (window includes index 10)
-        // For SMA with period 5, the window for index i is [i-4, i]
-        // So indices 10, 11, 12, 13, 14 should be NaN
-        for i in 10..=14 {
+                                for i in 10..=14 {
             assert!(
                 result[i].is_nan(),
                 "Expected NaN at index {} due to NaN propagation",
@@ -1371,8 +1270,7 @@ mod tests {
             );
         }
 
-        // Index 15 should not be NaN (window is [11, 15], doesn't include index 10)
-        if close.len() > 15 {
+                if close.len() > 15 {
             assert!(
                 !result[15].is_nan(),
                 "Expected non-NaN at index 15 (window doesn't include NaN)"
@@ -1424,8 +1322,7 @@ mod tests {
 
     #[test]
     fn default_ma_kinds_and_periods() {
-        // Verify the default constants match the Python ta/trend/movingavg.py defaults
-        assert_eq!(DEFAULT_MA_KINDS.len(), 2);
+                assert_eq!(DEFAULT_MA_KINDS.len(), 2);
         assert_eq!(DEFAULT_MA_KINDS[0], MovingAverageKind::Sma);
         assert_eq!(DEFAULT_MA_KINDS[1], MovingAverageKind::Ema);
 
@@ -1437,8 +1334,7 @@ mod tests {
 
     #[test]
     fn moving_average_insufficient_data() {
-        // When close.len() < period, should return all-NaN
-        let close: Vec<f64> = vec![1.0, 2.0, 3.0];
+                let close: Vec<f64> = vec![1.0, 2.0, 3.0];
         let result = moving_average(&close, MovingAverageKind::Sma, 10).unwrap();
         assert_eq!(result.len(), 3);
         for val in &result {
@@ -1446,8 +1342,7 @@ mod tests {
         }
     }
 
-    // ==================== Moving Average Matrix Tests ====================
-
+    
     #[test]
     fn moving_average_matrix_returns_correct_entries() {
         let close: Vec<f64> = (1..=50).map(|x| x as f64).collect();
@@ -1455,8 +1350,7 @@ mod tests {
         let periods = &[10, 20];
         let result = moving_average_matrix(&close, kinds, periods).unwrap();
 
-        // Should have 4 entries: SMA_10, SMA_20, EMA_10, EMA_20
-        assert_eq!(result.len(), 4);
+                assert_eq!(result.len(), 4);
         assert!(result.contains_key("SMA_10"));
         assert!(result.contains_key("SMA_20"));
         assert!(result.contains_key("EMA_10"));
@@ -1478,8 +1372,7 @@ mod tests {
         let periods = &[5];
         let result = moving_average_matrix(&close, kinds, periods).unwrap();
 
-        // Verify all keys are in uppercase format
-        assert!(result.contains_key("SMA_5"));
+                assert!(result.contains_key("SMA_5"));
         assert!(result.contains_key("EMA_5"));
         assert!(result.contains_key("WMA_5"));
         assert!(result.contains_key("DEMA_5"));
@@ -1495,8 +1388,7 @@ mod tests {
         let periods = &[10, 20];
         let result = moving_average_matrix(&close, kinds, periods).unwrap();
 
-        // All output vectors should have the same length as input
-        for (key, values) in &result {
+                for (key, values) in &result {
             assert_eq!(
                 values.len(),
                 close.len(),
@@ -1513,8 +1405,7 @@ mod tests {
         let periods = &[10, 20];
         let result = moving_average_matrix(&close, kinds, periods).unwrap();
 
-        // Should return empty HashMap
-        assert!(result.is_empty());
+                assert!(result.is_empty());
     }
 
     #[test]
@@ -1524,8 +1415,7 @@ mod tests {
         let periods: &[usize] = &[];
         let result = moving_average_matrix(&close, kinds, periods).unwrap();
 
-        // Should return empty HashMap
-        assert!(result.is_empty());
+                assert!(result.is_empty());
     }
 
     #[test]
@@ -1556,9 +1446,7 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = moving_average_matrix(&close, DEFAULT_MA_KINDS, DEFAULT_MA_PERIODS).unwrap();
 
-        // DEFAULT_MA_KINDS = [Sma, Ema], DEFAULT_MA_PERIODS = [10, 20, 50]
-        // Should have 6 entries
-        assert_eq!(result.len(), 6);
+                        assert_eq!(result.len(), 6);
         assert!(result.contains_key("SMA_10"));
         assert!(result.contains_key("SMA_20"));
         assert!(result.contains_key("SMA_50"));
@@ -1574,8 +1462,7 @@ mod tests {
         let periods = &[10, 20];
         let matrix_result = moving_average_matrix(&close, kinds, periods).unwrap();
 
-        // Verify that matrix values match individual moving_average calls
-        for kind in kinds {
+                for kind in kinds {
             for &period in periods {
                 let key = format!("{}_{}", kind, period);
                 let individual_result = moving_average(&close, *kind, period).unwrap();
@@ -1585,7 +1472,7 @@ mod tests {
                     matrix_values.iter().zip(individual_result.iter()).enumerate()
                 {
                     if matrix_val.is_nan() && individual_val.is_nan() {
-                        continue; // Both NaN, considered equal
+                        continue;
                     }
                     assert!(
                         (matrix_val - individual_val).abs() < 1e-12,
@@ -1600,8 +1487,7 @@ mod tests {
         }
     }
 
-    // ==================== Ichimoku Cloud Tests ====================
-
+    
     #[test]
     fn ichimoku_returns_correct_length() {
         let high: Vec<f64> = (1..=100).map(|x| x as f64 + 1.0).collect();
@@ -1622,12 +1508,10 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // Tenkan: first tenkan_period - 1 = 8 elements should be NaN
-        for i in 0..8 {
+                for i in 0..8 {
             assert!(result.tenkan[i].is_nan(), "Expected NaN tenkan at index {}", i);
         }
-        // From index 8 onwards, should have values
-        assert!(!result.tenkan[8].is_nan(), "Expected non-NaN tenkan at index 8");
+                assert!(!result.tenkan[8].is_nan(), "Expected non-NaN tenkan at index 8");
     }
 
     #[test]
@@ -1637,12 +1521,10 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // Kijun: first kijun_period - 1 = 25 elements should be NaN
-        for i in 0..25 {
+                for i in 0..25 {
             assert!(result.kijun[i].is_nan(), "Expected NaN kijun at index {}", i);
         }
-        // From index 25 onwards, should have values
-        assert!(!result.kijun[25].is_nan(), "Expected non-NaN kijun at index 25");
+                assert!(!result.kijun[25].is_nan(), "Expected non-NaN kijun at index 25");
     }
 
     #[test]
@@ -1652,17 +1534,10 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // Senkou A: shifted by kijun (26), so first 26 elements should be NaN
-        // Plus the source needs kijun-1 elements to be valid
-        // So first kijun + kijun - 1 = 51 elements should be NaN
-        // Actually: senkou_a[i] = (tenkan[i-kijun] + kijun[i-kijun]) / 2
-        // For i = 26, we need tenkan[0] and kijun[0], but kijun[0] is NaN
-        // For i = 51, we need tenkan[25] and kijun[25], kijun[25] is valid
-        for i in 0..26 {
+                                                        for i in 0..26 {
             assert!(result.senkou_a[i].is_nan(), "Expected NaN senkou_a at index {}", i);
         }
-        // At index 51, both tenkan[25] and kijun[25] should be valid
-        assert!(!result.senkou_a[51].is_nan(), "Expected non-NaN senkou_a at index 51");
+                assert!(!result.senkou_a[51].is_nan(), "Expected non-NaN senkou_a at index 51");
     }
 
     #[test]
@@ -1672,13 +1547,10 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // Senkou B: shifted by kijun (26), and needs senkou_b_period (52) elements
-        // So first kijun + senkou_b_period - 1 = 26 + 52 - 1 = 77 elements should be NaN
-        for i in 0..77 {
+                        for i in 0..77 {
             assert!(result.senkou_b[i].is_nan(), "Expected NaN senkou_b at index {}", i);
         }
-        // From index 77 onwards, should have values
-        assert!(!result.senkou_b[77].is_nan(), "Expected non-NaN senkou_b at index 77");
+                assert!(!result.senkou_b[77].is_nan(), "Expected non-NaN senkou_b at index 77");
     }
 
     #[test]
@@ -1688,13 +1560,10 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // Chikou: chikou[i] = close[i + kijun], so last kijun elements should be NaN
-        // For n=100, kijun=26: indices 74..100 should be NaN
-        for i in 74..100 {
+                        for i in 74..100 {
             assert!(result.chikou[i].is_nan(), "Expected NaN chikou at index {}", i);
         }
-        // Index 73 should have a value (close[73 + 26] = close[99])
-        assert!(!result.chikou[73].is_nan(), "Expected non-NaN chikou at index 73");
+                assert!(!result.chikou[73].is_nan(), "Expected non-NaN chikou at index 73");
     }
 
     #[test]
@@ -1704,8 +1573,7 @@ mod tests {
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // Verify chikou[i] = close[i + kijun]
-        for i in 0..74 {
+                for i in 0..74 {
             let expected = close[i + 26];
             assert!(
                 (result.chikou[i] - expected).abs() < 1e-12,
@@ -1717,23 +1585,18 @@ mod tests {
 
     #[test]
     fn ichimoku_tenkan_computation() {
-        // Test with simple data where we can verify the computation
-        let high = vec![10.0, 12.0, 11.0, 13.0, 12.0];
+                let high = vec![10.0, 12.0, 11.0, 13.0, 12.0];
         let low = vec![8.0, 9.0, 9.0, 10.0, 10.0];
         let close = vec![9.0, 11.0, 10.0, 12.0, 11.0];
         let result = ichimoku(&high, &low, &close, 3, 3, 3).unwrap();
 
-        // tenkan[2] = (max(high[0..=2]) + min(low[0..=2])) / 2
-        // = (max(10, 12, 11) + min(8, 9, 9)) / 2 = (12 + 8) / 2 = 10.0
-        assert!(
+                        assert!(
             (result.tenkan[2] - 10.0).abs() < 1e-12,
             "Tenkan at index 2: expected 10.0, got {}",
             result.tenkan[2]
         );
 
-        // tenkan[3] = (max(high[1..=3]) + min(low[1..=3])) / 2
-        // = (max(12, 11, 13) + min(9, 9, 10)) / 2 = (13 + 9) / 2 = 11.0
-        assert!(
+                        assert!(
             (result.tenkan[3] - 11.0).abs() < 1e-12,
             "Tenkan at index 3: expected 11.0, got {}",
             result.tenkan[3]
@@ -1755,14 +1618,12 @@ mod tests {
 
     #[test]
     fn ichimoku_period_exceeds_length() {
-        // When period exceeds n, the affected line should be all-NaN (no error)
-        let high = vec![10.0, 12.0, 11.0];
+                let high = vec![10.0, 12.0, 11.0];
         let low = vec![8.0, 9.0, 9.0];
         let close = vec![9.0, 11.0, 10.0];
         let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
 
-        // All lines should be NaN since periods exceed length
-        for val in &result.tenkan {
+                for val in &result.tenkan {
             assert!(val.is_nan());
         }
         for val in &result.kijun {
@@ -1829,7 +1690,7 @@ mod tests {
 
     #[test]
     fn ichimoku_length_mismatch_high() {
-        let high = vec![10.0, 12.0]; // Different length
+        let high = vec![10.0, 12.0];
         let low = vec![8.0, 9.0, 9.0];
         let close = vec![9.0, 11.0, 10.0];
         let result = ichimoku(&high, &low, &close, 2, 2, 2);
@@ -1845,7 +1706,7 @@ mod tests {
     #[test]
     fn ichimoku_length_mismatch_low() {
         let high = vec![10.0, 12.0, 11.0];
-        let low = vec![8.0, 9.0]; // Different length
+        let low = vec![8.0, 9.0];
         let close = vec![9.0, 11.0, 10.0];
         let result = ichimoku(&high, &low, &close, 2, 2, 2);
         assert!(matches!(
@@ -1859,24 +1720,12 @@ mod tests {
 
     #[test]
     fn ichimoku_senkou_a_computation() {
-        // Test senkou_a computation with simple data
-        let high = vec![10.0, 12.0, 11.0, 13.0, 12.0, 14.0, 13.0, 15.0, 14.0, 16.0];
+                let high = vec![10.0, 12.0, 11.0, 13.0, 12.0, 14.0, 13.0, 15.0, 14.0, 16.0];
         let low = vec![8.0, 9.0, 9.0, 10.0, 10.0, 11.0, 11.0, 12.0, 12.0, 13.0];
         let close = vec![9.0, 11.0, 10.0, 12.0, 11.0, 13.0, 12.0, 14.0, 13.0, 15.0];
         let result = ichimoku(&high, &low, &close, 2, 3, 2).unwrap();
 
-        // senkou_a[i] = (tenkan[i-kijun] + kijun[i-kijun]) / 2
-        // For kijun=3, senkou_a[3] = (tenkan[0] + kijun[0]) / 2
-        // But tenkan[0] is NaN (needs period-1=1 elements), so senkou_a[3] is NaN
-        // senkou_a[4] = (tenkan[1] + kijun[1]) / 2
-        // tenkan[1] = (max(high[0..=1]) + min(low[0..=1])) / 2 = (12 + 8) / 2 = 10.0
-        // kijun[1] is NaN (needs period-1=2 elements)
-        // So senkou_a[4] is NaN
-        // senkou_a[5] = (tenkan[2] + kijun[2]) / 2
-        // tenkan[2] = (max(high[1..=2]) + min(low[1..=2])) / 2 = (12 + 9) / 2 = 10.5
-        // kijun[2] = (max(high[0..=2]) + min(low[0..=2])) / 2 = (12 + 8) / 2 = 10.0
-        // senkou_a[5] = (10.5 + 10.0) / 2 = 10.25
-        assert!(
+                                                                                                assert!(
             (result.senkou_a[5] - 10.25).abs() < 1e-12,
             "Senkou A at index 5: expected 10.25, got {}",
             result.senkou_a[5]
@@ -1885,20 +1734,16 @@ mod tests {
 
     #[test]
     fn ichimoku_with_nan_in_input() {
-        // Test that NaN in input propagates correctly
-        let mut high: Vec<f64> = (1..=20).map(|x| x as f64 + 1.0).collect();
+                let mut high: Vec<f64> = (1..=20).map(|x| x as f64 + 1.0).collect();
         let mut low: Vec<f64> = (1..=20).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=20).map(|x| x as f64).collect();
 
-        // Insert NaN at index 5
-        high[5] = f64::NAN;
+                high[5] = f64::NAN;
         low[5] = f64::NAN;
 
         let result = ichimoku(&high, &low, &close, 3, 5, 3).unwrap();
 
-        // The NaN at index 5 should affect tenkan and kijun for indices 5, 6, 7
-        // (window includes index 5)
-        for i in 5..8 {
+                        for i in 5..8 {
             assert!(
                 result.tenkan[i].is_nan(),
                 "Expected NaN tenkan at index {} due to NaN input",
@@ -1907,23 +1752,17 @@ mod tests {
         }
     }
 
-    // ==================== Ichimoku Cloud NaN Placement Tests (Python Reference Parity) ====================
-    // These tests verify NaN placement matches the Python ta/trend/ic.py reference
-    // Requirements: 7.8
-
+            
     #[test]
     fn ichimoku_nan_placement_tenkan_matches_python_reference() {
-        // Validates: Requirements 7.3, 7.8
-        // tenkan[i] should be NaN for indices < tenkan_period - 1
-        let high: Vec<f64> = (1..=50).map(|x| x as f64 + 1.0).collect();
+                        let high: Vec<f64> = (1..=50).map(|x| x as f64 + 1.0).collect();
         let low: Vec<f64> = (1..=50).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=50).map(|x| x as f64).collect();
         
         let tenkan_period = 9;
         let result = ichimoku(&high, &low, &close, tenkan_period, 26, 52).unwrap();
         
-        // NaN for indices < tenkan_period - 1 (i.e., indices 0..8)
-        for i in 0..(tenkan_period - 1) {
+                for i in 0..(tenkan_period - 1) {
             assert!(
                 result.tenkan[i].is_nan(),
                 "tenkan[{}] should be NaN (< tenkan_period - 1 = {})",
@@ -1931,8 +1770,7 @@ mod tests {
             );
         }
         
-        // First valid value at index tenkan_period - 1
-        assert!(
+                assert!(
             !result.tenkan[tenkan_period - 1].is_nan(),
             "tenkan[{}] should be finite (first valid index)",
             tenkan_period - 1
@@ -1941,17 +1779,14 @@ mod tests {
 
     #[test]
     fn ichimoku_nan_placement_kijun_matches_python_reference() {
-        // Validates: Requirements 7.4, 7.8
-        // kijun[i] should be NaN for indices < kijun_period - 1
-        let high: Vec<f64> = (1..=50).map(|x| x as f64 + 1.0).collect();
+                        let high: Vec<f64> = (1..=50).map(|x| x as f64 + 1.0).collect();
         let low: Vec<f64> = (1..=50).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=50).map(|x| x as f64).collect();
         
         let kijun_period = 26;
         let result = ichimoku(&high, &low, &close, 9, kijun_period, 52).unwrap();
         
-        // NaN for indices < kijun_period - 1 (i.e., indices 0..25)
-        for i in 0..(kijun_period - 1) {
+                for i in 0..(kijun_period - 1) {
             assert!(
                 result.kijun[i].is_nan(),
                 "kijun[{}] should be NaN (< kijun_period - 1 = {})",
@@ -1959,8 +1794,7 @@ mod tests {
             );
         }
         
-        // First valid value at index kijun_period - 1
-        assert!(
+                assert!(
             !result.kijun[kijun_period - 1].is_nan(),
             "kijun[{}] should be finite (first valid index)",
             kijun_period - 1
@@ -1969,11 +1803,7 @@ mod tests {
 
     #[test]
     fn ichimoku_nan_placement_senkou_a_matches_python_reference() {
-        // Validates: Requirements 7.5, 7.8
-        // senkou_a[i] = (tenkan[i-kijun] + kijun[i-kijun]) / 2
-        // senkou_a[i] is NaN when i < kijun OR when tenkan[i-kijun] or kijun[i-kijun] is NaN
-        // First valid senkou_a is at index kijun + max(tenkan_period, kijun_period) - 1
-        let high: Vec<f64> = (1..=100).map(|x| x as f64 + 1.0).collect();
+                                        let high: Vec<f64> = (1..=100).map(|x| x as f64 + 1.0).collect();
         let low: Vec<f64> = (1..=100).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         
@@ -1981,8 +1811,7 @@ mod tests {
         let kijun_period = 26;
         let result = ichimoku(&high, &low, &close, tenkan_period, kijun_period, 52).unwrap();
         
-        // senkou_a[i] is NaN for i < kijun (due to shift)
-        for i in 0..kijun_period {
+                for i in 0..kijun_period {
             assert!(
                 result.senkou_a[i].is_nan(),
                 "senkou_a[{}] should be NaN (< kijun_period = {})",
@@ -1990,10 +1819,7 @@ mod tests {
             );
         }
         
-        // First valid senkou_a is at index kijun + kijun - 1 = 2*kijun - 1
-        // because we need kijun[i-kijun] to be valid, which requires i-kijun >= kijun-1
-        // i.e., i >= 2*kijun - 1
-        let first_valid_senkou_a = 2 * kijun_period - 1;
+                                let first_valid_senkou_a = 2 * kijun_period - 1;
         assert!(
             !result.senkou_a[first_valid_senkou_a].is_nan(),
             "senkou_a[{}] should be finite (first valid index)",
@@ -2003,9 +1829,7 @@ mod tests {
 
     #[test]
     fn ichimoku_nan_placement_senkou_b_matches_python_reference() {
-        // Validates: Requirements 7.6, 7.8
-        // senkou_b[i] is NaN for i < kijun + senkou_b_period - 1
-        let high: Vec<f64> = (1..=100).map(|x| x as f64 + 1.0).collect();
+                        let high: Vec<f64> = (1..=100).map(|x| x as f64 + 1.0).collect();
         let low: Vec<f64> = (1..=100).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=100).map(|x| x as f64).collect();
         
@@ -2013,8 +1837,7 @@ mod tests {
         let senkou_b_period = 52;
         let result = ichimoku(&high, &low, &close, 9, kijun_period, senkou_b_period).unwrap();
         
-        // senkou_b[i] is NaN for i < kijun + senkou_b_period - 1
-        let first_valid_senkou_b = kijun_period + senkou_b_period - 1;
+                let first_valid_senkou_b = kijun_period + senkou_b_period - 1;
         for i in 0..first_valid_senkou_b {
             assert!(
                 result.senkou_b[i].is_nan(),
@@ -2023,8 +1846,7 @@ mod tests {
             );
         }
         
-        // First valid value at index kijun + senkou_b_period - 1
-        assert!(
+                assert!(
             !result.senkou_b[first_valid_senkou_b].is_nan(),
             "senkou_b[{}] should be finite (first valid index)",
             first_valid_senkou_b
@@ -2033,9 +1855,7 @@ mod tests {
 
     #[test]
     fn ichimoku_nan_placement_chikou_matches_python_reference() {
-        // Validates: Requirements 7.7, 7.8
-        // chikou[i] = close[i + kijun] when i + kijun < n, NaN otherwise
-        let n = 100;
+                        let n = 100;
         let high: Vec<f64> = (1..=n).map(|x| x as f64 + 1.0).collect();
         let low: Vec<f64> = (1..=n).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=n).map(|x| x as f64).collect();
@@ -2043,11 +1863,9 @@ mod tests {
         let kijun_period = 26;
         let result = ichimoku(&high, &low, &close, 9, kijun_period, 52).unwrap();
         
-        // chikou[i] is NaN for i + kijun >= n, i.e., i >= n - kijun
-        let first_nan_chikou = n as usize - kijun_period;
+                let first_nan_chikou = n as usize - kijun_period;
         
-        // Valid values for i < n - kijun
-        for i in 0..first_nan_chikou {
+                for i in 0..first_nan_chikou {
             assert!(
                 !result.chikou[i].is_nan(),
                 "chikou[{}] should be finite (i + kijun < n)",
@@ -2055,8 +1873,7 @@ mod tests {
             );
         }
         
-        // NaN for i >= n - kijun
-        for i in first_nan_chikou..n as usize {
+                for i in first_nan_chikou..n as usize {
             assert!(
                 result.chikou[i].is_nan(),
                 "chikou[{}] should be NaN (i + kijun >= n)",
@@ -2067,16 +1884,13 @@ mod tests {
 
     #[test]
     fn ichimoku_all_nan_when_all_periods_exceed_length() {
-        // Edge case: all periods exceed input length
-        let high = vec![10.0, 12.0, 11.0, 13.0, 12.0];
+                let high = vec![10.0, 12.0, 11.0, 13.0, 12.0];
         let low = vec![8.0, 9.0, 9.0, 10.0, 10.0];
         let close = vec![9.0, 11.0, 10.0, 12.0, 11.0];
         
-        // All periods (9, 26, 52) exceed length (5)
-        let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
+                let result = ichimoku(&high, &low, &close, 9, 26, 52).unwrap();
         
-        // All outputs should be NaN
-        assert_eq!(result.tenkan.len(), 5);
+                assert_eq!(result.tenkan.len(), 5);
         assert_eq!(result.kijun.len(), 5);
         assert_eq!(result.senkou_a.len(), 5);
         assert_eq!(result.senkou_b.len(), 5);
@@ -2093,48 +1907,39 @@ mod tests {
 
     #[test]
     fn ichimoku_partial_nan_when_some_periods_exceed_length() {
-        // Edge case: some periods exceed input length
-        let high: Vec<f64> = (1..=15).map(|x| x as f64 + 1.0).collect();
+                let high: Vec<f64> = (1..=15).map(|x| x as f64 + 1.0).collect();
         let low: Vec<f64> = (1..=15).map(|x| x as f64 - 1.0).collect();
         let close: Vec<f64> = (1..=15).map(|x| x as f64).collect();
         
-        // tenkan=3 (valid), kijun=5 (valid), senkou_b=20 (exceeds length 15)
-        let result = ichimoku(&high, &low, &close, 3, 5, 20).unwrap();
+                let result = ichimoku(&high, &low, &close, 3, 5, 20).unwrap();
         
-        // tenkan should have valid values from index 2 onwards
-        assert!(result.tenkan[1].is_nan());
+                assert!(result.tenkan[1].is_nan());
         assert!(!result.tenkan[2].is_nan());
         
-        // kijun should have valid values from index 4 onwards
-        assert!(result.kijun[3].is_nan());
+                assert!(result.kijun[3].is_nan());
         assert!(!result.kijun[4].is_nan());
         
-        // senkou_a should have valid values from index 2*kijun - 1 = 9 onwards
-        assert!(result.senkou_a[8].is_nan());
+                assert!(result.senkou_a[8].is_nan());
         assert!(!result.senkou_a[9].is_nan());
         
-        // senkou_b should be all NaN (kijun + senkou_b - 1 = 5 + 20 - 1 = 24 > 15)
-        for i in 0..15 {
+                for i in 0..15 {
             assert!(result.senkou_b[i].is_nan(), "senkou_b[{}] should be NaN", i);
         }
         
-        // chikou should have valid values for i < n - kijun = 15 - 5 = 10
-        assert!(!result.chikou[9].is_nan());
+                assert!(!result.chikou[9].is_nan());
         assert!(result.chikou[10].is_nan());
     }
 
     #[test]
     fn ichimoku_output_vector_lengths_always_match_input() {
-        // Validates: Requirements 7.2
-        // Output vectors should always have the same length as input
-        let test_cases = vec![
-            (1, 9, 26, 52),   // Very short input
-            (10, 9, 26, 52),  // Short input
-            (50, 9, 26, 52),  // Medium input
-            (100, 9, 26, 52), // Standard input
-            (200, 9, 26, 52), // Long input
-            (50, 3, 5, 10),   // Custom periods
-            (50, 1, 1, 1),    // Minimum periods
+                        let test_cases = vec![
+            (1, 9, 26, 52),
+            (10, 9, 26, 52),
+            (50, 9, 26, 52),
+            (100, 9, 26, 52),
+            (200, 9, 26, 52),
+            (50, 3, 5, 10),
+            (50, 1, 1, 1),
         ];
         
         for (n, tenkan, kijun, senkou_b) in test_cases {
@@ -2174,33 +1979,25 @@ mod tests {
 
     #[test]
     fn ichimoku_computation_correctness_tenkan_kijun() {
-        // Validates: Requirements 7.3, 7.4, 7.8
-        // Verify the computation formulas are correct
-        let high = vec![10.0, 15.0, 12.0, 18.0, 14.0, 20.0, 16.0, 22.0, 18.0, 24.0];
+                        let high = vec![10.0, 15.0, 12.0, 18.0, 14.0, 20.0, 16.0, 22.0, 18.0, 24.0];
         let low = vec![5.0, 8.0, 7.0, 10.0, 9.0, 12.0, 11.0, 14.0, 13.0, 16.0];
         let close = vec![7.0, 12.0, 10.0, 15.0, 12.0, 17.0, 14.0, 19.0, 16.0, 21.0];
         
         let result = ichimoku(&high, &low, &close, 3, 5, 3).unwrap();
         
-        // tenkan[2] = (max(high[0..=2]) + min(low[0..=2])) / 2
-        // = (max(10, 15, 12) + min(5, 8, 7)) / 2 = (15 + 5) / 2 = 10.0
-        assert!(
+                        assert!(
             (result.tenkan[2] - 10.0).abs() < 1e-9,
             "tenkan[2] expected 10.0, got {}",
             result.tenkan[2]
         );
         
-        // tenkan[5] = (max(high[3..=5]) + min(low[3..=5])) / 2
-        // = (max(18, 14, 20) + min(10, 9, 12)) / 2 = (20 + 9) / 2 = 14.5
-        assert!(
+                        assert!(
             (result.tenkan[5] - 14.5).abs() < 1e-9,
             "tenkan[5] expected 14.5, got {}",
             result.tenkan[5]
         );
         
-        // kijun[4] = (max(high[0..=4]) + min(low[0..=4])) / 2
-        // = (max(10, 15, 12, 18, 14) + min(5, 8, 7, 10, 9)) / 2 = (18 + 5) / 2 = 11.5
-        assert!(
+                        assert!(
             (result.kijun[4] - 11.5).abs() < 1e-9,
             "kijun[4] expected 11.5, got {}",
             result.kijun[4]
@@ -2213,42 +2010,28 @@ mod property_tests {
     use super::*;
     use proptest::prelude::*;
 
-    // **Property 3: ADX Bounded Range**
-    //
-    // For any OHLC input with no NaN values and `period >= 1`,
-    // all non-NaN ADX output values SHALL be in the closed range `[0.0, 100.0]`.
-    //
-    // **Validates: Requirements 4.3**
-    proptest! {
+                            proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
         #[test]
         fn adx_bounded_range(
-            // Generate a vector of positive close prices (no NaN values)
-            // Using positive values to simulate realistic price data
-            close in prop::collection::vec(1.0f64..10000.0f64, 1..500),
-            // Period must be >= 2 for talib-rs ADX (period 1 returns InvalidPeriod)
-            period in 2usize..50
+                                    close in prop::collection::vec(1.0f64..10000.0f64, 1..500),
+                        period in 2usize..50
         ) {
             let n = close.len();
 
-            // Generate high prices that are >= close prices
-            // and low prices that are <= close prices to maintain OHLC validity
-            let high: Vec<f64> = close.iter().map(|&c| c * 1.01).collect();
+                                    let high: Vec<f64> = close.iter().map(|&c| c * 1.01).collect();
             let low: Vec<f64> = close.iter().map(|&c| c * 0.99).collect();
 
             let result = adx(&high, &low, &close, period);
 
-            // ADX should return Ok for valid inputs
-            prop_assert!(result.is_ok(), "ADX returned error: {:?}", result);
+                        prop_assert!(result.is_ok(), "ADX returned error: {:?}", result);
 
             let result = result.unwrap();
 
-            // Verify output length matches input length
-            prop_assert_eq!(result.len(), n);
+                        prop_assert_eq!(result.len(), n);
 
-            // Verify all non-NaN ADX values are in [0.0, 100.0]
-            for (i, &val) in result.iter().enumerate() {
+                        for (i, &val) in result.iter().enumerate() {
                 if !val.is_nan() {
                     prop_assert!(
                         val >= 0.0 && val <= 100.0,
@@ -2261,53 +2044,35 @@ mod property_tests {
         }
     }
 
-    // **Property 4: MACD Histogram Identity**
-    //
-    // For any close price slice and valid MACD parameters, at every index `i`
-    // where `macd[i]`, `signal[i]`, and `hist[i]` are all finite, the identity
-    // `|hist[i] - (macd[i] - signal[i])| <= 1e-9` SHALL hold.
-    //
-    // **Validates: Requirements 5.4**
-    proptest! {
+                                proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
         #[test]
         fn macd_histogram_identity(
-            // Generate a vector of positive close prices (no NaN values)
-            // Using positive values to simulate realistic price data
-            close in prop::collection::vec(1.0f64..10000.0f64, 1..500),
-            // Fast period must be >= 2 for talib-rs
-            fast in 2usize..20,
-            // Slow period must be > fast, so we generate an offset and add to fast
-            slow_offset in 1usize..30,
-            // Signal period must be >= 1
-            signal in 1usize..20
+                                    close in prop::collection::vec(1.0f64..10000.0f64, 1..500),
+                        fast in 2usize..20,
+                        slow_offset in 1usize..30,
+                        signal in 1usize..20
         ) {
-            // Ensure slow > fast
-            let slow = fast + slow_offset;
+                        let slow = fast + slow_offset;
 
             let result = macd(&close, fast, slow, signal);
 
-            // MACD should return Ok for valid inputs
-            prop_assert!(result.is_ok(), "MACD returned error: {:?}", result);
+                        prop_assert!(result.is_ok(), "MACD returned error: {:?}", result);
 
             let output = result.unwrap();
 
-            // Verify output lengths match input length
-            let n = close.len();
+                        let n = close.len();
             prop_assert_eq!(output.macd.len(), n);
             prop_assert_eq!(output.signal.len(), n);
             prop_assert_eq!(output.hist.len(), n);
 
-            // Verify histogram identity: hist[i] == macd[i] - signal[i] within 1e-9
-            // for all indices where all three values are finite
-            for i in 0..n {
+                                    for i in 0..n {
                 let macd_val = output.macd[i];
                 let signal_val = output.signal[i];
                 let hist_val = output.hist[i];
 
-                // Only check when all three values are finite (not NaN)
-                if macd_val.is_finite() && signal_val.is_finite() && hist_val.is_finite() {
+                                if macd_val.is_finite() && signal_val.is_finite() && hist_val.is_finite() {
                     let expected_hist = macd_val - signal_val;
                     let diff = (hist_val - expected_hist).abs();
 

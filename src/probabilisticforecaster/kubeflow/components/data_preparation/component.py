@@ -21,7 +21,6 @@ import boto3
 import numpy as np
 import pandas as pd
 
-# Add parent paths so we can import the probabilisticforecaster package
 sys.path.insert(0, "/app")
 
 from probabilisticforecaster.config import S3_BUCKET
@@ -87,7 +86,6 @@ def load_data_from_s3(
     data.sort_values("Timestamp", inplace=True)
     data.reset_index(drop=True, inplace=True)
 
-    # Filter to requested date range
     mask = (data["Timestamp"] >= pd.Timestamp(start_date)) & (
         data["Timestamp"] <= pd.Timestamp(end_date)
     )
@@ -155,17 +153,14 @@ def build_datasets(
         extra={"rows": features_df.shape[0], "columns": features_df.shape[1]},
     )
 
-    # Align close prices with features index
     data_indexed = data.set_index(pd.to_datetime(data["Timestamp"], utc=True))
     close_prices = data_indexed["Close"].reindex(features_df.index)
 
-    # Parse date boundaries
     train_start_dt = pd.Timestamp(train_start, tz="UTC")
     train_end_dt = pd.Timestamp(train_end + " 23:59:59", tz="UTC")
     test_start_dt = pd.Timestamp(test_start, tz="UTC")
     test_end_dt = pd.Timestamp(test_end + " 23:59:59", tz="UTC")
 
-    # Split by date boundaries
     train_mask = (features_df.index >= train_start_dt) & (features_df.index <= train_end_dt)
     test_mask = (features_df.index >= test_start_dt) & (features_df.index <= test_end_dt)
 
@@ -291,9 +286,6 @@ def main() -> None:
         },
     )
 
-    # Step 1: Load data from S3
-    # We need data from train_start through test_end
-    # The EOH snapshot of test_end contains all historical data
     start_date = datetime.fromisoformat(args.train_start).replace(tzinfo=timezone.utc)
     end_date = datetime.fromisoformat(args.test_end).replace(tzinfo=timezone.utc)
     snapshot_date = (
@@ -310,7 +302,6 @@ def main() -> None:
         snapshot_date=snapshot_date,
     )
 
-    # Step 2: Compute features and build train/test datasets
     train_dataset, test_dataset = build_datasets(
         data=data,
         lookback_window=args.lookback_window,
@@ -322,7 +313,6 @@ def main() -> None:
         test_end=args.test_end,
     )
 
-    # Step 3: Upload datasets to S3 as KFP artifacts
     upload_dataset_to_s3(train_dataset, args.train_dataset_path, bucket=args.bucket)
     upload_dataset_to_s3(test_dataset, args.test_dataset_path, bucket=args.bucket)
 

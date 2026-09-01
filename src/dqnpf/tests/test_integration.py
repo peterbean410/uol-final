@@ -50,27 +50,27 @@ def test_hold_never_increments_budget_regardless_of_sigma() -> None:
 
 def test_low_sigma_does_not_increment_budget() -> None:
     layer = make_layer(variance_threshold=4.5, max_risk_long_units=5)
-    layer.screen(_a(2), mu=0.0, sigma=4.5)  # boundary: sigma == threshold
+    layer.screen(_a(2), mu=0.0, sigma=4.5)
     assert layer.risk_long_used == 0
 
 
 def test_on_position_closed_buy_decrements_long() -> None:
     layer = make_layer(variance_threshold=1.0, max_risk_long_units=5)
-    layer.screen(_a(2), mu=0.0, sigma=5.0)  # long=2
+    layer.screen(_a(2), mu=0.0, sigma=5.0)
     layer.on_position_closed("buy", 1)
     assert layer.risk_long_used == 1
 
 
 def test_on_position_closed_sell_decrements_short() -> None:
     layer = make_layer(variance_threshold=1.0, max_risk_short_units=5)
-    layer.screen(_a(4), mu=0.0, sigma=5.0)  # short=2
+    layer.screen(_a(4), mu=0.0, sigma=5.0)
     layer.on_position_closed("sell", 2)
     assert layer.risk_short_used == 0
 
 
 def test_on_position_closed_clamps_to_zero() -> None:
     layer = make_layer(variance_threshold=1.0, max_risk_long_units=5)
-    layer.screen(_a(1), mu=0.0, sigma=5.0)  # long=1
+    layer.screen(_a(1), mu=0.0, sigma=5.0)
     layer.on_position_closed("buy", 99)
     assert layer.risk_long_used == 0
 
@@ -99,7 +99,7 @@ def test_screened_action_fields_on_pass() -> None:
 
 def test_screened_action_fields_on_budget_exhausted() -> None:
     layer = make_layer(variance_threshold=1.0, max_risk_long_units=1)
-    layer.screen(_a(1), mu=0.0, sigma=5.0)  # long=1
+    layer.screen(_a(1), mu=0.0, sigma=5.0)
     result = layer.screen(_a(1), mu=0.0, sigma=5.0)
     assert result.action == 0
     assert result.action_name == "HOLD"
@@ -109,10 +109,7 @@ def test_screened_action_fields_on_budget_exhausted() -> None:
     assert result.risk_short_used == 0
 
 
-
-
 def test_variance_threshold_at_boundary_is_low_sigma_path() -> None:
-    # sigma == threshold → no budget consumption (strict inequality)
     layer = make_layer(variance_threshold=4.5, max_risk_long_units=5)
     layer.screen(_a(1), mu=0.0, sigma=4.5)
     assert layer.risk_long_used == 0
@@ -125,24 +122,18 @@ def test_variance_threshold_just_above_is_high_sigma_path() -> None:
     assert layer.risk_long_used == 1
 
 
-# ---------------------------------------------------------------------------
-# Per-UTC-day budget reset (timestamp_ns)
-# ---------------------------------------------------------------------------
-
 _NANOS_PER_DAY = 86_400_000_000_000
 
 
 def test_budget_resets_on_utc_day_boundary() -> None:
     layer = make_layer(variance_threshold=1.0, max_risk_long_units=2)
     day0 = 10 * _NANOS_PER_DAY
-    # Exhaust the day-0 budget (2 units), then a third open is blocked.
     assert layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0).reason == "pass"
     assert layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0 + 1).reason == "pass"
     assert (
         layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0 + 2).reason
         == "budget_exhausted"
     )
-    # Crossing into day 1 resets the budget -> opens allowed again.
     day1 = 11 * _NANOS_PER_DAY
     assert layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day1).reason == "pass"
     assert layer.risk_long_used == 1
@@ -152,7 +143,6 @@ def test_budget_does_not_reset_within_same_day() -> None:
     layer = make_layer(variance_threshold=1.0, max_risk_long_units=2)
     day0 = 10 * _NANOS_PER_DAY
     layer.screen(_a(1), 0.0, 5.0, timestamp_ns=day0)
-    # Later the same UTC day (just before midnight) must not reset.
     later = day0 + _NANOS_PER_DAY - 1
     layer.screen(_a(1), 0.0, 5.0, timestamp_ns=later)
     assert layer.risk_long_used == 2
@@ -163,7 +153,6 @@ def test_budget_does_not_reset_within_same_day() -> None:
 
 
 def test_budget_never_resets_without_timestamp() -> None:
-    # Legacy behaviour: omitting timestamp_ns keeps the lifetime cap.
     layer = make_layer(variance_threshold=1.0, max_risk_long_units=2)
     layer.screen(_a(1), 0.0, 5.0)
     layer.screen(_a(1), 0.0, 5.0)

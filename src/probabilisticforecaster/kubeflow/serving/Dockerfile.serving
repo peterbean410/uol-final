@@ -1,6 +1,3 @@
-# KServe custom predictor for the ProbabilisticTransformer
-# Extends the shared base image with kserve runtime
-# Requirements: 2.1, 2.2
 
 FROM 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base:latest
 
@@ -9,17 +6,12 @@ LABEL description="KServe custom predictor serving Gaussian mu/sigma predictions
 
 WORKDIR /app
 
-# Install serving-specific dependencies (kserve SDK)
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy the probabilisticforecaster package (config, model modules)
 COPY probabilisticforecaster/ /app/probabilisticforecaster/
 
-# Copy the serving predictor
 COPY probabilisticforecaster/kubeflow/serving/predictor.py /app/predictor.py
 
-# S3 authentication via IRSA; no credentials embedded (Requirement 2.3)
-# The pod's service account is annotated with an IAM role ARN
 
 ENTRYPOINT ["python", "predictor.py"]

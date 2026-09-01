@@ -14,82 +14,54 @@ import yaml
 class PipelineConfig:
     """Complete pipeline configuration loaded from YAML."""
 
-    # Model parameters (from ForecasterConfig)
     symbol: str = "USDJPY"
-    forecast_horizon: int = 1  # 1, 3, 6, 12
+    forecast_horizon: int = 1
     lookback_window: int = 36
     historical_window: int = 1440
     num_features: int = 16
     num_layers: int = 3
     num_heads: int = 4
-    d_ff: int = 64  # Feed-forward hidden dimension in Transformer layers
+    d_ff: int = 64
     dropout: float = 0.1
     learning_rate: float = 0.001
     batch_size: int = 64
     epochs: int = 5
     random_seed: int = 42
 
-    # Date ranges (static fallback when no snapshot_date is provided)
     train_start: str = "2012-01-01"
     train_end: str = "2022-12-31"
     test_start: str = "2023-01-01"
     test_end: str = "2026-04-30"
 
-    # Rolling-window parameters (used when snapshot_date is provided at runtime)
-    # Percentage-based split of total available data (from data_start to snapshot_date)
-    data_start: str = "2012-01-01"  # Earliest available data
-    train_pct: float = 0.75  # 75% of total history for training
-    test_pct: float = 0.25  # 25% of total history for test/evaluation
-    # When snapshot_date is provided:
-    #   total_days = snapshot_date - data_start
-    #   train_days = total_days * train_pct
-    #   test_days  = total_days * test_pct
-    #   test_end   = snapshot_date
-    #   test_start = snapshot_date - test_days
-    #   train_end  = test_start - 1 day
-    #   train_start = data_start
+    data_start: str = "2012-01-01"
+    train_pct: float = 0.75
+    test_pct: float = 0.25
 
-    # Infrastructure
-    num_workers: int = 1  # DDP workers (1-4)
+    num_workers: int = 1
     max_wall_time_hours: int = 8
 
-    # Katib
     katib_max_trials: int = 30
     katib_parallel_trials: int = 5
     katib_trial_timeout_hours: int = 2
 
-    # Serving
     serving_min_replicas: int = 0
     serving_max_replicas: int = 4
     serving_target_concurrency: int = 10
     canary_traffic_percent: int = 0
 
-    # Monitoring
     alert_webhook_url: str = ""
     nll_degradation_threshold: float = 0.1
     da_degradation_threshold: float = 0.05
     nll_absolute_threshold: float = 3.5
     da_absolute_threshold: float = 0.50
 
-    # Scheduling
     schedule_mode: Literal["daily", "weekly", "on-demand", "drift-triggered"] = (
         "drift-triggered"
     )
 
-    # Training mode
     training_mode: Literal["scratch", "finetune"] = "scratch"
-    # "scratch": Random init, full training (5 epochs on rolling window)
-    # "finetune": Load production model weights, train 1-2 epochs on recent data with reduced LR
-    finetune_epochs: int = 2  # Epochs when fine-tuning (fewer than full training)
-    finetune_learning_rate: float = 0.0001  # Reduced LR for fine-tuning (10x lower)
-    #
-    # Scheduling strategy:
-    #   - Weekly (@weekly): fine-tune the production model on the latest week's data
-    #   - Drift-triggered: retrain from scratch on the full rolling window
-    # The Airflow DAG runs two schedules:
-    #   1. Weekly fine-tune DAG: training_mode="finetune", snapshot_date=today
-    #   2. Drift-triggered retrain DAG: training_mode="scratch", snapshot_date=today
-    #      (only fires when model-drift-detection flags degradation)
+    finetune_epochs: int = 2
+    finetune_learning_rate: float = 0.0001
 
     @classmethod
     def from_yaml(cls, path: str) -> "PipelineConfig":

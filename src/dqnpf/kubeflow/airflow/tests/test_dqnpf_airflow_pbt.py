@@ -17,20 +17,9 @@ from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-# Boolean strategies for parent model existence
 parent_exists = st.booleans()
 
-# Unix timestamps: positive integers representing valid episode ranges
 valid_timestamps = st.integers(min_value=1_000_000_000, max_value=2_000_000_000)
-
-
-# ---------------------------------------------------------------------------
-# Helper: create a mock resolve_production_checkpoint
-# ---------------------------------------------------------------------------
 
 
 def _make_mock_resolve(dqn_exists: bool, forecaster_exists: bool):
@@ -62,11 +51,6 @@ def _make_mock_resolve(dqn_exists: bool, forecaster_exists: bool):
     return mock_resolve
 
 
-# ---------------------------------------------------------------------------
-# Property DQNPF-AF-1: Precondition fails fast on missing parent
-# ---------------------------------------------------------------------------
-
-
 class TestPreconditionFailsFastOnMissingParent:
     """Property DQNPF-AF-1: Precondition fails fast on missing parent.
 
@@ -95,7 +79,6 @@ class TestPreconditionFailsFastOnMissingParent:
         """
         mock_resolve = _make_mock_resolve(dqn_exists, forecaster_exists)
 
-        # Mock the registry module that check_parent_models_available imports from
         mock_registry_module = MagicMock()
         mock_registry_module.resolve_production_checkpoint = mock_resolve
 
@@ -110,10 +93,8 @@ class TestPreconditionFailsFastOnMissingParent:
             )
 
             if dqn_exists and forecaster_exists:
-                # Both parents available (should NOT raise
                 check_parent_models_available()
             else:
-                # At least one parent missing) MUST raise RuntimeError
                 with pytest.raises(RuntimeError, match="Precondition failed"):
                     check_parent_models_available()
 
@@ -152,7 +133,6 @@ class TestPreconditionFailsFastOnMissingParent:
             with pytest.raises(RuntimeError) as exc_info:
                 check_parent_models_available()
 
-            # Error message should mention the DQN parent
             assert "DQN parent model" in str(exc_info.value)
 
     @given(
@@ -190,13 +170,7 @@ class TestPreconditionFailsFastOnMissingParent:
             with pytest.raises(RuntimeError) as exc_info:
                 check_parent_models_available()
 
-            # Error message should mention the Forecaster parent
             assert "Forecaster parent model" in str(exc_info.value)
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-AF-2: Parameter forwarding
-# ---------------------------------------------------------------------------
 
 
 class TestParameterForwarding:
@@ -224,8 +198,7 @@ class TestParameterForwarding:
 
         **Validates: Requirements 23.6**
         """
-        # Ensure end > start
-        episode_end_ts = episode_start_ts + 86400  # 1 day later
+        episode_end_ts = episode_start_ts + 86400
 
         with patch(
             "dqnpf.kubeflow.airflow.dqnpf_kfp_utils.Client"
@@ -258,13 +231,11 @@ class TestParameterForwarding:
 
             assert run_id == "dqnpf-revalidate-run-001"
 
-            # Verify the arguments dict passed to create_run_from_pipeline_func
             call_args = mock_client.create_run_from_pipeline_func.call_args
             arguments = call_args.kwargs.get("arguments") or call_args[1].get(
                 "arguments"
             )
 
-            # Episode range MUST be forwarded exactly
             assert arguments["episode_start_ts"] == episode_start_ts
             assert arguments["episode_end_ts"] == episode_end_ts
 
@@ -323,7 +294,6 @@ class TestParameterForwarding:
                 "arguments"
             )
 
-            # All parameters must be present
             assert arguments["integration_config_yaml"] == config_yaml
             assert arguments["dqn_model_registry_name"] == dqn_name
             assert arguments["forecaster_model_registry_name"] == forecaster_name
@@ -366,7 +336,6 @@ class TestParameterForwarding:
             trigger = DqnpfKFPTrigger.__new__(DqnpfKFPTrigger)
             trigger.client = mock_client
 
-            # Weekly backtest does NOT pass episode range
             trigger.submit_run(
                 integration_config_yaml="/etc/dqnpf/config/dqnpf_pipeline_config.yaml",
                 dqn_model_registry_name="deepqnetwork-usdjpy",
@@ -378,6 +347,5 @@ class TestParameterForwarding:
                 "arguments"
             )
 
-            # Episode range keys should NOT be present
             assert "episode_start_ts" not in arguments
             assert "episode_end_ts" not in arguments

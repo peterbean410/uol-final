@@ -50,7 +50,6 @@ class TestReplayBufferPush:
         for i in range(5):
             state = np.array([float(i)], dtype=np.float32)
             buf.push(state, 0, 0.0, state, False)
-        # Buffer should contain items 2, 3, 4 (oldest 0, 1 overwritten)
         assert len(buf) == 3
         ordered = buf._ordered_states()
         assert ordered[0][0] == 2.0

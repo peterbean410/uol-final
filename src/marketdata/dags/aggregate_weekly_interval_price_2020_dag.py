@@ -39,13 +39,13 @@ def _last_d1_logical_date(_dt, **context):
     00:00 UTC; the most recent weekday before that is the prior Friday.
     """
     cursor = context["data_interval_end"] - timedelta(days=1)
-    while cursor.weekday() >= 5:  # Sat=5, Sun=6
+    while cursor.weekday() >= 5:
         cursor -= timedelta(days=1)
     return cursor.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="aggregate_weekly_interval_price_2020",
     default_args=default_args,
     description="Aggregate one Mon–Sun week of D1 bars into a W1 interval-price partition",

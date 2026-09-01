@@ -63,42 +63,33 @@ def run_backtest(
     Raises:
         ValueError: If predictions is empty or timestamps do not align.
     """
-    # Validate inputs
     if predictions.empty:
         raise ValueError("No predictions to backtest")
 
-    # Ensure timestamps are datetime
     pred_timestamps = pd.to_datetime(predictions["timestamp"])
     price_timestamps = pd.to_datetime(prices["timestamp"])
 
-    # Check that all prediction timestamps exist in prices
-    # We need each prediction timestamp AND the next price timestamp for PnL calculation
     pred_set = set(pred_timestamps)
     price_set = set(price_timestamps)
 
     if not pred_set.issubset(price_set):
         raise ValueError("Prediction and price timestamps do not align")
 
-    # Build a price lookup by timestamp
     price_lookup = pd.Series(
         prices["close"].values, index=price_timestamps
     )
 
-    # Sort predictions by timestamp
     predictions_sorted = predictions.copy()
     predictions_sorted["timestamp"] = pred_timestamps
     predictions_sorted = predictions_sorted.sort_values("timestamp").reset_index(drop=True)
 
-    # Sort prices by timestamp for next-bar lookup
     prices_sorted = prices.copy()
     prices_sorted["timestamp"] = price_timestamps
     prices_sorted = prices_sorted.sort_values("timestamp").reset_index(drop=True)
 
-    # Create a mapping from timestamp to index in sorted prices
     price_ts_list = prices_sorted["timestamp"].tolist()
     price_ts_to_idx = {ts: idx for idx, ts in enumerate(price_ts_list)}
 
-    # Compute PnL for each prediction bar
     pnl_records = []
 
     for _, row in predictions_sorted.iterrows():
@@ -106,12 +97,10 @@ def run_backtest(
         mu = float(row["mu"])
         sigma = float(row["sigma"])
 
-        # Get current price index
         idx = price_ts_to_idx.get(ts)
         if idx is None:
             continue
 
-        # Need next bar's close for PnL calculation
         next_idx = idx + 1
         if next_idx >= len(prices_sorted):
             continue
@@ -119,14 +108,11 @@ def run_backtest(
         close_t = float(prices_sorted.iloc[idx]["close"])
         close_t1 = float(prices_sorted.iloc[next_idx]["close"])
 
-        # Skip if close_t is zero (avoid division by zero)
         if close_t == 0.0:
             continue
 
-        # Compute position from strategy
         position = strategy.compute_position(mu, sigma, config)
 
-        # PnL = position × (close_{t+1} - close_t) / close_t
         actual_return = (close_t1 - close_t) / close_t
         pnl = position * actual_return
 
@@ -140,7 +126,6 @@ def run_backtest(
         )
 
     if not pnl_records:
-        # No valid PnL records, return empty result
         return BacktestResult(
             daily_pnl=pd.Series(dtype=float),
             annualised_return=0.0,
@@ -154,27 +139,22 @@ def run_backtest(
     pnl_df["date"] = pnl_df["timestamp"].dt.date
     pnl_df["hour"] = pnl_df["timestamp"].dt.hour
 
-    # Aggregate to daily PnL
     daily_pnl = pnl_df.groupby("date")["pnl"].sum()
     daily_pnl.index = pd.to_datetime(daily_pnl.index)
     daily_pnl.index.name = "date"
 
-    # Compute annualised return
     total_return = daily_pnl.sum()
     num_days = (daily_pnl.index.max() - daily_pnl.index.min()).days
-    num_years = max(num_days / 365.25, 1.0 / 365.25)  # Avoid division by zero
+    num_years = max(num_days / 365.25, 1.0 / 365.25)
     annualised_return = total_return / num_years
 
-    # Compute Sharpe ratio: mean(daily_returns) / std(daily_returns) × sqrt(252)
     if len(daily_pnl) > 1 and daily_pnl.std() > 0:
         sharpe_ratio = (daily_pnl.mean() / daily_pnl.std()) * np.sqrt(252)
     else:
         sharpe_ratio = 0.0
 
-    # Compute maximum drawdown: largest peak-to-trough decline in cumulative PnL
     max_drawdown = _compute_max_drawdown(daily_pnl)
 
-    # Hourly PnL contribution analysis
     hourly_pnl = (
         pnl_df.groupby("hour")["pnl"]
         .agg(total_pnl="sum", mean_pnl="mean", count="count")

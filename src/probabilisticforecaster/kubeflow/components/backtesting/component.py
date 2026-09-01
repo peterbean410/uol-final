@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-# Add parent paths so we can import the probabilisticforecaster package
 sys.path.insert(0, "/app")
 
 from probabilisticforecaster.backtest import BacktestResult, run_backtest
@@ -134,7 +133,6 @@ def generate_predictions(
         for i in range(len(dataset)):
             features, _ = dataset[i]
 
-            # features shape: (lookback_window, 16)
             if isinstance(features, np.ndarray):
                 input_tensor = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
             else:
@@ -142,12 +140,9 @@ def generate_predictions(
 
             mu, sigma = model(input_tensor)
 
-            # Extract last position prediction
             mu_val = mu[0, -1, 0].item()
             sigma_val = sigma[0, -1, 0].item()
 
-            # Get the timestamp for this sample (last bar in the lookback window)
-            # valid_indices[i] is the start index; the last bar is at start + lookback - 1
             start_idx = dataset.valid_indices[i]
             t = start_idx + dataset.lookback - 1
             timestamp = dataset.timestamps[t]
@@ -185,19 +180,15 @@ def get_prices_from_dataset(dataset: ForexDataset) -> pd.DataFrame:
     Returns:
         DataFrame with columns ['timestamp', 'close'].
     """
-    # Collect all bar indices referenced by valid samples
-    # Each sample uses bars [start, start+lookback-1] for features
-    # and bar start+lookback-1+horizon for the label (next close)
     referenced_indices = set()
 
     for start_idx in dataset.valid_indices:
-        t = start_idx + dataset.lookback - 1  # last bar in lookback window
-        t_next = t + 1  # next bar for PnL calculation
+        t = start_idx + dataset.lookback - 1
+        t_next = t + 1
         referenced_indices.add(t)
         if t_next < len(dataset.timestamps):
             referenced_indices.add(t_next)
 
-    # Sort indices and build the prices DataFrame
     sorted_indices = sorted(referenced_indices)
 
     timestamps = [dataset.timestamps[i] for i in sorted_indices]
@@ -399,12 +390,10 @@ def main() -> None:
         },
     )
 
-    # Step 1: Load model checkpoint from S3
     checkpoint = load_checkpoint_from_s3(
         args.model_checkpoint_path, bucket=args.bucket
     )
 
-    # Reconstruct model config from checkpoint
     if "config" in checkpoint:
         config = ForecasterConfig(**checkpoint["config"])
     else:
@@ -416,11 +405,9 @@ def main() -> None:
             risk_aversion=args.risk_aversion,
         )
 
-    # Override position_size and risk_aversion from CLI args
     config.position_size = args.position_size
     config.risk_aversion = args.risk_aversion
 
-    # Instantiate and load model
     model = ProbabilisticTransformer(config)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -434,19 +421,14 @@ def main() -> None:
         },
     )
 
-    # Step 2: Load test dataset from S3
     dataset = load_dataset_from_s3(args.test_dataset_path, bucket=args.bucket)
 
-    # Step 3: Generate predictions from model
     predictions = generate_predictions(model, dataset, config)
 
-    # Step 4: Extract prices from dataset for backtesting
     prices = get_prices_from_dataset(dataset)
 
-    # Step 5: Run all trading strategies
     strategy_results = run_all_strategies(predictions, prices, config)
 
-    # Step 6: Assemble final output
     output = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "symbol": config.symbol,
@@ -459,7 +441,6 @@ def main() -> None:
         "strategies": strategy_results,
     }
 
-    # Step 7: Upload results to S3
     upload_results_to_s3(output, args.output_path, bucket=args.bucket)
 
     logger.info(

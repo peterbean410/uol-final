@@ -132,7 +132,7 @@ def test_duplicate_titles_labelled_once_and_order_preserved(mock_post):
     results = label_headlines(titles, ENDPOINT, max_workers=2)
 
     assert [r["boj_policy"] for r in results] == [True, False, True, False, True]
-    assert mock_post.call_count == 2  # two unique titles
+    assert mock_post.call_count == 2
 
 
 def test_empty_input_returns_empty_list():

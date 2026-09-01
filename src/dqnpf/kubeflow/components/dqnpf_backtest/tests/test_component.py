@@ -55,8 +55,6 @@ def _passing_comparison() -> BacktestComparison:
         quarterly_pnl_combined={"2024-Q1": 0.3, "2024-Q2": 0.4, "2024-Q3": 0.3},
         quarterly_pnl_baseline={"2024-Q1": 0.2, "2024-Q2": 0.2, "2024-Q3": 0.1},
         high_sigma_time_fraction=0.3,
-        # Money-PnL counterparts: validate_thresholds evaluates Req 14.1/14.3 on
-        # these (raw_pnl_delta), not the reward-based *_sharpe / *_proportion.
         combined_sharpe_pnl=0.8,
         baseline_sharpe_pnl=0.4,
         high_sigma_negative_raw_pnl_proportion_combined=0.2,
@@ -66,8 +64,8 @@ def _passing_comparison() -> BacktestComparison:
 
 def _failing_comparison() -> BacktestComparison:
     cmp = _passing_comparison()
-    cmp.combined_sharpe_pnl = 0.0  # fails Req 14.1 (money-PnL Sharpe)
-    cmp.trades_combined = 100  # fails Req 14.2
+    cmp.combined_sharpe_pnl = 0.0
+    cmp.trades_combined = 100
     return cmp
 
 
@@ -95,11 +93,6 @@ def _write_pipeline_yaml(tmp_path: Path, **overrides) -> Path:
     yaml_path = tmp_path / "pipeline.yaml"
     cfg.to_yaml(yaml_path)
     return yaml_path
-
-
-# ---------------------------------------------------------------------------
-# Pure helpers
-# ---------------------------------------------------------------------------
 
 
 def test_load_pipeline_config_accepts_valid_yaml(tmp_path: Path) -> None:
@@ -154,11 +147,6 @@ def test_serialise_result_contains_required_sections() -> None:
     assert payload["model_provenance"] == provenance
 
 
-# ---------------------------------------------------------------------------
-# Entry point, fully injected
-# ---------------------------------------------------------------------------
-
-
 def test_run_dqnpf_backtest_writes_artifact_on_passing_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -174,7 +162,6 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(
 
     def runner(cfg: IntegrationConfig) -> BacktestComparison:
         calls["runner"] += 1
-        # Confirm the injected resolver values flowed through.
         assert cfg.dqn_checkpoint_path == "s3://bucket/deepqnetwork-usdjpy/production.pt"
         assert (
             cfg.forecaster_checkpoint_path
@@ -200,8 +187,6 @@ def test_run_dqnpf_backtest_writes_artifact_on_passing_run(
     written = json.loads(output_path.read_text())
     assert written == payload
     assert written["threshold_report"]["passed"] is True
-    # The report records which checkpoints were used: registry names + the
-    # resolved URIs (pre-download), not the ephemeral local temp paths.
     assert written["model_provenance"] == {
         "dqn_model_registry_name": "deepqnetwork-usdjpy",
         "forecaster_model_registry_name": "probabilistic-transformer-usdjpy-h1",
@@ -296,7 +281,6 @@ def test_sidecar_omits_session_hours_by_default(
 ) -> None:
     captured = _patch_sidecar_capture(monkeypatch)
     _start_modelenv_sidecar("USDJPY")
-    # Legacy fixed-window mode: no session liquidation configured.
     assert "--trading-session-hour-start" not in captured[0]
     assert "--trading-session-hour-end" not in captured[0]
 
@@ -343,8 +327,6 @@ def test_cli_trade_log_output_path_parsed() -> None:
 def test_sidecar_omits_swap_rates_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = _patch_sidecar_capture(monkeypatch)
     _start_modelenv_sidecar("USDJPY")
-    # By default the sidecar applies modelenv's built-in swap table: no
-    # no per-side rate overrides.
     assert "--swap-rate-long" not in captured[0]
     assert "--swap-rate-short" not in captured[0]
 
@@ -394,8 +376,6 @@ def test_export_trade_log_copies_contents(tmp_path: Path) -> None:
 
 
 def test_export_trade_log_writes_empty_when_no_trades(tmp_path: Path) -> None:
-    # modelenv never created the file (no trades placed); the declared output
-    # artifact must still exist, so an empty file is written.
     missing = tmp_path / "never-written.jsonl"
     dest = tmp_path / "trade_log.jsonl"
     component._export_trade_log(str(missing), str(dest))

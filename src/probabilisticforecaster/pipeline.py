@@ -41,7 +41,6 @@ from probabilisticforecaster.training import train_model
 
 logger = logging.getLogger(__name__)
 
-# Date range constants
 TRAIN_START = datetime(2012, 1, 1, tzinfo=timezone.utc)
 TRAIN_END = datetime(2022, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 TEST_START = datetime(2023, 1, 1, tzinfo=timezone.utc)
@@ -89,7 +88,6 @@ def load_data_from_s3_efficient(
     """
     s3 = boto3.client("s3")
 
-    # Construct the exact key for the hour=23 snapshot of end_date
     key = _build_eoh_snapshot_key(symbol, end_date)
 
     logger.info(
@@ -112,7 +110,6 @@ def load_data_from_s3_efficient(
     data.sort_values("Timestamp", inplace=True)
     data.reset_index(drop=True, inplace=True)
 
-    # Filter to requested date range
     mask = (data["Timestamp"] >= pd.Timestamp(start_date)) & (
         data["Timestamp"] <= pd.Timestamp(end_date)
     )
@@ -159,11 +156,9 @@ def build_datasets(
     features_df = compute_features(data, historical_window=config.historical_window)
     logger.info("Features computed: %d rows × %d columns", *features_df.shape)
 
-    # Align close prices with features index
     data_indexed = data.set_index(pd.to_datetime(data["Timestamp"], utc=True))
     close_prices = data_indexed["Close"].reindex(features_df.index)
 
-    # Split by date: train 2012-2022, test 2023-2026
     train_mask = features_df.index < TEST_START
     test_mask = features_df.index >= TEST_START
 
@@ -256,7 +251,6 @@ def run_all_backtests(
     """
     logger.info("Generating predictions for backtest...")
 
-    # Generate predictions for all test samples
     model.eval()
     device = next(model.parameters()).device
     predictions_list = []
@@ -275,7 +269,6 @@ def run_all_backtests(
 
             for i in range(len(mu_last)):
                 if sample_idx + i < len(test_dataset):
-                    # Get the timestamp for this sample (last bar in lookback window)
                     start_idx = test_dataset.valid_indices[sample_idx + i]
                     ts_idx = start_idx + test_dataset.lookback - 1
                     ts = test_dataset.timestamps[ts_idx]
@@ -287,12 +280,10 @@ def run_all_backtests(
     predictions_df = pd.DataFrame(predictions_list)
     logger.info("Generated %d predictions", len(predictions_df))
 
-    # Build prices DataFrame for backtest
     prices_df = pd.DataFrame(
         {"timestamp": test_features.index, "close": test_close.values}
     )
 
-    # Define strategies to backtest
     strategies: dict[str, object] = {
         "Directional": DirectionalStrategy(),
         "MeanVariance_gamma_0.01": MeanVarianceStrategy(risk_aversion=0.01),
@@ -315,17 +306,12 @@ def run_all_backtests(
             result.max_drawdown,
         )
 
-    # Moving Average benchmark requires close and MA(20) data
     logger.info("Running backtest: MovingAverageBenchmark")
     ma_strategy = MovingAverageBenchmark()
 
-    # For MA benchmark, we need to set market data for each prediction
-    # We'll run it manually through the backtest with pre-computed positions
     ma20 = test_close.rolling(window=20).mean()
     ma_predictions = predictions_df.copy()
 
-    # For MA benchmark, override positions by setting mu based on close vs MA(20)
-    # We use the backtest engine with a custom approach
     ma_preds_list = []
     for _, row in predictions_df.iterrows():
         ts = row["timestamp"]
@@ -333,8 +319,6 @@ def run_all_backtests(
             close_val = test_close.loc[ts]
             ma_val = ma20.loc[ts]
             if pd.notna(ma_val):
-                # Set mu positive if close >= MA(20), negative otherwise
-                # sigma doesn't matter for this benchmark
                 mu_override = 1.0 if close_val >= ma_val else -1.0
                 ma_preds_list.append(
                     {"timestamp": ts, "mu": mu_override, "sigma": 1.0}
@@ -350,8 +334,6 @@ def run_all_backtests(
 
     if ma_preds_list:
         ma_preds_df = pd.DataFrame(ma_preds_list)
-        # Use DirectionalStrategy with the overridden mu values
-        # (since DirectionalStrategy just uses sign of mu)
         ma_result = run_backtest(
             ma_preds_df, prices_df, DirectionalStrategy(), config
         )
@@ -406,7 +388,6 @@ def run_pipeline(config: ForecasterConfig, upload_to_s3: bool = True) -> None:
     logger.info("Lookback Window: %d bars (%d min)", config.lookback_window, config.lookback_window * 5)
     logger.info("=" * 80)
 
-    # Step 1: Load data from S3
     logger.info("Step 1: Loading data from S3...")
     data = load_data_from_s3_efficient(
         symbol=config.symbol,
@@ -416,11 +397,9 @@ def run_pipeline(config: ForecasterConfig, upload_to_s3: bool = True) -> None:
     )
     logger.info("Total data loaded: %d bars", len(data))
 
-    # Step 2: Compute features and build datasets
     logger.info("Step 2: Computing features and building datasets...")
     train_dataset, test_dataset, features_df = build_datasets(data, config)
 
-    # Step 3: Train model
     logger.info("Step 3: Training model...")
     model = ProbabilisticTransformer(config)
     logger.info(
@@ -432,7 +411,7 @@ def run_pipeline(config: ForecasterConfig, upload_to_s3: bool = True) -> None:
         model=model,
         train_dataset=train_dataset,
         config=config,
-        val_dataset=None,  # Will auto-split 10% from train
+        val_dataset=None,
         version=1,
         upload_to_s3=upload_to_s3,
     )
@@ -440,9 +419,7 @@ def run_pipeline(config: ForecasterConfig, upload_to_s3: bool = True) -> None:
     logger.info("Training complete. Final epoch loss: %.4f", training_history["epoch_loss"][-1])
     logger.info("Model saved to: %s", config.model_path)
 
-    # Step 4: Evaluate model
     logger.info("Step 4: Evaluating model...")
-    # Get timestamps for test samples (last bar in each lookback window)
     test_timestamps = pd.Series(
         [
             test_dataset.timestamps[
@@ -456,9 +433,7 @@ def run_pipeline(config: ForecasterConfig, upload_to_s3: bool = True) -> None:
         model, test_dataset, config, test_timestamps
     )
 
-    # Step 5: Run backtests
     logger.info("Step 5: Running backtests...")
-    # Get test features and close prices for backtest
     test_mask = features_df.index >= TEST_START
     test_features = features_df[test_mask]
 
@@ -469,7 +444,6 @@ def run_pipeline(config: ForecasterConfig, upload_to_s3: bool = True) -> None:
         model, test_dataset, test_features, test_close, config
     )
 
-    # Print summary
     print_backtest_summary(backtest_results)
 
     logger.info("Pipeline complete.")
@@ -533,14 +507,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Configure logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Build config from arguments
     model_path = args.model_path or f"models/transformer_{args.symbol}_h{args.horizon}.pt"
 
     config = ForecasterConfig(

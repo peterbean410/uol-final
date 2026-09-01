@@ -1,16 +1,3 @@
-# dqnpf-intraday combined predictor image.
-#
-# Extends the dqnpf-intraday-base image (which already provides PyTorch,
-# grpcio, environment_pb2, modelenv binary, deepqnetwork, probabilisticforecaster,
-# and dqnpf installed as a package) with the kserve
-# runtime and the serving entry point.
-#
-# The base image already includes the serving module source (it copies the
-# entire dqnpf/ tree). This Dockerfile overlays the
-# latest serving code to allow predictor rebuilds without rebuilding the base.
-#
-# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-predictor:<sha>
-# Requirements: 20.1, 22.1
 
 ARG BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-base:latest
 FROM ${BASE_IMAGE}
@@ -20,10 +7,6 @@ LABEL description="Combined DQN + Forecaster intraday KServe predictor"
 
 WORKDIR /app
 
-# Install kserve runtime (pinned version). Some transitive deps (e.g.
-# pyasn) build C extensions during install, install gcc + python headers
-# just for this layer and purge them in the same RUN so the resulting
-# layer doesn't ship the toolchain.
 COPY dqnpf/kubeflow/serving/requirements.txt /app/serving-requirements.txt
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc python3-dev \
@@ -31,18 +14,12 @@ RUN apt-get update \
     && apt-get purge -y --auto-remove gcc python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Overlay the latest serving module code on top of the base image's copy of
-# dqnpf/. This allows predictor image rebuilds without rebuilding the
-# base, while keeping the import path (`dqnpf.kubeflow.
-# serving`) resolvable from PYTHONPATH=/app set in the base image.
 COPY dqnpf/kubeflow/serving/ /app/dqnpf/kubeflow/serving/
 
-# Build-time import smoke test (Requirements 20.1, 22.1)
 RUN python -c "import kserve; \
 from dqnpf.kubeflow.serving.dqnpf_predictor import DqnpfIntradayPredictor; \
 print('dqnpf-intraday-predictor import smoke OK')"
 
-# KServe default HTTP port
 EXPOSE 8080
 
 ENV PYTHONUNBUFFERED=1

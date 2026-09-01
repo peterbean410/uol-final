@@ -23,11 +23,6 @@ from probabilisticforecaster.config import ForecasterConfig
 from probabilisticforecaster.model import ProbabilisticTransformer
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def epoch_counts(draw):
     """Generate valid epoch counts for training."""
@@ -50,11 +45,6 @@ def model_configs(draw):
         epochs=draw(st.integers(min_value=1, max_value=10)),
         random_seed=42,
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_small_model(config: ForecasterConfig) -> ProbabilisticTransformer:
@@ -80,11 +70,6 @@ def _deserialize_checkpoint(data: bytes) -> dict:
     """Deserialize a checkpoint from bytes and verify it's loadable."""
     buffer = io.BytesIO(data)
     return torch.load(buffer, map_location="cpu", weights_only=False)
-
-
-# ---------------------------------------------------------------------------
-# Property 5: Epoch checkpoint persistence
-# ---------------------------------------------------------------------------
 
 
 class TestEpochCheckpointPersistence:
@@ -123,7 +108,6 @@ class TestEpochCheckpointPersistence:
         model = _create_small_model(config)
         uploaded_checkpoints: list[dict] = []
 
-        # Mock boto3 S3 put_object to capture checkpoint data in memory
         def _mock_put_object(Bucket, Key, Body, **kwargs):
             data = Body if isinstance(Body, bytes) else Body.read()
             uploaded_checkpoints.append({
@@ -144,9 +128,8 @@ class TestEpochCheckpointPersistence:
 
             checkpoint_dir = "models/forecaster/checkpoints/test-run"
 
-            # Simulate the epoch loop: save checkpoint at end of each epoch
             for epoch in range(num_epochs):
-                epoch_loss = 0.5 - epoch * 0.05  # decreasing loss
+                epoch_loss = 0.5 - epoch * 0.05
                 _save_checkpoint_to_s3(
                     model=model,
                     config=config,
@@ -155,7 +138,6 @@ class TestEpochCheckpointPersistence:
                     checkpoint_dir=checkpoint_dir,
                 )
 
-            # Save final consolidated checkpoint
             training_history = {
                 "epoch_losses": [0.5 - e * 0.05 for e in range(num_epochs)],
                 "distributed": False,
@@ -169,7 +151,6 @@ class TestEpochCheckpointPersistence:
                 checkpoint_dir=checkpoint_dir,
             )
 
-        # Separate epoch checkpoints from final checkpoint
         epoch_checkpoints = [
             c for c in uploaded_checkpoints if "epoch_" in c["key"]
         ]
@@ -177,27 +158,22 @@ class TestEpochCheckpointPersistence:
             c for c in uploaded_checkpoints if "final_model_" in c["key"]
         ]
 
-        # Assert exactly N epoch checkpoints
         assert len(epoch_checkpoints) == num_epochs, (
             f"Expected {num_epochs} epoch checkpoints, "
             f"got {len(epoch_checkpoints)}"
         )
 
-        # Assert exactly 1 final checkpoint
         assert len(final_checkpoints) == 1, (
             f"Expected 1 final checkpoint, got {len(final_checkpoints)}"
         )
 
-        # Verify epoch checkpoint keys are unique and ordered
         epoch_keys = [c["key"] for c in epoch_checkpoints]
         assert len(set(epoch_keys)) == len(epoch_keys), (
             f"Epoch checkpoint keys are not unique: {epoch_keys}"
         )
 
-        # Each epoch_XXX number matches the epoch
         for c in epoch_checkpoints:
             key = c["key"]
-            # Extract epoch number from key: epoch_XXX_timestamp.pt
             epoch_part = key.split("/")[-1].split("_")[1]
             epoch_num = int(epoch_part)
             assert 0 <= epoch_num < num_epochs, (
@@ -228,7 +204,6 @@ class TestEpochCheckpointPersistence:
         )
 
         model = _create_small_model(config)
-        # Keep original state dict to verify it's preserved in checkpoint
         original_state_keys = set(model.state_dict().keys())
 
         with mock.patch("boto3.client") as mock_client:
@@ -257,11 +232,9 @@ class TestEpochCheckpointPersistence:
                     checkpoint_dir=checkpoint_dir,
                 )
 
-        # Each checkpoint must be loadable and contain required fields
         for i, data in enumerate(uploaded_data):
             checkpoint = _deserialize_checkpoint(data)
 
-            # Required fields
             assert "model_state_dict" in checkpoint, (
                 f"Checkpoint {i} missing model_state_dict"
             )
@@ -278,12 +251,10 @@ class TestEpochCheckpointPersistence:
                 f"Checkpoint {i} missing timestamp"
             )
 
-            # Epoch field matches iteration
             assert checkpoint["epoch"] == i, (
                 f"Checkpoint {i} epoch field is {checkpoint['epoch']}, expected {i}"
             )
 
-            # Config round-trip: deserialize and verify key fields
             config_dict = checkpoint["config"]
             assert config_dict["symbol"] == config.symbol
             assert config_dict["forecast_horizon"] == config.forecast_horizon
@@ -291,7 +262,6 @@ class TestEpochCheckpointPersistence:
             assert config_dict["num_layers"] == config.num_layers
             assert config_dict["num_heads"] == config.num_heads
 
-            # epoch_loss must be a finite float
             assert isinstance(checkpoint["epoch_loss"], float), (
                 f"Checkpoint {i} epoch_loss is not a float"
             )
@@ -300,7 +270,6 @@ class TestEpochCheckpointPersistence:
                 f"Checkpoint {i} epoch_loss is not finite"
             )
 
-            # timestamp must be a non-empty string
             assert isinstance(checkpoint["timestamp"], str), (
                 f"Checkpoint {i} timestamp is not a string"
             )
@@ -308,7 +277,6 @@ class TestEpochCheckpointPersistence:
                 f"Checkpoint {i} timestamp is empty"
             )
 
-            # State dict keys match the original model
             state_keys = set(checkpoint["model_state_dict"].keys())
             assert state_keys == original_state_keys, (
                 f"Checkpoint {i} state dict keys do not match model. "
@@ -325,7 +293,6 @@ class TestEpochCheckpointPersistence:
 
         **Validates: Requirements 4.6**
         """
-        # Create and save a model checkpoint
         model = _create_small_model(config)
         original_state = {k: v.clone() for k, v in model.state_dict().items()}
 
@@ -339,13 +306,11 @@ class TestEpochCheckpointPersistence:
 
         data = _serialize_checkpoint(checkpoint)
 
-        # Load the checkpoint into a fresh model
         loaded = _deserialize_checkpoint(data)
         fresh_model = ProbabilisticTransformer(config)
         fresh_model.load_state_dict(loaded["model_state_dict"])
         fresh_model.eval()
 
-        # Verify parameters match between original and loaded model
         for key in original_state:
             original_param = original_state[key]
             loaded_param = fresh_model.state_dict()[key]
@@ -353,7 +318,6 @@ class TestEpochCheckpointPersistence:
                 f"Parameter '{key}' differs between original and loaded model"
             )
 
-        # Verify the loaded model can run a forward pass
         batch_size = 2
         lookback = config.lookback_window
         num_features = config.num_features
@@ -362,12 +326,10 @@ class TestEpochCheckpointPersistence:
         with torch.no_grad():
             mu, sigma = fresh_model(dummy_input)
 
-        # Outputs must be finite and sigma must be positive
         assert torch.isfinite(mu).all(), "Model output mu contains non-finite values"
         assert torch.isfinite(sigma).all(), "Model output sigma contains non-finite values"
         assert (sigma > 0).all(), "Model output sigma contains non-positive values"
 
-        # Output shape: (batch_size, seq_len, 1)
         assert mu.shape == (batch_size, lookback, 1), (
             f"Unexpected mu shape: {mu.shape}"
         )
@@ -428,26 +390,22 @@ class TestEpochCheckpointPersistence:
                     checkpoint_dir="checkpoints/ordering-test",
                 )
 
-        # Filter to epoch checkpoints only
         epoch_checkpoints = [
             c for c in checkpoint_info if "epoch_" in c["key"]
         ]
 
         assert len(epoch_checkpoints) == num_epochs
 
-        # Verify epochs are 0, 1, 2, ..., N-1 (monotonically increasing)
         epochs_found = sorted([c["epoch"] for c in epoch_checkpoints])
         assert epochs_found == list(range(num_epochs)), (
             f"Epoch numbers not consecutive: {epochs_found}"
         )
 
-        # Verify all epoch checkpoint keys are unique
         keys = [c["key"] for c in epoch_checkpoints]
         assert len(set(keys)) == len(keys), (
             f"Epoch checkpoint keys are not unique: {keys}"
         )
 
-        # Verify all timestamps are valid ISO 8601 with timezone
         from datetime import datetime
 
         for c in epoch_checkpoints:

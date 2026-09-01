@@ -34,13 +34,8 @@ _SOURCE_LANES = [
     "create_eod_snapshot_2020",
 ]
 
-# SQL literal list of the lanes to resolve frontiers for.
 _LANE_SQL_LIST = ", ".join(f"'{d}'" for d in _SOURCE_LANES)
 
-# Resolve each lane's latest snapshot timestamp (its latest successful run's
-# data_interval_end, rendered as naive-UTC ISO-8601) and emit one JSON object to
-# the KPO XCom sidecar path. Lanes with no success come through as JSON null and
-# are skipped downstream.
 _RESOLVE_CMD = f"""
 set -eu
 mkdir -p /airflow/xcom
@@ -84,7 +79,7 @@ with DAG(
             requests={"cpu": "50m", "memory": "64Mi"},
             limits={"cpu": "250m", "memory": "128Mi"},
         ),
-        startup_timeout_seconds=300,  # tolerate node "Too many pods" scheduling delay
+        startup_timeout_seconds=300,
         is_delete_operator_pod=True,
         get_logs=True,
     )
@@ -107,10 +102,6 @@ with DAG(
                 name="SOURCE_FRONTIERS",
                 value="{{ ti.xcom_pull(task_ids='resolve_frontiers') | tojson }}",
             ),
-            # Extra pre-reset segment snapshots (label -> ISO ts), passed at
-            # trigger time via `--conf '{"extra_sources": {...}}'`. The eod
-            # 2012 lane's accumulation reset over the 2018-11-03/04 weekend,
-            # so its 2012->2018-11-02 history lives in the 2018-11-03 files.
             k8s.V1EnvVar(
                 name="EXTRA_SOURCES",
                 value="{{ dag_run.conf.get('extra_sources', {}) | tojson }}",
@@ -125,13 +116,9 @@ with DAG(
             ),
         ],
         container_resources=k8s.V1ResourceRequirements(
-            # EOD frames are far smaller than M1's (H1 full history ~100K rows);
-            # 2Gi is generous head-room.
             requests={"cpu": "250m", "memory": "512Mi"},
             limits={"cpu": "1", "memory": "2Gi"},
         ),
-        # Always-pull of the ~177MB :latest can take minutes on a congested
-        # node; the 120s default killed the first eoh combine before it ran.
         startup_timeout_seconds=600,
         is_delete_operator_pod=True,
         get_logs=True,

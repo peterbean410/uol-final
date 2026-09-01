@@ -24,11 +24,6 @@ from pathlib import Path
 from typing import TextIO
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class TrialResult:
     """Result of a single Katib trial.
@@ -59,11 +54,6 @@ class BestConfiguration:
     hyperparameters: dict[str, float | int | str]
     validation_nll: float
     trial_name: str
-
-
-# ---------------------------------------------------------------------------
-# Log parsing
-# ---------------------------------------------------------------------------
 
 
 def parse_log_line(line: str) -> dict | None:
@@ -101,14 +91,12 @@ def extract_validation_nll(log_entry: dict) -> float | None:
     Returns:
         The validation_nll float value if found, None otherwise.
     """
-    # Pattern 1: Direct field in the log entry (extra fields from logger)
     if "validation_nll" in log_entry:
         try:
             return float(log_entry["validation_nll"])
         except (TypeError, ValueError):
             pass
 
-    # Pattern 2: Nested in an "extras" or "metrics" dict
     for container_key in ("extras", "metrics", "extra"):
         container = log_entry.get(container_key)
         if isinstance(container, dict) and "validation_nll" in container:
@@ -117,22 +105,18 @@ def extract_validation_nll(log_entry: dict) -> float | None:
             except (TypeError, ValueError):
                 pass
 
-    # Pattern 3: Parse from the message string
     message = log_entry.get("message", "")
     if "validation_nll" in message:
-        # Try pattern: "validation_nll=<float>"
         for part in message.split():
             if part.startswith("validation_nll="):
                 try:
                     return float(part.split("=", 1)[1])
                 except (ValueError, IndexError):
                     pass
-        # Try pattern: "validation_nll: <float>"
         if "validation_nll:" in message:
             try:
                 idx = message.index("validation_nll:")
                 remainder = message[idx + len("validation_nll:"):].strip()
-                # Take the first token as the value
                 value_str = remainder.split()[0].rstrip(",;")
                 return float(value_str)
             except (ValueError, IndexError):
@@ -150,14 +134,12 @@ def extract_epoch(log_entry: dict) -> int | None:
     Returns:
         The epoch number if found, None otherwise.
     """
-    # Direct field
     if "epoch" in log_entry:
         try:
             return int(log_entry["epoch"])
         except (TypeError, ValueError):
             pass
 
-    # Nested in extras/metrics
     for container_key in ("extras", "metrics", "extra"):
         container = log_entry.get(container_key)
         if isinstance(container, dict) and "epoch" in container:
@@ -166,7 +148,6 @@ def extract_epoch(log_entry: dict) -> int | None:
             except (TypeError, ValueError):
                 pass
 
-    # Parse from message
     message = log_entry.get("message", "")
     if "epoch" in message.lower():
         for part in message.split():
@@ -208,12 +189,10 @@ def collect_metrics_from_stream(
         if entry is None:
             continue
 
-        # Update current epoch if present
         epoch = extract_epoch(entry)
         if epoch is not None:
             current_epoch = epoch
 
-        # Extract validation NLL
         nll = extract_validation_nll(entry)
         if nll is not None:
             results.append((current_epoch, nll))
@@ -240,11 +219,6 @@ def get_final_validation_nll(
     return metrics[-1]
 
 
-# ---------------------------------------------------------------------------
-# Katib-compatible metric output
-# ---------------------------------------------------------------------------
-
-
 def format_katib_metric(metric_name: str, value: float) -> str:
     """Format a metric value in Katib's expected stdout format.
 
@@ -259,11 +233,6 @@ def format_katib_metric(metric_name: str, value: float) -> str:
         Formatted metric string for Katib collection.
     """
     return f"{metric_name}={value}"
-
-
-# ---------------------------------------------------------------------------
-# Model Registry integration
-# ---------------------------------------------------------------------------
 
 
 def record_trial_in_registry(
@@ -295,10 +264,10 @@ def record_trial_in_registry(
             forecast_horizon=int(
                 trial_result.hyperparameters.get("forecast_horizon", 1)
             ),
-            training_timestamp="",  # Will be set by registry client
-            training_nll=0.0,  # Not available at trial level
+            training_timestamp="",
+            training_nll=0.0,
             validation_nll=trial_result.validation_nll,
-            directional_accuracy=0.0,  # Not available at trial level
+            directional_accuracy=0.0,
             hyperparameters=trial_result.hyperparameters,
             pipeline_run_id=trial_result.trial_name,
             data_snapshot_path="",
@@ -312,7 +281,6 @@ def record_trial_in_registry(
         return version_id
 
     except ImportError:
-        # Registry client not yet implemented; log and continue
         print(
             json.dumps(
                 {
@@ -340,11 +308,6 @@ def record_trial_in_registry(
             file=sys.stderr,
         )
         return None
-
-
-# ---------------------------------------------------------------------------
-# Best configuration output
-# ---------------------------------------------------------------------------
 
 
 def determine_best_configuration(
@@ -408,11 +371,6 @@ def output_best_configuration(
         path.write_text(json_str)
 
     return json_str
-
-
-# ---------------------------------------------------------------------------
-# Main entry point (standalone / Katib sidecar)
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -485,7 +443,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Mode: Output best configuration from trials
     if args.best_config:
         if not args.trials_file:
             print("Error: --trials-file required with --best-config", file=sys.stderr)
@@ -516,7 +473,6 @@ def main() -> None:
         print(json_output)
         return
 
-    # Mode: Collect metrics from training logs
     if args.log_file:
         log_path = Path(args.log_file)
         if not log_path.exists():
@@ -532,7 +488,6 @@ def main() -> None:
         if stream is not sys.stdin:
             stream.close()
 
-    # Get the final validation NLL (last epoch)
     final = get_final_validation_nll(metrics)
     if final is None:
         print(
@@ -543,10 +498,8 @@ def main() -> None:
 
     epoch, nll = final
 
-    # Output in Katib-compatible format
     print(format_katib_metric("validation_nll", nll))
 
-    # Record in Model Registry if trial info provided
     if args.trial_name:
         hyperparams: dict[str, float | int | str] = {}
         if args.hyperparameters:

@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-# Mock the model_registry package before importing the registry client
 _mock_model_registry = MagicMock()
 sys.modules["model_registry"] = _mock_model_registry
 sys.modules["model_registry.types"] = MagicMock()
@@ -28,11 +27,6 @@ from hypothesis import strategies as st
 
 from dqnpf.backtest import BacktestComparison, ThresholdReport
 from dqnpf.config import IntegrationConfig
-
-
-# ---------------------------------------------------------------------------
-# In-memory fake Model Registry
-# ---------------------------------------------------------------------------
 
 
 class FakeModelVersion:
@@ -122,19 +116,10 @@ class FakeModelRegistry:
         version.custom_properties.update(custom_properties)
 
 
-# ---------------------------------------------------------------------------
-# Import the registry client (after mocking model_registry)
-# ---------------------------------------------------------------------------
-
 from dqnpf.kubeflow.registry.registry_client import (
     DqnpfRegistryClient,
     resolve_production_checkpoint,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helper: create a DqnpfRegistryClient with the fake registry
-# ---------------------------------------------------------------------------
 
 
 def create_test_client() -> DqnpfRegistryClient:
@@ -146,10 +131,6 @@ def create_test_client() -> DqnpfRegistryClient:
         client = DqnpfRegistryClient(registry_url="http://fake:8080")
     return client
 
-
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
 
 symbols = st.sampled_from(["USDJPY", "AUDJPY", "EURUSD", "GBPUSD"])
 
@@ -267,11 +248,6 @@ pipeline_run_ids = st.builds(lambda uid: f"run-{uid}", uid=st.uuids().map(str))
 version_strings = st.builds(lambda uid: f"v-{uid}", uid=st.uuids().map(str))
 
 
-# ---------------------------------------------------------------------------
-# Property DQNPF-REG-1: Threshold-failed runs never enter staging
-# ---------------------------------------------------------------------------
-
-
 class TestThresholdFailedRunsNeverEnterStaging:
     """Property DQNPF-REG-1: Threshold-failed runs never enter staging.
 
@@ -306,12 +282,10 @@ class TestThresholdFailedRunsNeverEnterStaging:
         """Registering with a failed threshold report raises ValueError and writes nothing."""
         client = create_test_client()
 
-        # Count entries before the attempt
         versions_before = sum(
             len(vs) for vs in client.registry.model_versions.values()
         )
 
-        # Attempt to register (should raise
         try:
             client.register_combined_version(
                 comparison=comparison,
@@ -321,15 +295,13 @@ class TestThresholdFailedRunsNeverEnterStaging:
                 parent_forecaster_version=forecaster_version,
                 pipeline_run_id=run_id,
             )
-            # If we get here, the function did NOT raise) that's a failure
             assert False, (
                 "register_combined_version() should raise when "
                 "threshold_report.passed == False"
             )
         except (ValueError, RuntimeError):
-            pass  # Expected: registration rejected
+            pass
 
-        # Verify no entry was written
         versions_after = sum(
             len(vs) for vs in client.registry.model_versions.values()
         )
@@ -337,11 +309,6 @@ class TestThresholdFailedRunsNeverEnterStaging:
             f"Expected no new entries after failed threshold, but "
             f"count went from {versions_before} to {versions_after}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-REG-2: Production lookup returns latest
-# ---------------------------------------------------------------------------
 
 
 class TestProductionLookupReturnsLatest:
@@ -370,7 +337,6 @@ class TestProductionLookupReturnsLatest:
         s3_path_list: list[str],
     ):
         """Resolving production checkpoint returns the entry with the latest registered_at."""
-        # Ensure lists are same length
         n = min(len(comparisons), len(configs), len(s3_path_list))
         assume(n >= 2)
         comparisons = comparisons[:n]
@@ -380,10 +346,8 @@ class TestProductionLookupReturnsLatest:
         client = create_test_client()
         model_name = "dqnpf-intraday-usdjpy"
 
-        # Register the model in the fake registry
         client.registry.register_model(name=model_name)
 
-        # Register multiple versions with increasing timestamps and promote to production
         registered_at_times: list[datetime] = []
         for i in range(n):
             ts = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=i)
@@ -408,25 +372,17 @@ class TestProductionLookupReturnsLatest:
                 custom_properties=custom_props,
             )
 
-        # The latest entry is the one with the highest registered_at
         expected_path = s3_path_list[n - 1]
 
-        # Resolve production checkpoint
         with patch(
             "dqnpf.kubeflow.registry.registry_client.ModelRegistry",
             FakeModelRegistry,
         ):
-            # Use the client's internal registry for resolution
             result = client.resolve_production_checkpoint(model_name)
 
         assert result == expected_path, (
             f"Expected latest production path '{expected_path}', got '{result}'"
         )
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-REG-2b: Parent models resolve via artifact uri (no s3_path)
-# ---------------------------------------------------------------------------
 
 
 class TestParentModelResolvesViaUri:
@@ -458,7 +414,6 @@ class TestParentModelResolvesViaUri:
             datetime(2024, 1, 1, tzinfo=timezone.utc)
             + timedelta(days=created_offset)
         ).isoformat()
-        # Parent-model custom_properties: created_at, lifecycle_stage; NO s3_path.
         client.registry.register_model_version(
             name=str(uuid.uuid4()),
             version="1",
@@ -473,11 +428,6 @@ class TestParentModelResolvesViaUri:
         )
 
         assert client.resolve_production_checkpoint(model_name) == uri
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-REG-3: Archive respects retention
-# ---------------------------------------------------------------------------
 
 
 class TestArchiveRespectsRetention:
@@ -508,10 +458,8 @@ class TestArchiveRespectsRetention:
         client = create_test_client()
         model_name = "dqnpf-intraday-usdjpy"
 
-        # Register the model
         client.registry.register_model(name=model_name)
 
-        # Create a version with registered_at = age_days ago
         registered_at = datetime.now(timezone.utc) - timedelta(days=age_days)
         version_id = str(uuid.uuid4())
         custom_props = {
@@ -532,7 +480,6 @@ class TestArchiveRespectsRetention:
             custom_properties=custom_props,
         )
 
-        # Attempt to archive, should raise for versions < 90 days old
         try:
             client.archive_version(version_id)
             assert False, (
@@ -540,7 +487,7 @@ class TestArchiveRespectsRetention:
                 f"(< 90 days retention)"
             )
         except (ValueError, RuntimeError):
-            pass  # Expected: retention policy blocks archival
+            pass
 
     @given(
         comparison=backtest_comparison(),
@@ -562,10 +509,8 @@ class TestArchiveRespectsRetention:
         client = create_test_client()
         model_name = "dqnpf-intraday-usdjpy"
 
-        # Register the model
         client.registry.register_model(name=model_name)
 
-        # Create a version with registered_at = age_days ago
         registered_at = datetime.now(timezone.utc) - timedelta(days=age_days)
         version_id = str(uuid.uuid4())
         custom_props = {
@@ -586,10 +531,8 @@ class TestArchiveRespectsRetention:
             custom_properties=custom_props,
         )
 
-        # Archiving should succeed for versions >= 90 days old
         client.archive_version(version_id)
 
-        # Verify the version is now archived
         versions = client.registry.get_model_versions(model_name)
         archived_version = next(
             (v for v in versions if v.custom_properties.get("version_id") == version_id),

@@ -42,13 +42,13 @@ def _last_d1_logical_date(_dt, **context):
     `data_interval_end` to the last weekday, then add one day.
     """
     cursor = context["data_interval_end"] - timedelta(days=1)
-    while cursor.weekday() >= 5:  # Sat=5, Sun=6
+    while cursor.weekday() >= 5:
         cursor -= timedelta(days=1)
     return (cursor + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="aggregate_monthly_interval_price_2020",
     default_args=default_args,
     description="Aggregate one calendar month of D1 bars into an MN1 interval-price partition",

@@ -52,33 +52,27 @@ class StatePreprocessor:
             ValueError: If state_data is empty or its length doesn't match
                 the expected state_dim.
         """
-        # Validate state_data is present
         if not observation.state_data:
             raise ValueError(
                 "Observation has empty state_data; cannot extract state vector."
             )
 
-        # Extract values from the first StateRow
         values = list(observation.state_data[0].values)
 
-        # Initialise state_dim on first observation
         if self._state_dim is None:
             self._state_dim = len(observation.state_columns)
             logger.info(
                 "Initialised state_dim=%d from state_columns.", self._state_dim
             )
 
-        # Validate length matches expected state_dim
         if len(values) != self._state_dim:
             raise ValueError(
                 f"state_data values length {len(values)} does not match "
                 f"expected state_dim {self._state_dim}."
             )
 
-        # Convert to 1-D numpy array
         state_array = np.array(values, dtype=np.float32)
 
-        # Handle NaN/Inf defensively
         nan_mask = np.isnan(state_array)
         inf_mask = np.isinf(state_array)
         if nan_mask.any() or inf_mask.any():
@@ -91,7 +85,6 @@ class StatePreprocessor:
             )
             state_array[nan_mask | inf_mask] = 0.0
 
-        # Convert to tensor on device
         tensor = torch.from_numpy(state_array).to(self._device)
         return tensor
 

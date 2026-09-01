@@ -32,7 +32,6 @@ class DqnpfPipelineConfig:
     Model Registry resolver.
     """
 
-    # --- Mirrored IntegrationConfig fields (kept in sync) ---
     symbol: str = "USDJPY"
     variance_threshold: float = 4.5
     max_risk_long_units: int = 2
@@ -57,16 +56,12 @@ class DqnpfPipelineConfig:
     pip_size: float = 0.01
     screen_profit_window_sessions: int = 7
 
-    # --- Pipeline-level fields ---
     dqn_model_registry_name: str = "deepqnetwork-usdjpy"
     forecaster_model_registry_name: str = "probabilistic-transformer-usdjpy-h1"
     dqn_lifecycle_stage: str = "production"
     forecaster_lifecycle_stage: str = "production"
     max_wall_time_hours: int = 4
 
-    # ------------------------------------------------------------------ #
-    # Construction / serialisation
-    # ------------------------------------------------------------------ #
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "DqnpfPipelineConfig":
@@ -92,9 +87,6 @@ class DqnpfPipelineConfig:
             **{name: getattr(self, name) for name in _INTEGRATION_FIELDS}
         )
 
-    # ------------------------------------------------------------------ #
-    # Validation
-    # ------------------------------------------------------------------ #
 
     def validate(self) -> list[str]:
         """Return a list of error messages (empty if config is valid)."""
@@ -123,9 +115,6 @@ class DqnpfPipelineConfig:
             )
         return errors
 
-    # ------------------------------------------------------------------ #
-    # CLI argv for the integration-layer entry points
-    # ------------------------------------------------------------------ #
 
     def to_cli_args(self) -> list[str]:
         """Emit ``--flag value`` argv covering every ``IntegrationConfig`` field.

@@ -17,11 +17,6 @@ from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-# Strategy for run IDs, arbitrary non-empty strings including special chars
 run_ids = st.text(
     alphabet=st.characters(
         categories=("L", "M", "N", "P", "S"),
@@ -31,7 +26,6 @@ run_ids = st.text(
     max_size=200,
 )
 
-# Strategy for DQN component names, realistic DQN pipeline components plus arbitrary
 component_names = st.one_of(
     st.sampled_from([
         "dqn_training",
@@ -49,7 +43,6 @@ component_names = st.one_of(
     ),
 )
 
-# Strategy for error messages, include special characters and unicode
 error_messages = st.text(
     alphabet=st.characters(
         categories=("L", "M", "N", "P", "S", "Z", "C"),
@@ -58,18 +51,12 @@ error_messages = st.text(
     max_size=500,
 )
 
-# Strategy for webhook URLs
 webhook_urls = st.sampled_from([
     "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
     "https://events.pagerduty.com/v2/enqueue",
     "https://example.com/webhook",
     "https://hooks.slack.com/services/abc/def/ghi",
 ])
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-16: Alert webhook invocation on DQN pipeline failure
-# ---------------------------------------------------------------------------
 
 
 class TestDqnAlertWebhookInvocation:
@@ -151,15 +138,12 @@ class TestDqnAlertWebhookInvocation:
                 webhook_url=webhook_url,
             )
 
-            # Extract the Request object passed to urlopen
             call_args = mock_urlopen.call_args
             request_obj = call_args.args[0] if call_args.args else call_args[0][0]
 
-            # The data attribute contains the JSON payload bytes
             payload_bytes = request_obj.data
             assert payload_bytes is not None
 
-            # Verify it's valid JSON
             payload = json.loads(payload_bytes.decode("utf-8"))
             assert isinstance(payload, dict)
 
@@ -198,12 +182,10 @@ class TestDqnAlertWebhookInvocation:
                 webhook_url=webhook_url,
             )
 
-            # Extract the Request object and parse payload
             call_args = mock_urlopen.call_args
             request_obj = call_args.args[0] if call_args.args else call_args[0][0]
             payload = json.loads(request_obj.data.decode("utf-8"))
 
-            # Verify required fields exist and match inputs
             assert "run_id" in payload, "Payload missing 'run_id' field"
             assert "failed_component" in payload, "Payload missing 'failed_component' field"
             assert "error_message" in payload, "Payload missing 'error_message' field"
@@ -247,20 +229,16 @@ class TestDqnAlertWebhookInvocation:
                 webhook_url=webhook_url,
             )
 
-            # Extract the Request object and parse payload
             call_args = mock_urlopen.call_args
             request_obj = call_args.args[0] if call_args.args else call_args[0][0]
             payload = json.loads(request_obj.data.decode("utf-8"))
 
-            # Verify timestamp field exists and is a non-empty string
             assert "timestamp" in payload, "Payload missing 'timestamp' field"
             assert isinstance(payload["timestamp"], str)
             assert len(payload["timestamp"]) > 0
 
-            # Verify it's a valid ISO 8601 timestamp
             from datetime import datetime
 
-            # Should not raise if it's a valid ISO format
             datetime.fromisoformat(payload["timestamp"])
 
     @given(
@@ -297,7 +275,6 @@ class TestDqnAlertWebhookInvocation:
                 webhook_url=webhook_url,
             )
 
-            # Extract the Request object and verify URL
             call_args = mock_urlopen.call_args
             request_obj = call_args.args[0] if call_args.args else call_args[0][0]
             assert request_obj.full_url == webhook_url

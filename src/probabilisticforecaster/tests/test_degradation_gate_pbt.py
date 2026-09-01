@@ -23,17 +23,11 @@ from probabilisticforecaster.kubeflow.components.model_evaluation.component impo
 )
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-# Reasonable metric ranges for forex forecasting
 nll_strategy = st.floats(min_value=0.01, max_value=10.0, allow_nan=False, allow_infinity=False)
 da_strategy = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 cr95_strategy = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 rmse_strategy = st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False)
 
-# Threshold strategies (positive values)
 threshold_strategy = st.floats(min_value=0.001, max_value=1.0, allow_nan=False, allow_infinity=False)
 
 
@@ -53,11 +47,6 @@ def evaluation_metrics(draw):
     cr95 = draw(cr95_strategy)
     rmse = draw(rmse_strategy)
     return EvaluationMetrics(nll=nll, directional_accuracy=da, coverage_ratio_95=cr95, rmse=rmse)
-
-
-# ---------------------------------------------------------------------------
-# Property 20: Metric degradation gates model promotion
-# ---------------------------------------------------------------------------
 
 
 class TestDegradationGateLogic:
@@ -95,11 +84,9 @@ class TestDegradationGateLogic:
 
         **Validates: Requirements 9.4**
         """
-        # Construct current NLL that exceeds threshold
         current_nll = prod_nll + nll_threshold + nll_excess
-        assume(current_nll <= 100.0)  # Keep within reasonable bounds
+        assume(current_nll <= 100.0)
 
-        # DA is within threshold (so only NLL triggers the gate)
         current_da = prod_da
 
         current_metrics = EvaluationMetrics(
@@ -115,8 +102,8 @@ class TestDegradationGateLogic:
             production_metrics=production_metrics,
             nll_threshold=nll_threshold,
             da_threshold=da_threshold,
-            nll_absolute_threshold=999.0,  # Wide (only testing relative degradation
-            da_absolute_threshold=-1.0,  # Wide) only testing relative degradation
+            nll_absolute_threshold=999.0,
+            da_absolute_threshold=-1.0,
         )
 
         assert gate_passed is False, (
@@ -154,11 +141,9 @@ class TestDegradationGateLogic:
 
         **Validates: Requirements 9.4**
         """
-        # Construct current DA that drops below threshold
         current_da = prod_da - da_threshold - da_excess
-        assume(current_da >= 0.0)  # DA must be non-negative
+        assume(current_da >= 0.0)
 
-        # NLL is within threshold (so only DA triggers the gate)
         current_nll = prod_nll
 
         current_metrics = EvaluationMetrics(
@@ -174,8 +159,8 @@ class TestDegradationGateLogic:
             production_metrics=production_metrics,
             nll_threshold=nll_threshold,
             da_threshold=da_threshold,
-            nll_absolute_threshold=999.0,  # Wide (only testing relative degradation
-            da_absolute_threshold=-1.0,  # Wide) only testing relative degradation
+            nll_absolute_threshold=999.0,
+            da_absolute_threshold=-1.0,
         )
 
         assert gate_passed is False, (
@@ -218,11 +203,9 @@ class TestDegradationGateLogic:
 
         **Validates: Requirements 9.4**
         """
-        # Construct metrics within thresholds
         current_nll = prod_nll + nll_threshold * nll_margin
         current_da = prod_da - da_threshold * da_margin
 
-        # Ensure values are reasonable
         assume(current_nll <= 100.0)
         assume(current_da >= 0.0)
         assume(current_da <= 1.0)
@@ -240,8 +223,8 @@ class TestDegradationGateLogic:
             production_metrics=production_metrics,
             nll_threshold=nll_threshold,
             da_threshold=da_threshold,
-            nll_absolute_threshold=999.0,  # Wide (only testing relative degradation
-            da_absolute_threshold=-1.0,  # Wide) only testing relative degradation
+            nll_absolute_threshold=999.0,
+            da_absolute_threshold=-1.0,
         )
 
         assert gate_passed is True, (
@@ -255,9 +238,6 @@ class TestDegradationGateLogic:
             f"Reason should indicate metrics are acceptable, got: {reason}"
         )
 
-    # -------------------------------------------------------------------
-    # Absolute threshold tests
-    # -------------------------------------------------------------------
 
     @given(
         nll_above_absolute=st.floats(min_value=3.51, max_value=10.0, allow_nan=False, allow_infinity=False),
@@ -281,9 +261,8 @@ class TestDegradationGateLogic:
         """
         assume(nll_above_absolute > 3.5)
 
-        # NLL is above absolute floor, DA is fine, relative delta is within bounds
         current_nll = nll_above_absolute
-        current_da = prod_da  # No relative degradation
+        current_da = prod_da
 
         current_metrics = EvaluationMetrics(
             nll=current_nll,
@@ -296,8 +275,8 @@ class TestDegradationGateLogic:
         gate_passed, reason = degradation_gate(
             current_metrics=current_metrics,
             production_metrics=production_metrics,
-            nll_threshold=999.0,  # Wide (relative gate won't trigger
-            da_threshold=999.0,  # Wide) relative gate won't trigger
+            nll_threshold=999.0,
+            da_threshold=999.0,
             nll_absolute_threshold=3.5,
             da_absolute_threshold=0.0,
         )
@@ -332,8 +311,7 @@ class TestDegradationGateLogic:
         """
         assume(da_below_absolute < 0.50)
 
-        # DA is below absolute floor, NLL is fine, relative delta is within bounds
-        current_nll = prod_nll  # No relative degradation
+        current_nll = prod_nll
         current_da = da_below_absolute
 
         current_metrics = EvaluationMetrics(
@@ -347,8 +325,8 @@ class TestDegradationGateLogic:
         gate_passed, reason = degradation_gate(
             current_metrics=current_metrics,
             production_metrics=production_metrics,
-            nll_threshold=999.0,  # Wide (relative gate won't trigger
-            da_threshold=999.0,  # Wide) relative gate won't trigger
+            nll_threshold=999.0,
+            da_threshold=999.0,
             nll_absolute_threshold=999.0,
             da_absolute_threshold=0.50,
         )

@@ -24,28 +24,11 @@ from kfp.dsl import Input, Metrics, Model, Output
 
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 
-# Compile-time GPU toggle for the training step.
-#
-# Training always requests one GPU (``nvidia.com/gpu: 1``), which pins the pod
-# to a GPU-enabled node. GPU allocation is baked into the pipeline IR when the
-# pipeline is *compiled*, so it cannot be driven by a runtime pipeline parameter.
 
-# Training AND backtest are pinned onto a spark GPU node.
-#
-# The spark nodes carry two NoExecute taints (`workload=ml`, `arch=arm64`), so
-# pinning means: tolerate both taints AND nodeSelect the target host. This
-# requires the multi-arch (arm64) dqn images that images-chain.yml publishes.
-
-# Which spark node to pin to. spark-4214 hosts the LLM inference services
-# (gemma-* predictors), so training/backtest default to the other one,
-# spark-5790, to keep the heavy RL workloads off the serving node. Override at
-# compile time with ``DQN_SPARK_NODE_HOSTNAME``.
 SPARK_NODE_HOSTNAME: str = os.getenv(
     "DQN_SPARK_NODE_HOSTNAME", "spark-5790"
 ).strip()
 
-# Taints on the spark nodes that workloads must tolerate to land there, and the
-# label set that uniquely identifies them (arch=arm64 ∩ GPU present).
 SPARK_TAINTS = (
     ("workload", "ml"),
     ("arch", "arm64"),
@@ -56,14 +39,8 @@ SPARK_NODE_SELECTOR = (
 )
 
 
-# ECR registry base for all component images
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
 
-# Pre-provisioned RWX PVC in the user namespace that backs modelenv's
-# preloaded-market-data cache. Defined in
-# platform/peterbean/modelenv-cache-pvc.yaml (reconciled by Flux). Mounting
-# it on training/backtest tasks turns the multi-minute cold S3 pull into a
-# warm-cache hit on second-and-onwards runs.
 MODELENV_CACHE_PVC = "modelenv-cache"
 MODELENV_CACHE_MOUNT = "/tmp/modelenv-cache"
 
@@ -233,13 +210,6 @@ def dqn_backtest(
     )
 
 
-# ---------------------------------------------------------------------------
-# Lightweight Python component for config resolution at runtime
-# ---------------------------------------------------------------------------
-
-
-# Runs on the training image (which bundles the deepqnetwork package) so it can
-# import the real DQNPipelineConfig instead of carrying a drift-prone inline copy.
 @dsl.component(
     base_image=f"{ECR_BASE}/dqn/training:latest",
     packages_to_install=["pyyaml"],
@@ -285,17 +255,10 @@ def resolve_dqn_config(
     from collections import namedtuple
     from dataclasses import asdict
 
-    # The training base image bundles the repo at /app; ensure it's importable
-    # regardless of the lightweight component's runtime working directory.
     if "/app" not in sys.path:
         sys.path.insert(0, "/app")
     from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 
-    # Load the SAME baked config the training component reads
-    # (deepqnetwork/kubeflow/components/dqn_training/component.py --config-path
-    # default), so config_json reflects the real training values (e.g. the
-    # epsilon schedule) rather than bare dataclass defaults. Single source of
-    # truth; no inline duplicate.
     config = DQNPipelineConfig.from_yaml(
         "/app/deepqnetwork/kubeflow/config/dqn_pipeline_config.yaml"
     ).override(
@@ -310,12 +273,9 @@ def resolve_dqn_config(
         hour_of_day_end=hour_of_day_end,
     )
 
-    # Reduced LR for finetune (mode-independent).
     if training_mode == "finetune":
         config = config.override(learning_rate=config.finetune_learning_rate)
 
-    # The episode-count knob is mode-specific; set only the applicable one so
-    # validate() doesn't reject a cross-mode knob.
     if date_start and date_end:
         config = config.override(repeats_per_date=repeats_per_date)
     else:
@@ -369,11 +329,6 @@ def resolve_dqn_config(
     )
 
 
-# ---------------------------------------------------------------------------
-# Config Helpers (client-side, for use at submission time)
-# ---------------------------------------------------------------------------
-
-
 def build_dqn_pipeline_config(
     symbol: str = "USDJPY",
     step_size_seconds: int = 5,
@@ -414,7 +369,6 @@ def build_dqn_pipeline_config(
     """
     config = DQNPipelineConfig()
 
-    # Apply pipeline parameter overrides
     config = config.override(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
@@ -427,12 +381,9 @@ def build_dqn_pipeline_config(
         training_mode=training_mode,
     )
 
-    # Reduced LR for finetune (mode-independent).
     if training_mode == "finetune":
         config = config.override(learning_rate=config.finetune_learning_rate)
 
-    # The episode-count knob is mode-specific; set only the applicable one so
-    # validate() doesn't reject a cross-mode knob.
     if date_start and date_end:
         config = config.override(repeats_per_date=repeats_per_date)
     else:
@@ -443,10 +394,8 @@ def build_dqn_pipeline_config(
         )
         config = config.override(num_episodes_per_range=episodes)
 
-    # Validate configuration
     errors = config.validate()
 
-    # Additional pipeline-level validation
     if training_mode == "finetune" and not checkpoint:
         errors.append("Finetune mode requires a checkpoint path")
 
@@ -456,11 +405,6 @@ def build_dqn_pipeline_config(
         )
 
     return config
-
-
-# ---------------------------------------------------------------------------
-# Model Registration (lightweight Python component, mirrors forecaster pattern)
-# ---------------------------------------------------------------------------
 
 
 @dsl.component(
@@ -514,7 +458,6 @@ def dqn_model_registration(
     backtest_metrics_uri = backtest_metrics.uri
     model_checkpoint_uri = model_checkpoint.uri
 
-    # Step 1: Read backtest metrics ------------------------------------------
     _log("Reading backtest metrics", extra={"uri": backtest_metrics_uri})
 
     import boto3
@@ -552,7 +495,6 @@ def dqn_model_registration(
         )
         raise
 
-    # Step 2: Check degradation gate -----------------------------------------
     gate = bt.get("degradation_gate", {})
     gate_passed = gate.get("gate_passed", False)
     gate_skipped = gate.get("gate_skipped", False)
@@ -575,7 +517,6 @@ def dqn_model_registration(
         )
         return
 
-    # Step 3: Register in Model Registry -------------------------------------
     _log(
         "Gate passed; registering DQN in Model Registry",
         extra={"registry_url": registry_url},
@@ -586,12 +527,6 @@ def dqn_model_registration(
 
         from model_registry import ModelRegistry
 
-        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
-        # defaults is_secure=True and refuses without a token even for http.
-        # The SDK builds its endpoint as f"{server_address}:{port}", so the
-        # port must go through the `port` kwarg, embedding it in
-        # server_address collides with the default port and yields a broken
-        # "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         registry = ModelRegistry(
@@ -615,7 +550,6 @@ def dqn_model_registration(
                 ) == "production":
                     existing_production.append(v)
         except Exception:
-            # Registered model does not exist yet, first deployment.
             pass
 
         has_production = bool(existing_production)
@@ -713,11 +647,6 @@ def dqn_model_registration(
         raise
 
 
-# ---------------------------------------------------------------------------
-# Pipeline Definition
-# ---------------------------------------------------------------------------
-
-
 @dsl.pipeline(
     name="dqn-pipeline",
     description=(
@@ -737,7 +666,6 @@ def dqn_pipeline(
     checkpoint: str = "",
     date_start: str = "",
     date_end: str = "",
-    # Out-of-sample gate-eval window (disjoint from the training range). 2015-Q1.
     eval_date_start: str = "2015-01-05",
     eval_date_end: str = "2015-03-31",
     hour_of_day_start: int = 0,
@@ -779,9 +707,6 @@ def dqn_pipeline(
             incremental training on production model weights.
         checkpoint: S3 key path for production checkpoint (required for finetune).
     """
-    # -----------------------------------------------------------------------
-    # Step 0: Config resolution and validation (lightweight Python component)
-    # -----------------------------------------------------------------------
     config_task = resolve_dqn_config(
         symbol=symbol,
         step_size_seconds=step_size_seconds,
@@ -796,16 +721,8 @@ def dqn_pipeline(
         hour_of_day_start=hour_of_day_start,
         hour_of_day_end=hour_of_day_end,
     )
-    # Disable caching across the DAG. Training/backtest produce versioned
-    # artifacts whose KFP cache key didn't change between image rebuilds;
-    # the cache served stale outputs from broken-image runs and broke the
-    # registration step. Each training run is intentionally one-shot;
-    # caching has no value here. Same posture as dqnpf-intraday-pipeline.
     config_task.set_caching_options(enable_caching=False)
 
-    # -----------------------------------------------------------------------
-    # Step 1: DQN Training (with modelenv sidecar, 1 GPU, 16Gi memory)
-    # -----------------------------------------------------------------------
     training_task = dqn_training(
         symbol=symbol,
         episode_start_ts=0,
@@ -822,22 +739,13 @@ def dqn_pipeline(
         date_end=config_task.outputs["date_end"],
         hour_of_day_start=config_task.outputs["hour_of_day_start"],
         hour_of_day_end=config_task.outputs["hour_of_day_end"],
-        # Pin modelenv's snapshot resolution to a post-consolidation instant
-        # (empty = legacy behavior: resolve at the training window's date_end).
         price_snapshot_date=price_snapshot_date,
-        # Reward-shaping overrides for the decision-persistence experiments
-        # (empty = modelenv defaults). Shape training only; backtest PnL unaffected.
         reward_action_penalty=reward_action_penalty,
         reward_holding_penalty=reward_holding_penalty,
         reward_lambda=reward_lambda,
     )
     training_task.set_retry(num_retries=2)
     training_task.set_caching_options(enable_caching=False)
-    # modelenv preloads the WHOLE training window's bars/ticks/news into RAM:
-    # a 3-year window fit under 16Gi, but the adhoc20260720 full-history window
-    # (2012->2026-04, ~5x the data) OOMKilled at 16Gi ~22min into the preload.
-    # spark-5790 has ~121Gi allocatable and nothing else pinned to it; 96Gi
-    # request==limit keeps Guaranteed QoS with scheduling headroom.
     training_task.set_memory_request("96Gi")
     training_task.set_memory_limit("96Gi")
     _enable_gpu(training_task)
@@ -846,15 +754,9 @@ def dqn_pipeline(
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
-    # Checkpoint upload now URI-routes via deepqnetwork.artifact_io; mount
-    # MinIO creds so the minio:// URI KFP advertises can actually be written.
     _mount_minio_creds(training_task)
-    # Pin onto the arm64 spark GPU nodes.
     _pin_to_spark(training_task)
 
-    # -----------------------------------------------------------------------
-    # Step 2: DQN Backtest (CPU-only, 4Gi memory)
-    # -----------------------------------------------------------------------
     backtest_task = dqn_backtest(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         symbol=symbol,
@@ -862,7 +764,6 @@ def dqn_pipeline(
         episode_end_ts=0,
         step_size_seconds=step_size_seconds,
         config_json=config_task.outputs["config_json"],
-        # Out-of-sample: the eval_date_* window, NOT the training range.
         date_start=eval_date_start,
         date_end=eval_date_end,
         hour_of_day_start=config_task.outputs["hour_of_day_start"],
@@ -870,9 +771,6 @@ def dqn_pipeline(
     )
     backtest_task.set_retry(num_retries=1)
     backtest_task.set_caching_options(enable_caching=False)
-    # The adhoc20260720 eval (one recent quarter) OOMKilled the backtest twice
-    # at 8Gi while its sidecar decoded the window's ~1,500 hourly tick files
-    # into RAM. 24Gi gives the same headroom ratio that fixed training.
     backtest_task.set_memory_request("24Gi")
     backtest_task.set_memory_limit("24Gi")
     kubernetes.mount_pvc(
@@ -880,26 +778,9 @@ def dqn_pipeline(
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
-    # Backtest reads the checkpoint URI from training and writes its own
-    # metrics URI; both now URI-route via deepqnetwork.artifact_io.
     _mount_minio_creds(backtest_task)
-    # Backtest requests no GPU (batch-1 greedy inference gated by per-step gRPC
-    # round-trips to modelenv), but it IS pinned to the same spark node as
-    # training (spark-5790 by default): co-locating training and backtest on
-    # one stable node keeps the LLM-serving spark node (spark-4214) free, lets
-    # backtest reuse the dqn/base layers training just pulled, and avoids the
-    # cold ~3 GB image-pull tax (~40 min) of bouncing between nodes (T-12.1-11).
     _pin_to_spark(backtest_task)
 
-    # -----------------------------------------------------------------------
-    # Step 3: Model Registration (lightweight Python, no GPU/PVC needed)
-    #
-    # Registers the trained checkpoint as ``deepqnetwork-{symbol.lower()}`` in
-    # the Kubeflow Model Registry and promotes it to the production stage when
-    # the backtest degradation gate passed. The dqnpf-intraday-pipeline reads
-    # production-stage entries by that exact name to assemble the combined
-    # DQN+Forecaster evaluation.
-    # -----------------------------------------------------------------------
     registration_task = dqn_model_registration(
         model_checkpoint=training_task.outputs["model_checkpoint"],
         backtest_metrics=backtest_task.outputs["backtest_metrics"],
@@ -911,6 +792,4 @@ def dqn_pipeline(
     registration_task.set_retry(num_retries=1)
     registration_task.set_caching_options(enable_caching=False)
     _mount_minio_creds(registration_task)
-    # Force registration to wait for backtest, KFP would otherwise schedule
-    # them in parallel since registration only reads the backtest output URI.
     registration_task.after(backtest_task)

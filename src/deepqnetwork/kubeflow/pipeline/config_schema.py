@@ -26,74 +26,61 @@ class DQNPipelineConfig:
     training schedule, infrastructure, Katib tuning, serving, and monitoring.
     """
 
-    # Environment (modelenv gRPC server connection)
     grpc_address: str = "localhost:50051"
     symbol: str = "USDJPY"
     episode_start_ts: int = 0
     episode_end_ts: int = 0
     step_size_seconds: int = 5
 
-    # Date-range episode scheduling; one episode per calendar date
     date_start: str = ""
     date_end: str = ""
     hour_of_day_start: int = 0
     hour_of_day_end: int = 23
 
-    # Agent hyperparameters
     gamma: float = 0.99
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 0  # 0 = auto: train() derives the horizon from the total step budget
+    epsilon_decay_steps: int = 0
     batch_size: int = 64
     replay_buffer_size: int = 300_000
     target_update_freq: int = 1000
     train_freq: int = 4
-    tau: float = 1.0  # 1.0 = hard copy; <1.0 = soft Polyak averaging
+    tau: float = 1.0
 
-    # Network architecture
     hidden_dims: list[int] = field(default_factory=lambda: [256, 256, 128])
-    activation: str = "relu"  # relu, leaky_relu, gelu
+    activation: str = "relu"
     dropout: float = 0.0
     learning_rate: float = 1e-4
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
     weight_decay: float = 0.0
     grad_clip_norm: float = 10.0
-    loss_function: str = "huber"  # huber, mse
+    loss_function: str = "huber"
 
-    # Training schedule, episode-count knobs are mode-specific and mutually
-    # exclusive; both default to None (effective defaults: 3000 fixed / 3 date-range).
-    num_episodes_per_range: int | None = None  # fixed-window mode only
-    repeats_per_date: int | None = None        # date-range mode only
+    num_episodes_per_range: int | None = None
+    repeats_per_date: int | None = None
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
 
-    # Infrastructure
     num_workers: int = 1
     max_wall_time_hours: int = 8
 
-    # Katib hyperparameter tuning
     katib_max_trials: int = 20
     katib_parallel_trials: int = 3
     katib_trial_timeout_hours: int = 4
 
-    # Serving
     serving_min_replicas: int = 0
     serving_max_replicas: int = 2
     serving_target_concurrency: int = 5
 
-    # Monitoring, absolute thresholds from thesis buy & hold baseline
     alert_webhook_url: str = ""
     sharpe_degradation_threshold: float = 0.1
-    sharpe_absolute_threshold: float = 1.0  # Must beat buy & hold baseline
-    pnl_absolute_threshold: float = 0.0  # Must be profitable in absolute terms
+    sharpe_absolute_threshold: float = 1.0
+    pnl_absolute_threshold: float = 0.0
 
-    # Training mode
     training_mode: Literal["scratch", "finetune"] = "scratch"
-    # "scratch": Random init, full training (num_episodes_per_range episodes)
-    # "finetune": Load production checkpoint, reduced LR, fewer episodes
-    finetune_learning_rate: float = 1e-5  # 10x lower than base LR
-    finetune_num_episodes_per_range: int = 500  # Fewer episodes when fine-tuning
+    finetune_learning_rate: float = 1e-5
+    finetune_num_episodes_per_range: int = 500
 
     @classmethod
     def from_yaml(cls, path: str) -> "DQNPipelineConfig":
@@ -113,7 +100,6 @@ class DQNPipelineConfig:
         if data is None:
             return cls()
 
-        # Normalise list/tuple fields from YAML
         kwargs = {}
         for key, value in data.items():
             if key not in cls.__dataclass_fields__:
@@ -138,7 +124,6 @@ class DQNPipelineConfig:
         """
         current = asdict(self)
         current.update(kwargs)
-        # Restore tuple for betas if it was serialised as list
         if isinstance(current.get("betas"), list):
             current["betas"] = tuple(current["betas"])
         return DQNPipelineConfig(**current)
@@ -151,7 +136,6 @@ class DQNPipelineConfig:
         """
         errors: list[str] = []
 
-        # Environment
         if not self.grpc_address:
             errors.append("grpc_address must not be empty")
         if self.symbol not in ("USDJPY", "AUDJPY"):
@@ -161,7 +145,6 @@ class DQNPipelineConfig:
                 f"step_size_seconds must be positive: {self.step_size_seconds}"
             )
 
-        # Date-range episode scheduling
         if self.date_start and self.date_end:
             from datetime import date as _date
             try:
@@ -187,7 +170,6 @@ class DQNPipelineConfig:
                 "hour_of_day_start and hour_of_day_end must differ"
             )
 
-        # Agent
         if not (0.0 <= self.gamma <= 1.0):
             errors.append(f"gamma must be in [0, 1]: {self.gamma}")
         if not (0.0 <= self.epsilon_start <= 1.0):
@@ -198,8 +180,6 @@ class DQNPipelineConfig:
             errors.append(
                 f"epsilon_end ({self.epsilon_end}) must be <= epsilon_start ({self.epsilon_start})"
             )
-        # 0 is the documented "auto" sentinel (train() derives the decay horizon
-        # from the total step budget); only negative values are invalid.
         if self.epsilon_decay_steps < 0:
             errors.append(
                 f"epsilon_decay_steps must be >= 0 (0 = auto): {self.epsilon_decay_steps}"
@@ -219,7 +199,6 @@ class DQNPipelineConfig:
         if not (0.0 < self.tau <= 1.0):
             errors.append(f"tau must be in (0, 1]: {self.tau}")
 
-        # Network
         if not self.hidden_dims:
             errors.append("hidden_dims must not be empty")
         if any(d <= 0 for d in self.hidden_dims):
@@ -237,9 +216,6 @@ class DQNPipelineConfig:
         if self.loss_function not in ("huber", "mse"):
             errors.append(f"Invalid loss_function: {self.loss_function}")
 
-        # Training
-        # Episode-count knobs are mode-specific; reject the one that has no
-        # effect in the active mode rather than silently ignoring it.
         is_date_range = bool(self.date_start and self.date_end)
         if is_date_range and self.num_episodes_per_range is not None:
             errors.append(
@@ -264,7 +240,6 @@ class DQNPipelineConfig:
                 f"checkpoint_interval must be positive: {self.checkpoint_interval}"
             )
 
-        # Infrastructure
         if not (1 <= self.num_workers <= 4):
             errors.append(f"num_workers must be in [1, 4]: {self.num_workers}")
         if self.max_wall_time_hours <= 0:
@@ -272,7 +247,6 @@ class DQNPipelineConfig:
                 f"max_wall_time_hours must be positive: {self.max_wall_time_hours}"
             )
 
-        # Katib
         if True:
             if self.katib_max_trials <= 0:
                 errors.append(
@@ -287,13 +261,11 @@ class DQNPipelineConfig:
                     f"katib_trial_timeout_hours must be positive: {self.katib_trial_timeout_hours}"
                 )
 
-        # Monitoring
         if self.sharpe_absolute_threshold < 0:
             errors.append(
                 f"sharpe_absolute_threshold must be non-negative: {self.sharpe_absolute_threshold}"
             )
 
-        # Finetune
         if self.training_mode == "finetune":
             if not (1e-6 <= self.finetune_learning_rate <= 0.01):
                 errors.append(
@@ -318,14 +290,12 @@ class DQNPipelineConfig:
         """
         args: list[str] = []
 
-        # Environment
         args.extend(["--grpc-address", self.grpc_address])
         args.extend(["--symbol", self.symbol])
         args.extend(["--episode-start-ts", str(self.episode_start_ts)])
         args.extend(["--episode-end-ts", str(self.episode_end_ts)])
         args.extend(["--step-size-seconds", str(self.step_size_seconds)])
 
-        # Date-range episode scheduling
         if self.date_start:
             args.extend(["--date-start", self.date_start])
         if self.date_end:
@@ -333,7 +303,6 @@ class DQNPipelineConfig:
         args.extend(["--hour-start", str(self.hour_of_day_start)])
         args.extend(["--hour-end", str(self.hour_of_day_end)])
 
-        # Agent
         args.extend(["--gamma", str(self.gamma)])
         args.extend(["--epsilon-start", str(self.epsilon_start)])
         args.extend(["--epsilon-end", str(self.epsilon_end)])
@@ -344,7 +313,6 @@ class DQNPipelineConfig:
         args.extend(["--train-freq", str(self.train_freq)])
         args.extend(["--tau", str(self.tau)])
 
-        # Network, only fields that have CLI counterparts in train.py
         effective_lr = (
             self.finetune_learning_rate
             if self.training_mode == "finetune"
@@ -356,8 +324,6 @@ class DQNPipelineConfig:
         args.extend(["--weight-decay", str(self.weight_decay)])
         args.extend(["--loss-function", self.loss_function])
 
-        # Training, emit only the knob that applies to the active mode so the
-        # downstream DQNConfig never trips train()'s mis-set guard.
         if self.date_start and self.date_end:
             if self.repeats_per_date is not None:
                 args.extend(["--repeats-per-date", str(self.repeats_per_date)])
@@ -372,7 +338,6 @@ class DQNPipelineConfig:
         args.extend(["--max-steps-per-episode", str(self.max_steps_per_episode)])
         args.extend(["--checkpoint-interval", str(self.checkpoint_interval)])
 
-        # Mode is always train for the pipeline
         args.extend(["--mode", "train"])
 
         return args

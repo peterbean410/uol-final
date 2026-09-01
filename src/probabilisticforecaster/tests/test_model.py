@@ -43,7 +43,6 @@ class TestModelInputValidation:
         model = ProbabilisticTransformer(config)
         model.eval()
 
-        # Wrong feature dimension: 10 instead of 16
         bad_input = torch.randn(1, 36, 10)
         with pytest.raises(ValueError, match="Input feature dimension"):
             model(bad_input)
@@ -54,10 +53,8 @@ class TestModelInputValidation:
         model = ProbabilisticTransformer(config)
         model.eval()
 
-        # Correct feature dimension: 16
         good_input = torch.randn(1, 36, 16)
         mu, sigma = model(good_input)
 
-        # Verify outputs have expected shapes
         assert mu.shape == (1, 36, 1)
         assert sigma.shape == (1, 36, 1)

@@ -17,11 +17,6 @@ from probabilisticforecaster.evaluation import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def prediction_triples(draw):
     """Generate random (mu, sigma, actual) numpy arrays for evaluation testing.
@@ -73,11 +68,6 @@ def prediction_triples(draw):
     return mu, sigma, actual
 
 
-# ---------------------------------------------------------------------------
-# Property 9: Evaluation Metrics Formula Correctness
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluationMetricsFormulaCorrectness:
     """Property 9: Evaluation Metrics Formula Correctness.
 
@@ -98,10 +88,8 @@ class TestEvaluationMetricsFormulaCorrectness:
         """
         mu, sigma, actual = inputs
 
-        # Compute using the function under test
         result = _compute_directional_accuracy(mu, actual)
 
-        # Compute expected DA manually
         n = len(mu)
         correct_count = np.sum(np.sign(mu) == np.sign(actual))
         expected_da = correct_count / n
@@ -120,10 +108,8 @@ class TestEvaluationMetricsFormulaCorrectness:
         """
         mu, sigma, actual = inputs
 
-        # Compute using the function under test
         result = _compute_covered_ratio_95(mu, sigma, actual)
 
-        # Compute expected CR95 manually
         n = len(mu)
         covered_count = np.sum(np.abs(actual - mu) <= 2 * sigma)
         expected_cr95 = covered_count / n
@@ -142,10 +128,8 @@ class TestEvaluationMetricsFormulaCorrectness:
         """
         mu, sigma, actual = inputs
 
-        # Compute using the function under test
         result = _compute_rmse(mu, actual)
 
-        # Compute expected RMSE manually
         squared_errors = (mu - actual) ** 2
         expected_rmse = math.sqrt(np.mean(squared_errors))
 

@@ -27,11 +27,6 @@ def _action(idx: int) -> FakeActionResult:
     return FakeActionResult(action=idx, action_name=f"action_{idx}")
 
 
-# ---------------------------------------------------------------------------
-# Property 1: Screened action validity
-# ---------------------------------------------------------------------------
-
-
 @given(
     action_index=_action_index,
     mu=_finite_float,
@@ -55,11 +50,6 @@ def test_screened_action_validity(
     assert (result.reason == "pass") == (not result.screened)
 
 
-# ---------------------------------------------------------------------------
-# Property 3: Low-sigma pass-through
-# ---------------------------------------------------------------------------
-
-
 @given(
     action_index=_action_index,
     mu=_finite_float,
@@ -76,7 +66,6 @@ def test_low_sigma_pass_through(
     variance_threshold: float,
     sigma_offset: float,
 ) -> None:
-    # sigma <= threshold
     sigma = max(0.0, variance_threshold - sigma_offset)
     layer = make_layer(variance_threshold=variance_threshold)
     result = layer.screen(_action(action_index), mu, sigma)
@@ -85,11 +74,6 @@ def test_low_sigma_pass_through(
     assert result.screened is False
     assert layer.risk_long_used == 0
     assert layer.risk_short_used == 0
-
-
-# ---------------------------------------------------------------------------
-# Property 4: High-sigma budget consumption
-# ---------------------------------------------------------------------------
 
 
 @given(
@@ -127,41 +111,28 @@ def test_high_sigma_budget_consumption(
         assert layer.risk_long_used == 0
 
 
-# ---------------------------------------------------------------------------
-# Property 5: Budget exhaustion
-# ---------------------------------------------------------------------------
-
-
 @given(
     action_index=st.sampled_from([1, 2, 3, 4]),
     mu=_finite_float,
 )
 def test_budget_exhaustion_triggers_hold(action_index: int, mu: float) -> None:
     unit = map_action(action_index)
-    # Pre-load each budget so a single high-sigma BUY/SELL_n exceeds the cap.
     layer = make_layer(
         variance_threshold=1.0,
         max_risk_long_units=unit.risk_units,
         max_risk_short_units=unit.risk_units,
     )
-    # Force budget to be (cap - risk_units + 1) so action would overflow.
     if unit.direction == Direction.LONG:
-        # Pre-fill long counter to (cap), so any LONG action overflows.
         layer._risk_long_units = unit.risk_units  # type: ignore[attr-defined]
     else:
         layer._risk_short_units = unit.risk_units  # type: ignore[attr-defined]
 
-    sigma = 5.0  # > threshold
+    sigma = 5.0
     result = layer.screen(_action(action_index), mu, sigma)
     assert result.action == 0
     assert result.action_name == "HOLD"
     assert result.reason == "budget_exhausted"
     assert result.screened is True
-
-
-# ---------------------------------------------------------------------------
-# Property 6: Budget never exceeded
-# ---------------------------------------------------------------------------
 
 
 @settings(suppress_health_check=[HealthCheck.too_slow])
@@ -184,17 +155,11 @@ def test_budget_never_exceeded(
         max_risk_long_units=max_long,
         max_risk_short_units=max_short,
     )
-    # Truncate to common length so we always have both inputs.
     n = min(len(actions), len(sigmas))
     for i in range(n):
         layer.screen(_action(actions[i]), mu, sigmas[i])
         assert layer.risk_long_used <= max_long
         assert layer.risk_short_used <= max_short
-
-
-# ---------------------------------------------------------------------------
-# Property 7: Budget release
-# ---------------------------------------------------------------------------
 
 
 @given(
@@ -207,11 +172,9 @@ def test_budget_release(side: str, units_to_release: int) -> None:
         max_risk_long_units=2,
         max_risk_short_units=2,
     )
-    # Fill both budgets to the cap via high-sigma actions.
-    layer.screen(_action(2), 0.0, 5.0)  # BUY_2 → long=2
-    layer.screen(_action(4), 0.0, 5.0)  # SELL_2 → short=2
+    layer.screen(_action(2), 0.0, 5.0)
+    layer.screen(_action(4), 0.0, 5.0)
 
-    # Previously blocked BUY_1 / SELL_1 should HOLD.
     blocked_long = layer.screen(_action(1), 0.0, 5.0)
     assert blocked_long.reason == "budget_exhausted"
     blocked_short = layer.screen(_action(3), 0.0, 5.0)
@@ -226,8 +189,6 @@ def test_budget_release(side: str, units_to_release: int) -> None:
         assert layer.risk_short_used == max(0, 2 - units_to_release)
         assert layer.risk_long_used == 2
 
-    # If we released at least 1 from the side, the corresponding 1-unit action
-    # should now pass through.
     if units_to_release >= 1:
         action_idx = 1 if side == "buy" else 3
         result = layer.screen(_action(action_idx), 0.0, 5.0)

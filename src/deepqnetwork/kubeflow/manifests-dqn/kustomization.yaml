@@ -1,10 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Kustomize entrypoint for the DQN trading agent ML pipeline.
-# Referenced by FluxCD via app/base/DQNAdvisor.yaml.
-# Note: No InferenceService, DQN serving is consolidated under dqnpf-intraday.
-# Reuses the shared forecaster-workloads namespace on the same Kubeflow cluster.
 
 namespace: forecaster-workloads
 

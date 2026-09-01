@@ -69,13 +69,10 @@ def _mock_s3_with_partitions(partitions: dict) -> MagicMock:
     return s3
 
 
-# ── _iter_source_prefixes ────────────────────────────────────────────
-
 def test_iter_source_prefixes_hour_tier():
     start = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
     end = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
     prefixes = list(_iter_source_prefixes(FX_SYMBOL, "M1", start, end, 60))
-    # Inclusive end: covers start-hour and end-hour (end-keyed storage)
     assert len(prefixes) == 2
     assert prefixes[0].endswith("year=2026/month=01/day=01/hour=09/")
     assert prefixes[-1].endswith("year=2026/month=01/day=01/hour=10/")
@@ -85,7 +82,6 @@ def test_iter_source_prefixes_day_tier():
     start = datetime(2025, 12, 29, 0, 0, tzinfo=timezone.utc)
     end = datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)
     prefixes = list(_iter_source_prefixes(FX_SYMBOL, "D1", start, end, 1440))
-    # 7 days in window + 1 end-keyed day
     assert len(prefixes) == 8
     assert prefixes[0].endswith("year=2025/month=12/day=29/")
     assert prefixes[-1].endswith("year=2026/month=01/day=05/")
@@ -95,13 +91,10 @@ def test_iter_source_prefixes_month_tier():
     start = datetime(2025, 11, 1, 0, 0, tzinfo=timezone.utc)
     end = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
     prefixes = list(_iter_source_prefixes(FX_SYMBOL, "W1", start, end, 10080))
-    # Nov, Dec, Jan + end-keyed Feb
     assert len(prefixes) == 4
     assert prefixes[0].endswith("year=2025/month=11/")
     assert prefixes[-1].endswith("year=2026/month=02/")
 
-
-# ── M1 → M5 (hour tier source) ──────────────────────────────────────
 
 def test_m1_to_m5_one_hour_window():
     start = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
@@ -128,8 +121,6 @@ def test_m1_to_m5_one_hour_window():
     assert "interval=M5" in key
     assert "year=2026/month=01/day=01/hour=10" in key
 
-
-# ── M1 → H1 over daily window (day-tier output) ─────────────────────
 
 def test_m1_to_h1_daily_window():
     partitions = {}
@@ -158,8 +149,6 @@ def test_m1_to_h1_daily_window():
     assert "hour=" not in key
 
 
-# ── M1 → D1 over 30-day window (year/month-tier output) ─────────────
-
 def test_m1_to_d1_monthly_window():
     start = datetime(2025, 12, 31, 23, 0, tzinfo=timezone.utc)
     prefix = (
@@ -180,8 +169,6 @@ def test_m1_to_d1_monthly_window():
     assert "hour=" not in key
 
 
-# ── Boundary: data stored at end-of-range partition key ────────────
-
 def test_last_hour_stored_at_end_keyed_partition_is_captured():
     """Real pipeline stores [23:00, 00:00) data under the 00:00 partition.
 
@@ -189,11 +176,8 @@ def test_last_hour_stored_at_end_keyed_partition_is_captured():
     would be silently dropped. This test stores data at the *end*-keyed
     prefix (hour=00 of next day) matching the real download layout.
     """
-    # Window: [Jan 31 00:00, Feb 1 00:00)
     end = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
-    # Bars timestamped Jan 31 23:00 – 23:59 (last hour of Jan 31)
     last_hour_start = datetime(2026, 1, 31, 23, 0, tzinfo=timezone.utc)
-    # Stored at Feb 1 00:00 hour partition (end-keyed, as real pipeline does)
     prefix = (
         f"marketdata/interval-price/symbol={FX_SYMBOL}/interval=M1"
         f"/year=2026/month=02/day=01/hour=00/"
@@ -202,16 +186,12 @@ def test_last_hour_stored_at_end_keyed_partition_is_captured():
 
     result = aggregate(FX_SYMBOL, "M1", "H1", end, 1440, 60, s3, BUCKET)
 
-    # One H1 bar for the captured hour
     assert len(result) == 1
     assert result.iloc[0]["Timestamp"] == pd.Timestamp("2026-01-31 23:00", tz="UTC")
-    assert result.iloc[0]["Volume"] == 600  # 60 mins × 10
+    assert result.iloc[0]["Volume"] == 600
 
-
-# ── D1 → W1 over 7-day window (day-tier source → year/month output) ─
 
 def test_d1_to_w1_weekly_window():
-    # End at Monday 2026-01-05 00:00 → window [2025-12-29 Mon, 2026-01-05 Mon)
     end = datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)
     partitions = {}
     for i in range(7):
@@ -228,11 +208,10 @@ def test_d1_to_w1_weekly_window():
         FX_SYMBOL, "D1", "W1", end, 10080, 1440, s3, BUCKET,
     )
 
-    # One Monday-anchored weekly bar
     assert len(result) == 1
     week_start = result.iloc[0]["Timestamp"]
     assert week_start == pd.Timestamp("2025-12-29", tz="UTC")
-    assert result.iloc[0]["Volume"] == 70  # 7 days × 10
+    assert result.iloc[0]["Volume"] == 70
 
     key = s3.put_object.call_args.kwargs["Key"]
     assert "interval=W1" in key
@@ -240,10 +219,7 @@ def test_d1_to_w1_weekly_window():
     assert "day=" not in key
 
 
-# ── D1 → MN1 over a calendar month ──────────────────────────────────
-
 def test_d1_to_mn1_calendar_month():
-    # Window [2025-12-01, 2026-01-01), 31 days = 44640 minutes
     end = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     partitions = {}
     for day in range(1, 32):
@@ -262,7 +238,7 @@ def test_d1_to_mn1_calendar_month():
     assert len(result) == 1
     month_start = result.iloc[0]["Timestamp"]
     assert month_start == pd.Timestamp("2025-12-01", tz="UTC")
-    assert result.iloc[0]["Volume"] == 310  # 31 days × 10
+    assert result.iloc[0]["Volume"] == 310
 
     key = s3.put_object.call_args.kwargs["Key"]
     assert "interval=MN1" in key
@@ -288,7 +264,7 @@ def test_d1_to_mn1_ignores_zero_window_and_uses_calendar_month():
 
     assert len(result) == 1
     assert result.iloc[0]["Timestamp"] == pd.Timestamp("2025-12-01", tz="UTC")
-    assert result.iloc[0]["Volume"] == 310  # 31 days × 10
+    assert result.iloc[0]["Volume"] == 310
 
     key = s3.put_object.call_args.kwargs["Key"]
     assert "interval=MN1" in key
@@ -296,8 +272,6 @@ def test_d1_to_mn1_ignores_zero_window_and_uses_calendar_month():
     assert "day=" not in key
     assert "hour=" not in key
 
-
-# ── Interval validation ─────────────────────────────────────────────
 
 def test_target_not_multiple_of_source_raises():
     with pytest.raises(ValueError, match="must be a multiple"):
@@ -320,15 +294,12 @@ def test_mn1_from_weekly_source_rejected():
 
 
 def test_mn1_from_daily_source_accepted():
-    # Validation passes; empty partitions → no upload but no error.
     s3 = _mock_s3_with_partitions({})
     result = aggregate(
         FX_SYMBOL, "D1", "MN1", EXECUTION_DT, 44640, 1440, s3, BUCKET,
     )
     assert result.empty
 
-
-# ── Missing / empty partitions ──────────────────────────────────────
 
 def test_some_source_partitions_empty_still_succeeds():
     partitions = {}
@@ -356,8 +327,6 @@ def test_all_partitions_empty_does_not_upload():
     assert result.empty
     s3.put_object.assert_not_called()
 
-
-# ── Window boundary / dedup ─────────────────────────────────────────
 
 def test_rows_outside_window_are_excluded():
     start = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)

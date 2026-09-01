@@ -34,15 +34,11 @@ class TestEvaluateByHour:
         model = ProbabilisticTransformer(config)
         model.eval()
 
-        # Create a minimal dataset that spans all 24 hours
-        # We need at least one sample per hour. Each sample needs a (36, 16) feature tensor.
-        num_samples = 24 * 3  # 3 samples per hour for robustness
+        num_samples = 24 * 3
 
-        # Create fake features and labels
         features = np.random.randn(num_samples, 36, 16).astype(np.float32)
         labels = np.random.randn(num_samples, 1).astype(np.float32)
 
-        # Create a mock dataset that returns our fake data
         class MockDataset(torch.utils.data.Dataset):
             def __len__(self):
                 return num_samples
@@ -55,8 +51,6 @@ class TestEvaluateByHour:
 
         mock_dataset = MockDataset()
 
-        # Create timestamps spanning all 24 hours
-        # Use a single day with samples distributed across all hours
         base_date = pd.Timestamp("2023-06-01", tz="UTC")
         timestamps = pd.Series(
             [base_date + pd.Timedelta(hours=i // 3, minutes=(i % 3) * 5) for i in range(num_samples)]
@@ -64,9 +58,7 @@ class TestEvaluateByHour:
 
         result = evaluate_by_hour(model, mock_dataset, timestamps, config)
 
-        # Should have exactly 24 rows
         assert len(result) == 24
-        # Index should be hours 0-23
         assert list(result.index) == list(range(24))
 
     def test_evaluate_by_hour_has_expected_columns(self):
@@ -107,7 +99,6 @@ class TestDirectionalAccuracy:
 
     def test_da_all_same_sign_returns_1(self):
         """If all mu and actual have the same sign, DA should be 1.0."""
-        # All positive
         mu = np.array([0.1, 0.5, 0.3, 0.8, 0.2])
         actual = np.array([0.2, 0.1, 0.4, 0.6, 0.9])
         assert _compute_directional_accuracy(mu, actual) == 1.0
@@ -132,14 +123,13 @@ class TestCoveredRatio95:
         """If all actuals are exactly equal to mu, CR95 should be 1.0."""
         mu = np.array([0.1, -0.2, 0.3, 0.0, -0.5])
         sigma = np.array([1.0, 1.0, 1.0, 1.0, 1.0])
-        actual = mu.copy()  # actual == mu, so |actual - mu| = 0 <= 2*sigma
+        actual = mu.copy()
         assert _compute_covered_ratio_95(mu, sigma, actual) == 1.0
 
     def test_cr95_actuals_far_from_mu_returns_0(self):
         """If all actuals are far outside 2*sigma, CR95 should be 0.0."""
         mu = np.array([0.0, 0.0, 0.0])
         sigma = np.array([0.1, 0.1, 0.1])
-        # |actual - mu| = 10.0 >> 2*0.1 = 0.2
         actual = np.array([10.0, -10.0, 10.0])
         assert _compute_covered_ratio_95(mu, sigma, actual) == 0.0
 
@@ -157,7 +147,6 @@ class TestRMSE:
         """RMSE for a known case: mu=[1,2,3], actual=[1,2,4] -> sqrt(1/3)."""
         mu = np.array([1.0, 2.0, 3.0])
         actual = np.array([1.0, 2.0, 4.0])
-        # (0^2 + 0^2 + 1^2) / 3 = 1/3, sqrt(1/3) ≈ 0.5774
         expected = math.sqrt(1.0 / 3.0)
         assert abs(_compute_rmse(mu, actual) - expected) < 1e-10
 

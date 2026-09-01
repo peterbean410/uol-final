@@ -73,7 +73,6 @@ class QNetwork(nn.Module):
         self.action_dim = action_dim
         self.hidden_dims = hidden_dims
 
-        # Build shared hidden layers
         layers: list[nn.Module] = []
         in_dim = state_dim
         for h_dim in hidden_dims:
@@ -89,7 +88,6 @@ class QNetwork(nn.Module):
         self.output_layer = nn.Linear(hidden_dims[-1], action_dim)
         self._init_output_layer(self.output_layer)
 
-        # Initialise hidden layers
         self._init_hidden_layers()
 
     def _init_hidden_layers(self) -> None:

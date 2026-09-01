@@ -178,7 +178,6 @@ class LifecycleManager:
 
         Requirements: 6.4
         """
-        # Check if a production model already exists
         production_models = self.registry_client.query_models(
             symbol=symbol, horizon=horizon, stage="production"
         )
@@ -192,7 +191,6 @@ class LifecycleManager:
             )
             return None
 
-        # Find staging models for this symbol/horizon
         staging_models = self.registry_client.query_models(
             symbol=symbol, horizon=horizon, stage="staging"
         )
@@ -206,8 +204,6 @@ class LifecycleManager:
             )
             return None
 
-        # Find the version_id of the first staging model
-        # Query the registry to get the version_id from custom properties
         first_model = staging_models[0]
         version_id = self._find_version_id(first_model, symbol, horizon)
 

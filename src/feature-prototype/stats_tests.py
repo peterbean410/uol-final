@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import kurtosis, norm, skew
 
-_EULER = 0.5772156649015329  # Euler–Mascheroni constant (gamma)
+_EULER = 0.5772156649015329
 
 
 def pesaran_timmermann(pred: np.ndarray, actual: np.ndarray) -> dict:
@@ -26,10 +26,10 @@ def pesaran_timmermann(pred: np.ndarray, actual: np.ndarray) -> dict:
     sp = np.sign(pred[mask])
     sa = np.sign(actual[mask])
     n = int(sa.size)
-    p = float(np.mean(sp == sa))            # directional accuracy
-    px = float(np.mean(sp > 0))             # P(predict up)
-    py = float(np.mean(sa > 0))             # P(actual up)
-    pstar = py * px + (1 - py) * (1 - px)   # accuracy expected under independence
+    p = float(np.mean(sp == sa))
+    px = float(np.mean(sp > 0))
+    py = float(np.mean(sa > 0))
+    pstar = py * px + (1 - py) * (1 - px)
     var_p = pstar * (1 - pstar) / n
     var_pstar = (
         ((2 * py - 1) ** 2) * px * (1 - px) / n
@@ -59,7 +59,7 @@ def probabilistic_sharpe_ratio(returns: np.ndarray, sr_star: float = 0.0) -> dic
     n = int(r.size)
     sr = _sharpe(r)
     g3 = float(skew(r))
-    g4 = float(kurtosis(r, fisher=False))  # non-excess (3 for normal)
+    g4 = float(kurtosis(r, fisher=False))
     denom = np.sqrt(max(1e-12, 1.0 - g3 * sr + ((g4 - 1.0) / 4.0) * sr ** 2))
     z = (sr - sr_star) * np.sqrt(max(1, n - 1)) / denom
     return {

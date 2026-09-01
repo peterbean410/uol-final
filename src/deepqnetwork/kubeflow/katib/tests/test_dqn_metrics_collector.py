@@ -27,11 +27,6 @@ from deepqnetwork.kubeflow.katib.dqn_metrics_collector import (
 )
 
 
-# ---------------------------------------------------------------------------
-# parse_log_line
-# ---------------------------------------------------------------------------
-
-
 class TestParseLogLine:
     def test_valid_json(self):
         line = '{"message": "hello", "level": "INFO"}'
@@ -49,11 +44,6 @@ class TestParseLogLine:
         line = '  {"key": "value"}  \n'
         result = parse_log_line(line)
         assert result == {"key": "value"}
-
-
-# ---------------------------------------------------------------------------
-# extract_avg_episode_reward
-# ---------------------------------------------------------------------------
 
 
 class TestExtractAvgEpisodeReward:
@@ -90,11 +80,6 @@ class TestExtractAvgEpisodeReward:
         assert extract_avg_episode_reward(entry) is None
 
 
-# ---------------------------------------------------------------------------
-# extract_episode
-# ---------------------------------------------------------------------------
-
-
 class TestExtractEpisode:
     def test_direct_field(self):
         entry = {"episode": 10, "message": "training"}
@@ -115,11 +100,6 @@ class TestExtractEpisode:
     def test_not_present(self):
         entry = {"message": "no episode info", "level": "INFO"}
         assert extract_episode(entry) is None
-
-
-# ---------------------------------------------------------------------------
-# collect_metrics_from_stream
-# ---------------------------------------------------------------------------
 
 
 class TestCollectMetricsFromStream:
@@ -168,11 +148,6 @@ class TestCollectMetricsFromStream:
         assert result == []
 
 
-# ---------------------------------------------------------------------------
-# get_final_avg_episode_reward
-# ---------------------------------------------------------------------------
-
-
 class TestGetFinalAvgEpisodeReward:
     def test_returns_last(self):
         metrics = [(1, 10.0), (2, 20.0), (3, 30.0)]
@@ -185,22 +160,12 @@ class TestGetFinalAvgEpisodeReward:
         assert get_final_avg_episode_reward([(0, 5.5)]) == (0, 5.5)
 
 
-# ---------------------------------------------------------------------------
-# format_katib_metric
-# ---------------------------------------------------------------------------
-
-
 class TestFormatKatibMetric:
     def test_format(self):
         assert format_katib_metric("avg_episode_reward", 42.5) == "avg_episode_reward=42.5"
 
     def test_negative_value(self):
         assert format_katib_metric("avg_episode_reward", -3.14) == "avg_episode_reward=-3.14"
-
-
-# ---------------------------------------------------------------------------
-# determine_best_configuration
-# ---------------------------------------------------------------------------
 
 
 class TestDetermineBestConfiguration:
@@ -238,11 +203,6 @@ class TestDetermineBestConfiguration:
         assert best.avg_episode_reward == -2.0
 
 
-# ---------------------------------------------------------------------------
-# output_best_configuration
-# ---------------------------------------------------------------------------
-
-
 class TestOutputBestConfiguration:
     def test_json_structure(self):
         config = DQNBestConfiguration(
@@ -269,7 +229,6 @@ class TestOutputBestConfiguration:
             output_path = str(Path(tmpdir) / "subdir" / "best_config.json")
             json_str = output_best_configuration(config, output_path=output_path)
 
-            # File should exist and contain valid JSON
             written = Path(output_path).read_text()
             assert json.loads(written) == json.loads(json_str)
 
@@ -281,12 +240,7 @@ class TestOutputBestConfiguration:
         )
         result = output_best_configuration(config, output_path=None)
         assert isinstance(result, str)
-        assert json.loads(result)  # Valid JSON
-
-
-# ---------------------------------------------------------------------------
-# record_trial_in_registry (import failure path)
-# ---------------------------------------------------------------------------
+        assert json.loads(result)
 
 
 class TestRecordTrialInRegistry:
@@ -301,6 +255,5 @@ class TestRecordTrialInRegistry:
             hyperparameters={"lr": 0.001},
             avg_episode_reward=25.0,
         )
-        # This should not raise; it handles ImportError gracefully
         result = record_trial_in_registry(trial)
         assert result is None

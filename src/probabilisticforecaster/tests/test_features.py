@@ -44,7 +44,6 @@ class TestComputeFeaturesValidation:
 
     def test_zero_previous_price_raises_value_error(self):
         df = _make_ohlc_df(1500)
-        # Set a price to zero so the next bar's return computation fails
         df.loc[500, "High"] = 0.0
         with pytest.raises(ValueError, match="Zero price at index"):
             compute_features(df)
@@ -73,7 +72,6 @@ class TestComputeFeaturesOutput:
         assert list(features_df.columns) == expected
 
     def test_output_drops_first_1440_rows(self, features_df):
-        # Input has 2000 rows, output should have 2000 - 1440 = 560 rows
         assert len(features_df) == 560
 
     def test_no_nan_values_in_output(self, features_df):
@@ -107,7 +105,6 @@ class TestComputeFeaturesZeroStd:
             }
         )
         features = compute_features(df)
-        # All z-score columns should be 0 when prices are constant
         zscore_cols = [
             "z_high", "z_low", "z_close", "z_hl_spread",
             "z_ema5", "z_ema20", "z_ema30", "z_ema60",
@@ -122,7 +119,6 @@ class TestComputeFeaturesTimeFeatures:
     def test_midnight_time_features(self):
         """At midnight (00:00), sin should be 0 and cos should be 1."""
         n = 1500
-        # Start at midnight so the first bar after drop is at a known time
         timestamps = pd.date_range("2023-01-01 00:00", periods=n, freq="5min")
         rng = np.random.default_rng(42)
         close = 100.0 + np.cumsum(rng.normal(0, 0.01, n))
@@ -137,7 +133,6 @@ class TestComputeFeaturesTimeFeatures:
             }
         )
         features = compute_features(df)
-        # Find rows at midnight
         midnight_mask = features.index.hour == 0
         midnight_mask &= features.index.minute == 0
         if midnight_mask.any():

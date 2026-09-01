@@ -48,27 +48,12 @@ from dqnpf.kubeflow.pipeline.config_schema import (
 
 logger = logging.getLogger(__name__)
 
-# dqn/base installs the binary as /usr/local/bin/modelenv-server (see
-# Dockerfile.dqn-base); the DQN training/backtest components reference the same
-# path. Match it here.
 _MODELENV_BINARY = os.environ.get(
     "MODELENV_BINARY", "/usr/local/bin/modelenv-server"
 )
-# modelenv runs in Training mode (its default) and preloads market data before
-# binding the gRPC port. Even reading from the warm cache PVC this takes longer
-# than 30s, so allow the same headroom the DQN backtest component uses.
-# Seconds to wait for the modelenv sidecar's port. Its startup preload can take
-# minutes on a cold cache; 60s killed it after the eoh/eod/eow/eom consolidation
-# made the "latest" snapshots full-history. Env-overridable; mirrors the DQN
-# train/backtest components' fix.
 _MODELENV_HEALTHCHECK_TIMEOUT_S = float(
     os.environ.get("MODELENV_HEALTH_CHECK_TIMEOUT", "3600")
 )
-
-
-# ---------------------------------------------------------------------------
-# modelenv sidecar lifecycle
-# ---------------------------------------------------------------------------
 
 
 def _wait_for_port(
@@ -139,11 +124,6 @@ def _start_modelenv_sidecar(
     liquidation is ON by default at 23h UTC (modelenv T-6.3-08); a fully
     liquidation-free run must start modelenv with ``--no-session-liquidation``.
     """
-    # Coerce to float before the truthiness guards below. A string like "0.0"
-    # (e.g. a KFP str pipeline param) is truthy, which would forward
-    # `--swap-rate-long 0.0` and wrongly OVERRIDE modelenv's built-in default
-    # table with zero swap. After coercion only a genuinely non-zero rate is
-    # forwarded; 0.0 (float) is falsy and leaves the built-in table in place.
     def _as_rate(value: object) -> float:
         try:
             return float(value)  # type: ignore[arg-type]
@@ -168,11 +148,6 @@ def _start_modelenv_sidecar(
             }
         )
     )
-    # modelenv-server takes --addr host:port (default 0.0.0.0:50051) and
-    # rejects unknown flags, so --port is invalid. Bind on all interfaces so
-    # the localhost healthcheck below connects. Inherit this process's
-    # stdout/stderr so modelenv's startup logs land in the pod logs for
-    # debugging (rather than being swallowed by an undrained pipe).
     cmd = [_MODELENV_BINARY, "--addr", f"0.0.0.0:{port}", "--symbol", symbol]
     if trade_log_path:
         cmd += ["--trade-log", trade_log_path]
@@ -181,17 +156,10 @@ def _start_modelenv_sidecar(
             cmd += ["--swap-rate-long", str(swap_rate_long)]
         if swap_rate_short:
             cmd += ["--swap-rate-short", str(swap_rate_short)]
-    # End-of-session liquidation: forward the session-hour window so modelenv
-    # liquidates at the same boundary the date-range episodes are sliced on.
     if trading_session_hour_start is not None:
         cmd += ["--trading-session-hour-start", str(trading_session_hour_start)]
     if trading_session_hour_end is not None:
         cmd += ["--trading-session-hour-end", str(trading_session_hour_end)]
-    # Scope modelenv's startup preload to the backtest window. Without this,
-    # modelenv preloads the full M1 reference span = the LATEST snapshot, which
-    # since the snapshot consolidation is the full 2012->now history (5.3M M1
-    # rows); that OOMs the 8Gi pod and blows the readiness timeout. Passing the
-    # window makes the preload resolve/load only the eval range.
     if training_date_start:
         cmd += ["--training-date-start", training_date_start]
     if training_date_end:
@@ -210,11 +178,6 @@ def _stop_modelenv_sidecar(proc: subprocess.Popen) -> None:
         except subprocess.TimeoutExpired:
             proc.kill()
     logger.info(json.dumps({"event": "modelenv.stopped"}))
-
-
-# ---------------------------------------------------------------------------
-# Pure helpers (unit-tested)
-# ---------------------------------------------------------------------------
 
 
 def _load_pipeline_config(yaml_path: str) -> DqnpfPipelineConfig:
@@ -294,11 +257,6 @@ def _emit_summary_logs(
     )
 
 
-# ---------------------------------------------------------------------------
-# Registry resolver, injected at call sites so tests can stub it
-# ---------------------------------------------------------------------------
-
-
 CheckpointResolver = Callable[[str, str], str]
 """Signature: ``resolve(model_name, lifecycle_stage) -> checkpoint_s3_path``."""
 
@@ -327,11 +285,6 @@ def _default_checkpoint_resolver(model_name: str, lifecycle_stage: str) -> str:
     return resolve_production_checkpoint(model_name, registry_url=registry_url)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-
 def _materialize_checkpoint(uri: str, dest_dir: str, name: str) -> str:
     """Resolve a checkpoint URI to a readable local file path.
 
@@ -351,8 +304,6 @@ def _materialize_checkpoint(uri: str, dest_dir: str, name: str) -> str:
     if scheme not in ("minio", "s3"):
         return uri
 
-    # deepqnetwork.artifact_io routes minio:// to the in-cluster MinIO (using
-    # MINIO_ACCESS_KEY/MINIO_SECRET_KEY) and s3:// to AWS S3.
     from deepqnetwork import artifact_io
 
     basename = os.path.basename(urlparse(uri).path) or "checkpoint"
@@ -461,8 +412,6 @@ def run_dqnpf_backtest(
         forecaster_model_registry_name, pipeline_cfg.forecaster_lifecycle_stage
     )
 
-    # The resolved paths are KFP artifact URIs (minio://, s3://); torch.load
-    # needs local files, so download them before the backtest opens them.
     ckpt_dir = tempfile.mkdtemp(prefix="dqnpf-ckpt-")
     dqn_local = _materialize_checkpoint(dqn_path, ckpt_dir, "dqn")
     fc_local = _materialize_checkpoint(fc_path, ckpt_dir, "forecaster")
@@ -485,19 +434,12 @@ def run_dqnpf_backtest(
         )
     )
 
-    # modelenv only writes the trade log to a local file, so point it at a
-    # pod-local temp path and export that to the downloadable output afterwards.
     local_trade_log = (
         os.path.join(tempfile.mkdtemp(prefix="dqnpf-tradelog-"), "trades.jsonl")
         if trade_log_output_path
         else None
     )
 
-    # In date-range mode, align modelenv's end-of-session liquidation with the
-    # hour-bound episode windows the backtest runs. The session hours default to
-    # the window the DQN was trained on (read straight from the checkpoint,
-    # without building a full advisor) unless the config overrides them; legacy
-    # fixed-window mode resolves to None and leaves liquidation off.
     session_hour_start: int | None = None
     session_hour_end: int | None = None
     if integration_cfg.date_start:
@@ -523,7 +465,6 @@ def run_dqnpf_backtest(
         comparison = runner(integration_cfg)
         report = validate_thresholds(comparison)
     finally:
-        # Stop the sidecar first so the trade log is flushed/closed before export.
         if sidecar is not None:
             _stop_modelenv_sidecar(sidecar)
         if trade_log_output_path and local_trade_log is not None:
@@ -536,8 +477,6 @@ def run_dqnpf_backtest(
         model_provenance={
             "dqn_model_registry_name": dqn_model_registry_name,
             "forecaster_model_registry_name": forecaster_model_registry_name,
-            # Resolved registry URIs (pre-download), the canonical checkpoint
-            # identity. integration_config only has the local temp paths.
             "dqn_checkpoint_uri": dqn_path,
             "forecaster_checkpoint_uri": fc_path,
         },
@@ -551,7 +490,6 @@ def run_dqnpf_backtest(
     return payload
 
 
-# Re-export for ergonomic imports in tests
 __all__ = [
     "CheckpointResolver",
     "run_dqnpf_backtest",

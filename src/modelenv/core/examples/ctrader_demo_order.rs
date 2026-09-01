@@ -23,9 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let client_secret = std::env::var("CTRADER_APP_CLIENT_SECRET")?;
     let access_token = std::env::var("CTRADER_ACCESS_TOKEN")?;
     let symbol = std::env::var("CTRADER_SYMBOL").unwrap_or_else(|_| "USDJPY".into());
-    // cTrader API volume is centi-units (base_units × 100); 0.01 lot = 100_000
-    // (the USDJPY minimum, verified on demo). See orders::lots_to_volume.
-    let volume: i64 = std::env::var("CTRADER_VOLUME")
+            let volume: i64 = std::env::var("CTRADER_VOLUME")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| orders::lots_to_volume(0.01));
@@ -40,11 +38,10 @@ async fn main() -> anyhow::Result<()> {
     let demo = accounts
         .iter()
         .find(|a| a.is_live == Some(false))
-        .ok_or_else(|| anyhow::anyhow!("no demo account reachable, refusing to trade"))?;
+        .ok_or_else(|| anyhow::anyhow!("no demo account reachable (refusing to trade"))?;
     let account_id = demo.ctid_trader_account_id as i64;
-    // Safety: never trade a live account from this validation runner.
-    if demo.is_live == Some(true) {
-        anyhow::bail!("account {account_id} is LIVE, refusing");
+        if demo.is_live == Some(true) {
+        anyhow::bail!("account {account_id} is LIVE) refusing");
     }
     eprintln!("[demo-order] demo account {account_id}; account auth ...");
     auth::account_authenticate(&conn, &access_token, account_id, timeout).await?;

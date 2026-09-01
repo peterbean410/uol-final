@@ -1,4 +1,3 @@
-// gRPC server implementation for FX RL Model Environment
 use anyhow::Result;
 use futures::stream::{self, Stream};
 use std::pin::Pin;

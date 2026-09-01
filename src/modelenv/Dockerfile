@@ -1,20 +1,5 @@
-# syntax=docker/dockerfile:1.7
-# Multi-stage build for modelenv-server (Rust + tonic gRPC).
-#
-# Rebuild marker: 283c5a5-reward-retrigger (force a full chain rebuild; the
-# amd64 images-chain job flaked on 283c5a5, so :latest was never re-merged
-# with the linear-reward modelenv + gamma=0.999 dqn images for the retrain).
-#
-# The builder pins itself to the *build* platform (BUILDPLATFORM) and
-# cross-compiles to the requested TARGETARCH, instead of running the whole Rust
-# toolchain under QEMU emulation. Emulated cargo builds of a tonic/h2 server are
-# far too slow/fragile for CI multi-arch (amd64 + arm64 for the Grace-Blackwell
-# spark GPU nodes) and were timing out the image chain. The crate has no
-# native-TLS / openssl / ring deps (plaintext in-pod gRPC on localhost), so a
-# plain GNU cross toolchain is all that's needed; no cross-compiled C libs.
 FROM --platform=$BUILDPLATFORM rust:1.85-slim-bookworm AS builder
 
-# docker's TARGETARCH (amd64 | arm64) for the platform currently being built.
 ARG TARGETARCH
 
 RUN apt-get update \
@@ -26,10 +11,6 @@ RUN apt-get update \
         binutils-aarch64-linux-gnu \
  && rm -rf /var/lib/apt/lists/*
 
-# Map docker's TARGETARCH -> Rust target triple, install that target's std, and
-# point cargo at the GNU cross linker for aarch64. protoc and proc-macros run on
-# the native build host (BUILDPLATFORM), so only the emitted object code is
-# cross-targeted, no QEMU.
 RUN case "${TARGETARCH}" in \
         amd64) echo "x86_64-unknown-linux-gnu"  > /tmp/rust-target ;; \
         arm64) echo "aarch64-unknown-linux-gnu" > /tmp/rust-target ;; \

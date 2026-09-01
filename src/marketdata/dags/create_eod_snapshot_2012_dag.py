@@ -43,15 +43,8 @@ _ECR_IMAGE = (
 )
 
 _INTERVALS = ["H1", "H4", "D1"]
-# aggregate_daily_interval_price_2012 runs Tue–Sat (cron "0 0 * * 2-6").
-# Python weekday(): Mon=0…Sun=6. Skip the wait on Sun and Mon.
 _NO_UPSTREAM_WEEKDAYS = {6, 0}
 
-# First day owned by the 2020 aggregate lane. NOTE: on this Airflow 3
-# deployment data_interval_end == logical_date (point intervals), so the run
-# covering day 2020-01-01 has data_interval_end 2020-01-01 00:00, NOT
-# logical+1day (verified in dag_run: start==end==logical). Runs at or past
-# this wait on aggregate_daily_interval_price_2020 instead of _2012.
 _AGG_2020_FIRST_INTERVAL_END = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
 
@@ -66,7 +59,7 @@ def _make_branch(wait_2012_task_id: str, wait_2020_task_id: str, skip_task_id: s
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="create_eod_snapshot_2012",
     default_args=default_args,
     description=(

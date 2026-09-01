@@ -17,11 +17,6 @@ from probabilisticforecaster.config import ForecasterConfig
 from probabilisticforecaster.strategy import DirectionalStrategy
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def predictions_and_prices(draw):
     """Generate synthetic predictions and aligned prices for backtest testing.
@@ -36,29 +31,24 @@ def predictions_and_prices(draw):
         - prices_df has columns: timestamp, close
         - prices_df has one extra row beyond predictions for PnL calculation
     """
-    # Generate 1-5 days of data
     num_days = draw(st.integers(min_value=1, max_value=5))
 
-    # Start date: pick a weekday
     start_date = draw(
         st.dates(
-            min_value=datetime(2023, 1, 2).date(),  # Monday
+            min_value=datetime(2023, 1, 2).date(),
             max_value=datetime(2023, 12, 29).date(),
         )
     )
-    # Ensure we start on a weekday
     while start_date.weekday() >= 5:
         start_date = start_date + timedelta(days=1)
 
-    # Generate bars per day (between 5 and 50 five-minute bars per day)
     bars_per_day = draw(st.integers(min_value=5, max_value=50))
 
-    # Build timestamps across multiple days
     all_timestamps = []
     current_date = start_date
     days_added = 0
     while days_added < num_days:
-        if current_date.weekday() < 5:  # Skip weekends
+        if current_date.weekday() < 5:
             base_dt = datetime(current_date.year, current_date.month, current_date.day, 8, 0)
             for i in range(bars_per_day):
                 ts = base_dt + timedelta(minutes=5 * i)
@@ -68,11 +58,9 @@ def predictions_and_prices(draw):
 
     assume(len(all_timestamps) >= 2)
 
-    # Generate prices: random walk starting from a base price
     base_price = draw(st.floats(min_value=100.0, max_value=200.0))
     n_prices = len(all_timestamps)
 
-    # Generate small returns for price changes
     returns = [
         draw(
             st.floats(
@@ -91,12 +79,9 @@ def predictions_and_prices(draw):
         assume(next_price > 0)
         prices.append(next_price)
 
-    # Predictions are for all timestamps except the last (need next bar for PnL)
     pred_timestamps = all_timestamps[:-1]
     price_timestamps = all_timestamps
 
-    # Generate mu and sigma for predictions
-    # Use one_of to avoid filtering: either positive or negative range
     mu_strategy = st.one_of(
         st.floats(min_value=1e-6, max_value=0.01, allow_nan=False, allow_infinity=False),
         st.floats(min_value=-0.01, max_value=-1e-6, allow_nan=False, allow_infinity=False),
@@ -132,11 +117,6 @@ def predictions_and_prices(draw):
     return predictions_df, prices_df
 
 
-# ---------------------------------------------------------------------------
-# Property 12: Daily PnL Aggregation Consistency
-# ---------------------------------------------------------------------------
-
-
 class TestDailyPnLAggregationConsistency:
     """Property 12: Daily PnL Aggregation Consistency.
 
@@ -165,11 +145,9 @@ class TestDailyPnLAggregationConsistency:
 
         result = run_backtest(predictions_df, prices_df, strategy, config)
 
-        # If no valid PnL records, daily_pnl should be empty
         if result.daily_pnl.empty:
             return
 
-        # Manually compute intraday PnLs
         pred_timestamps = pd.to_datetime(predictions_df["timestamp"])
         price_lookup = pd.Series(
             prices_df["close"].values,
@@ -210,7 +188,6 @@ class TestDailyPnLAggregationConsistency:
                 manual_pnl_by_date[date_key] = 0.0
             manual_pnl_by_date[date_key] += pnl
 
-        # Compare manual daily PnL with reported daily PnL
         for date_val in result.daily_pnl.index:
             date_key = date_val.date()
             reported_daily = result.daily_pnl[date_val]
@@ -238,16 +215,13 @@ class TestDailyPnLAggregationConsistency:
 
         result = run_backtest(predictions_df, prices_df, strategy, config)
 
-        # If no valid PnL records, both should be zero/empty
         if result.daily_pnl.empty:
             if not result.hourly_pnl.empty:
                 assert result.hourly_pnl["total_pnl"].sum() == 0.0
             return
 
-        # Total PnL from daily series
         total_pnl_from_daily = result.daily_pnl.sum()
 
-        # Total PnL from hourly aggregation
         total_pnl_from_hourly = result.hourly_pnl["total_pnl"].sum()
 
         assert math.isclose(
@@ -260,11 +234,6 @@ class TestDailyPnLAggregationConsistency:
         )
 
 
-# ---------------------------------------------------------------------------
-# Hypothesis strategies for generating daily PnL series
-# ---------------------------------------------------------------------------
-
-
 def daily_pnl_series(min_size: int = 2, max_size: int = 500):
     """Generate a non-empty pandas Series of daily PnL values."""
     return st.lists(
@@ -272,11 +241,6 @@ def daily_pnl_series(min_size: int = 2, max_size: int = 500):
         min_size=min_size,
         max_size=max_size,
     ).map(lambda vals: pd.Series(vals, dtype=float))
-
-
-# ---------------------------------------------------------------------------
-# Property 13: Portfolio Metrics Formula Correctness
-# ---------------------------------------------------------------------------
 
 
 class TestPortfolioMetricsFormulaCorrectness:
@@ -297,18 +261,14 @@ class TestPortfolioMetricsFormulaCorrectness:
 
         **Validates: Requirements 10.3**
         """
-        # Need std > 0 for a meaningful Sharpe ratio
         std_val = pnl_values.std()
         assume(std_val > 0)
         assume(math.isfinite(std_val))
         assume(math.isfinite(pnl_values.mean()))
 
-        # Compute expected Sharpe ratio
         expected_sharpe = (pnl_values.mean() / pnl_values.std()) * math.sqrt(252)
         assume(math.isfinite(expected_sharpe))
 
-        # Compute actual Sharpe ratio using the same formula as backtest.py
-        # (backtest.py uses: daily_pnl.mean() / daily_pnl.std() * np.sqrt(252))
         actual_sharpe = (pnl_values.mean() / pnl_values.std()) * np.sqrt(252)
 
         assert math.isclose(actual_sharpe, expected_sharpe, rel_tol=1e-9, abs_tol=1e-12), (
@@ -323,7 +283,6 @@ class TestPortfolioMetricsFormulaCorrectness:
 
         **Validates: Requirements 10.4**
         """
-        # Compute expected MDD manually: largest peak-to-trough decline
         cumulative = pnl_values.cumsum()
         running_max = cumulative.cummax()
         drawdowns = running_max - cumulative
@@ -331,7 +290,6 @@ class TestPortfolioMetricsFormulaCorrectness:
 
         assume(math.isfinite(expected_mdd))
 
-        # Compute actual MDD using the helper function
         actual_mdd = _compute_max_drawdown(pnl_values)
 
         assert math.isclose(actual_mdd, expected_mdd, rel_tol=1e-9, abs_tol=1e-12), (
@@ -361,8 +319,6 @@ class TestPortfolioMetricsFormulaCorrectness:
 
         **Validates: Requirements 10.4**
         """
-        # If all PnL values are >= 0, cumulative sum is monotonically non-decreasing
-        # so there is no peak-to-trough decline
         mdd = _compute_max_drawdown(pnl_values)
         assert mdd == 0.0, (
             f"Expected MDD=0 for non-negative PnL series, got {mdd}"

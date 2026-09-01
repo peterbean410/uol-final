@@ -31,22 +31,11 @@ _ECR_IMAGE = (
     "/forex-marketdata-download-interval-price-data:latest"
 )
 
-# forexnewsapi.com uses dash-separated pairs.
 FX_PAIRS = ["USD-JPY", "EUR-USD", "XAU-USD"]
 
-# Gemma is called directly, the same way the chatbot does from the injected
-# chatbox namespace. The task pod opts into the mesh with the
-# sidecar.istio.io/inject label below; peterbean's allow-airflow-to-gemma
-# AuthorizationPolicy matches the resulting airflow-worker identity. vLLM itself
-# has no auth, so no credential is involved.
 _LLM_ENDPOINT = "http://gemma-4-31b-predictor.peterbean.svc.cluster.local"
 _LLM_MODEL = "gemma-4-31b-it"
 
-# The airflow namespace is not labelled for injection, so pods opt in
-# individually. This label (not an annotation) is what the
-# object.sidecar-injector.istio.io webhook selects on. Istio injects native
-# sidecars here, so the proxy exits with the task and the pod still reaches
-# Succeeded rather than hanging.
 _ISTIO_INJECT_LABELS = {"sidecar.istio.io/inject": "true"}
 
 
@@ -115,8 +104,6 @@ with DAG(
                 requests={"cpu": "200m", "memory": "512Mi"},
                 limits={"cpu": "1000m", "memory": "2Gi"},
             ),
-            # The first run labels the whole accumulated history (~11 min for
-            # USD-JPY); later runs label only that day's articles.
             execution_timeout=timedelta(hours=1),
             is_delete_operator_pod=True,
             get_logs=True,

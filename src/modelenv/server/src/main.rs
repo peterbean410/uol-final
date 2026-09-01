@@ -1,4 +1,3 @@
-// FX RL Model Environment Server
 mod broker;
 mod server;
 
@@ -42,11 +41,7 @@ fn build_environment(config: &Config) -> Environment {
     .with_leverage(config.leverage)
     .with_trade_log(config.trade_log_path.clone());
 
-    // Swap rates: Training/backtest seeds the built-in per-symbol default table
-    // inside Environment::new; Live syncs from the broker. Only override here when
-    // a rate is explicitly configured, filling any unspecified side from the
-    // mode-appropriate default (the table in Training, 0.0 in Live).
-    if config.swap_rate_long.is_some() || config.swap_rate_short.is_some() {
+                    if config.swap_rate_long.is_some() || config.swap_rate_short.is_some() {
         let (default_long, default_short) = if matches!(config.mode, Mode::Training) {
             default_swap_rate_for(&config.symbol)
         } else {
@@ -59,20 +54,11 @@ fn build_environment(config: &Config) -> Environment {
         );
     }
 
-    // Trading-session liquidation: close all shorts + losing longs (net of
-    // swap) at each session end and keep winning longs. On by default (end
-    // hour defaults to 23h UTC); --no-session-liquidation turns it off. Acts
-    // in Training/backtest (episode cursor) and in Live (wall-clock steps,
-    // closes placed at the broker). The start hour anchors the session-scoped
-    // realised P&L observation feature (None = 0h UTC); it does not gate
-    // trading.
-    environment = environment
+                                environment = environment
         .with_trading_session_start_hour(config.trading_session_hour_start)
         .with_trading_session_end_hour(config.session_liquidation_hour_end());
 
-    // Compute the training tick window once so it can both scope the tick
-    // preload AND default the bar-snapshot timestamp.
-    let training_tick_window = match config.training_tick_window() {
+            let training_tick_window = match config.training_tick_window() {
         Ok(window) => window,
         Err(err) => {
             log::warn!(
@@ -83,14 +69,7 @@ fn build_environment(config: &Config) -> Environment {
         }
     };
 
-    // Pick a single bar snapshot timestamp for the whole training session.
-    // Precedence:
-    //   1. Explicit --price-snapshot-ts (CLI/env override wins).
-    //   2. End of the training tick window (so every episode in this run
-    //      shares one cumulative eod/eoh/eom snapshot file per interval,
-    //      avoids re-downloading a fresh parquet for each episode_end_ts).
-    //   3. None, loader falls back to the latest available snapshot.
-    let effective_price_snapshot_ts = config
+                                let effective_price_snapshot_ts = config
         .price_snapshot_ts
         .or_else(|| training_tick_window.map(|(_, end_ns)| end_ns));
 
@@ -190,12 +169,10 @@ async fn run_detect_double_bottoms(
     use modelenv_core::data_loader::build_interval_data_source;
     use modelenv_core::indicators::patterns::detect_double_bottoms;
 
-    // Build the S3 data source prefix using the same function as episode loading
-    let source = build_interval_data_source(s3_prefix, symbol, interval);
+        let source = build_interval_data_source(s3_prefix, symbol, interval);
     println!("Loading bars from {source} ...");
 
-    // Build a timestamp at the requested year/month/day/hour for the upper bound
-    let target_dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        let target_dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|d| d.and_hms_opt(hour, 0, 0))
         .and_then(|dt| dt.and_utc().timestamp_nanos_opt())
         .unwrap_or(0);
@@ -258,14 +235,11 @@ async fn run_detect_double_bottoms(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Check for CLI subcommand before starting the server.
-    // Must be checked before Config::load() because Config rejects unknown flags.
-    if let Some((symbol, interval, year, month, day, hour, window, tolerance, min_width)) =
+            if let Some((symbol, interval, year, month, day, hour, window, tolerance, min_width)) =
         parse_cli_detect_args()
     {
         init_logging();
-        // Rewrite argv so Config::load() doesn't see the detect flags.
-        let original: Vec<String> = std::env::args().collect();
+                let original: Vec<String> = std::env::args().collect();
         let detect_flags_with_val = &[
             "--year", "--month", "--day", "--hour", "--interval",
             "--window", "--tolerance", "--min-width",
@@ -279,7 +253,7 @@ async fn main() -> Result<()> {
                 continue;
             }
             if detect_flags_bool.contains(&a.as_str()) {
-                continue; // boolean flag, no value to skip
+                continue;
             }
             if detect_flags_with_val.contains(&a.as_str()) {
                 skip_next = true;
@@ -287,8 +261,7 @@ async fn main() -> Result<()> {
             }
             filtered.push(a.clone());
         }
-        // Build a Config from the filtered args so --local-cache-dir etc. still work
-        let config = Config::load_from_args(&filtered)?;
+                let config = Config::load_from_args(&filtered)?;
         let prefix = if config.s3_prefix.starts_with("s3://") {
             config.s3_prefix.clone()
         } else {
@@ -303,17 +276,14 @@ async fn main() -> Result<()> {
 
     init_logging();
 
-    // Load configuration from command-line arguments and environment variables
-    let config = Config::load().map_err(|err| {
+        let config = Config::load().map_err(|err| {
         error!("Failed to load configuration: {}", err);
         err
     })?;
 
-    // Log configuration at startup
-    config.log();
+        config.log();
 
-    // Create the environment
-    let mut environment = build_environment(&config);
+        let mut environment = build_environment(&config);
     if config.mode == Mode::Training {
         info!("Preloading training market data on startup...");
         environment.preload_training_data().await.map_err(|err| {
@@ -323,12 +293,10 @@ async fn main() -> Result<()> {
         info!("Training market data preload complete");
     }
 
-    // Configure broker gateway if in Production Mode
-    if config.mode == Mode::Live {
+        if config.mode == Mode::Live {
         info!("Connecting to broker gateway...");
 
-        // Try to create broker gateway connection
-        let broker_gateway = broker::try_create_broker_gateway(
+                let broker_gateway = broker::try_create_broker_gateway(
             config.broker_gateway.broker_gateway.as_deref(),
             config.broker_gateway.broker_addr.as_deref(),
             config.broker_gateway.ctrader_app_client_id.as_deref(),
@@ -351,19 +319,16 @@ async fn main() -> Result<()> {
                 info!("Broker gateway connected successfully");
             }
             None => {
-                // This shouldn't happen since we checked is_broker_gateway_configured()
-                let err = anyhow::anyhow!("Broker gateway not configured but mode is Live");
+                                let err = anyhow::anyhow!("Broker gateway not configured but mode is Live");
                 error!("Failed to start in live mode: {}", err);
                 return Err(err);
             }
         }
     }
 
-    // Create the gRPC service
-    let environment_service = EnvironmentService::new(environment);
+        let environment_service = EnvironmentService::new(environment);
 
-    // Start the gRPC server
-    let addr = config.addr.parse().map_err(|err| {
+        let addr = config.addr.parse().map_err(|err| {
         error!("Invalid gRPC server address '{}': {}", config.addr, err);
         err
     })?;

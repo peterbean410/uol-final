@@ -40,14 +40,13 @@ class DQNModelMetadata:
     hyperparameters: dict
     pipeline_run_id: str
     training_timestamp: str
-    lifecycle_stage: str = "staging"  # staging | production | archived
+    lifecycle_stage: str = "staging"
 
 
-# Valid lifecycle stage transitions
 _DQN_VALID_TRANSITIONS = {
     "staging": {"production", "archived"},
     "production": {"archived"},
-    "archived": set(),  # terminal state
+    "archived": set(),
 }
 
 
@@ -67,12 +66,6 @@ class DQNRegistryClient:
         Args:
             registry_url: URL of the Kubeflow Model Registry server.
         """
-        # In-cluster model-registry-service is plain HTTP; SDK >= 0.2.16
-        # defaults is_secure=True and refuses without a token even for http.
-        # The SDK builds its endpoint as f"{server_address}:{port}", so the
-        # port must go through the `port` kwarg, embedding it in
-        # server_address collides with the default port and yields a broken
-        # "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         self.registry = ModelRegistry(
@@ -100,10 +93,9 @@ class DQNRegistryClient:
         try:
             return self.registry.get_registered_model(name)
         except Exception:
-            # Model doesn't exist yet, create it
             return self.registry.register_model(
                 name,
-                uri="",  # URI set per version
+                uri="",
                 description=f"DQN trading agent for {symbol}",
             )
 
@@ -124,10 +116,8 @@ class DQNRegistryClient:
         """
         version_id = str(uuid.uuid4())
 
-        # Ensure the parent registered model exists
         registered_model = self._ensure_registered_model(metadata.symbol)
 
-        # Build custom properties dict with all metadata and lineage
         custom_properties = {
             "version_id": version_id,
             "symbol": metadata.symbol,
@@ -145,7 +135,6 @@ class DQNRegistryClient:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Register the model version with the registry
         model_version = self.registry.register_model_version(
             name=version_id,
             version=version_id,
@@ -198,7 +187,6 @@ class DQNRegistryClient:
 
         current_stage = version_data.get("lifecycle_stage", "staging")
 
-        # Validate state transition
         if "production" not in _DQN_VALID_TRANSITIONS.get(current_stage, set()):
             logger.warning(
                 "Invalid transition from %s to production for version %s",
@@ -207,12 +195,8 @@ class DQNRegistryClient:
             )
             return False
 
-        # Demote current production model to staging (only one production at a time)
         self._demote_current_production(version_data["symbol"])
 
-        # Update lifecycle stage to production. The dqnpf-intraday predictor's
-        # hot-reload watcher (Task 30.3) resolves the new production-stage
-        # checkpoint on its next poll and atomically swaps in the model.
         self._update_lifecycle_stage(version_id, "production")
 
         logger.info(
@@ -248,13 +232,11 @@ class DQNRegistryClient:
         """
         results = []
 
-        # Determine which registered models to query
         registered_models = self._list_registered_models()
 
         for rm in registered_models:
             versions = self._list_versions_for_model(rm)
             for version_data in versions:
-                # Apply filters
                 if symbol and version_data.get("symbol") != symbol:
                     continue
                 if min_sharpe is not None:
@@ -268,7 +250,6 @@ class DQNRegistryClient:
                 if stage and version_data.get("lifecycle_stage") != stage:
                     continue
 
-                # Build DQNModelMetadata from stored properties
                 metadata = DQNModelMetadata(
                     symbol=version_data["symbol"],
                     episode_start_ts=version_data["episode_start_ts"],
@@ -318,9 +299,6 @@ class DQNRegistryClient:
 
         return age_days >= self.RETENTION_DAYS
 
-    # -------------------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------------------
 
     def _get_version_data(self, version_id: str) -> Optional[dict]:
         """Retrieve custom properties for a model version by its version_id.
@@ -417,5 +395,5 @@ class DQNRegistryClient:
                         props.get("version_id"),
                     )
         except Exception:
-            pass  # No existing production model
+            pass
 

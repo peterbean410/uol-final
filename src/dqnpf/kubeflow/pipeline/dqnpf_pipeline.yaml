@@ -1,12 +1,3 @@
-# PIPELINE DEFINITION
-# Name: dqnpf-intraday-pipeline
-# Description: Combined DQN + ProbabilisticForecaster intraday integration: runs the screening backtest against production-stage parent checkpoints from the Model Registry and emits a BacktestComparison + ThresholdReport artifact.
-# Inputs:
-#    dqn_model_registry_name: str [Default: 'deepqnetwork-usdjpy']
-#    forecaster_model_registry_name: str [Default: 'probabilistic-transformer-usdjpy-h1']
-#    integration_config_yaml: str [Default: '/etc/dqnpf-intraday/config/dqnpf_pipeline_config.yaml']
-#    swap_rate_long: str [Default: '0.0']
-#    swap_rate_short: str [Default: '0.0']
 components:
   comp-dqnpf-backtest:
     executorLabel: exec-dqnpf-backtest

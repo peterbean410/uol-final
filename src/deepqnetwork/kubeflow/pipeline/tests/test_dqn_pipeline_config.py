@@ -61,7 +61,7 @@ class TestOverride:
         overridden = config.override(symbol="AUDJPY")
         assert overridden is not config
         assert overridden.symbol == "AUDJPY"
-        assert config.symbol == "USDJPY"  # Original unchanged
+        assert config.symbol == "USDJPY"
 
     def test_multiple_overrides(self) -> None:
         config = DQNPipelineConfig()
@@ -196,7 +196,6 @@ class TestToCliArgs:
         args = config.to_cli_args()
         ep_idx = args.index("--num-episodes-per-range")
         assert args[ep_idx + 1] == "500"
-
 
 
     def test_parseable_by_load_config(self) -> None:

@@ -1,4 +1,3 @@
-// Position management module
 use serde::{Deserialize, Serialize};
 
 /// Number of nanoseconds in a day (86,400,000,000,000)
@@ -48,8 +47,7 @@ impl Position {
         side: Side,
         open_timestamp_ns: i64,
     ) -> Self {
-        // Entry price = mid_price + half the spread
-        let entry_price = mid_price + (spread / 2.0);
+                let entry_price = mid_price + (spread / 2.0);
 
         Position {
             position_id,
@@ -95,9 +93,7 @@ impl Position {
             (current_timestamp_ns - self.last_swap_accrual_ns) as f64 / NANOS_PER_DAY as f64;
 
         if elapsed_days >= 1.0 {
-            // Only accrue if at least one day has elapsed
-            // Use floor to get the number of full days elapsed
-            let full_days = elapsed_days.floor();
+                                    let full_days = elapsed_days.floor();
             self.swap += daily_swap_rate * full_days * self.volume;
             self.last_swap_accrual_ns = current_timestamp_ns;
             true
@@ -128,7 +124,7 @@ impl Position {
         let side = match proto.side {
             0 => Side::Buy,
             1 => Side::Sell,
-            _ => Side::Buy, // Default to Buy if unknown
+            _ => Side::Buy,
         };
 
         Position {
@@ -180,12 +176,7 @@ impl ClosedPosition {
 #[derive(Debug, Clone, Default)]
 pub struct ClosedPositionWindow {
     closed_positions: Vec<ClosedPosition>,
-    // Running sum of total_pnl() over `closed_positions`, kept in sync on
-    // add/prune. Lets `total_realised_pnl()` (called every step by the reward)
-    // be O(1) instead of re-summing the whole list; the latter was an
-    // O(closed) per-step hot path that made the env step time grow with the
-    // number of trades in an episode.
-    running_total: f64,
+                        running_total: f64,
 }
 
 impl ClosedPositionWindow {
@@ -236,9 +227,7 @@ impl ClosedPositionWindow {
     pub fn prune_closed_before(&mut self, from_timestamp_ns: i64) {
         self.closed_positions
             .retain(|p| p.close_timestamp_ns >= from_timestamp_ns);
-        // Recompute the running total from the survivors (prune is rare (
-        // never in the per-step hot path) so the O(n) recompute is fine).
-        self.running_total = self.closed_positions.iter().map(|p| p.total_pnl()).sum();
+                        self.running_total = self.closed_positions.iter().map(|p| p.total_pnl()).sum();
     }
 
     /// Get the number of closed positions in the window
@@ -259,15 +248,14 @@ mod tests {
     fn test_position_creation() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0,  // mid_price
-            0.0001, // spread
-            1.0,    // volume
+            150.0,
+            0.0001,
+            1.0,
             Side::Buy,
             1000000000000,
         );
 
-        // Entry price should be mid_price + half spread
-        assert_eq!(position.entry_price, 150.0 + 0.00005);
+                assert_eq!(position.entry_price, 150.0 + 0.00005);
         assert_eq!(position.volume, 1.0);
         assert_eq!(position.side, Side::Buy);
     }
@@ -276,72 +264,60 @@ mod tests {
     fn test_unrealised_pnl_buy() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0,  // mid_price
-            0.0001, // spread
-            1.0,    // volume
+            150.0,
+            0.0001,
+            1.0,
             Side::Buy,
             1000000000000,
         );
 
-        // Entry price = 150.0 + 0.00005 = 150.00005
-        // Price increased to 151.0
-        let pnl = position.calculate_unrealised_pnl(151.0);
-        // (151.0 - 150.00005) * 1.0 = 0.99995
-        assert!((pnl - 0.99995).abs() < 0.0001);
+                        let pnl = position.calculate_unrealised_pnl(151.0);
+                assert!((pnl - 0.99995).abs() < 0.0001);
     }
 
     #[test]
     fn test_unrealised_pnl_sell() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0,  // mid_price
-            0.0001, // spread
-            1.0,    // volume
+            150.0,
+            0.0001,
+            1.0,
             Side::Sell,
             1000000000000,
         );
 
-        // Entry price = 150.0 + 0.00005 = 150.00005
-        // Price decreased to 149.0
-        let pnl = position.calculate_unrealised_pnl(149.0);
-        // (150.00005 - 149.0) * 1.0 = 1.00005
-        assert!((pnl - 1.00005).abs() < 0.0001);
+                        let pnl = position.calculate_unrealised_pnl(149.0);
+                assert!((pnl - 1.00005).abs() < 0.0001);
     }
 
     #[test]
     fn test_realised_pnl() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0,  // mid_price
-            0.0001, // spread
-            1.0,    // volume
+            150.0,
+            0.0001,
+            1.0,
             Side::Buy,
             1000000000000,
         );
 
-        // Entry price = 150.0 + 0.00005 = 150.00005
-        // Close at 151.0 with no transaction cost
-        let pnl = position.calculate_realised_pnl(151.0, 0.0);
-        // (151.0 - 150.00005) * 1.0 = 0.99995
-        assert!((pnl - 0.99995).abs() < 0.0001);
+                        let pnl = position.calculate_realised_pnl(151.0, 0.0);
+                assert!((pnl - 0.99995).abs() < 0.0001);
     }
 
     #[test]
     fn test_realised_pnl_with_transaction_cost() {
         let position = Position::new(
             "pos_1".to_string(),
-            150.0,  // mid_price
-            0.0001, // spread
-            1.0,    // volume
+            150.0,
+            0.0001,
+            1.0,
             Side::Buy,
             1000000000000,
         );
 
-        // Entry price = 150.0 + 0.00005 = 150.00005
-        // Close at 151.0 with transaction cost
-        let pnl = position.calculate_realised_pnl(151.0, 0.0001);
-        // (151.0 - 150.00005) * 1.0 - 0.0001 = 0.99985
-        assert!((pnl - 0.99985).abs() < 0.0001);
+                        let pnl = position.calculate_realised_pnl(151.0, 0.0001);
+                assert!((pnl - 0.99985).abs() < 0.0001);
     }
 
     #[test]
@@ -355,12 +331,10 @@ mod tests {
             1000000000000,
         );
 
-        // Accrue swap for 1 day at rate 0.01
-        let current_timestamp = position.open_timestamp_ns + NANOS_PER_DAY;
+                let current_timestamp = position.open_timestamp_ns + NANOS_PER_DAY;
         let swap_accrued = position.accrue_swap(current_timestamp, 0.01);
 
-        // Swap should be 0.01 * 1.0 * 1.0 = 0.01
-        assert_eq!(position.swap, 0.01);
+                assert_eq!(position.swap, 0.01);
         assert!(swap_accrued);
     }
 
@@ -375,12 +349,10 @@ mod tests {
             1000000000000,
         );
 
-        // Try to accrue swap for less than 1 day (e.g., 12 hours = 43,200,000,000,000 ns)
-        let current_timestamp = position.open_timestamp_ns + NANOS_PER_DAY / 2;
+                let current_timestamp = position.open_timestamp_ns + NANOS_PER_DAY / 2;
         let swap_accrued = position.accrue_swap(current_timestamp, 0.01);
 
-        // Swap should not be accrued since less than 1 day has elapsed
-        assert_eq!(position.swap, 0.0);
+                assert_eq!(position.swap, 0.0);
         assert!(!swap_accrued);
     }
 
@@ -395,13 +367,10 @@ mod tests {
             1000000000000,
         );
 
-        // Accrue swap for 3.5 days at rate 0.01
-        // Should only accrue for 3 full days
-        let current_timestamp = position.open_timestamp_ns + NANOS_PER_DAY * 3 + NANOS_PER_DAY / 2;
+                        let current_timestamp = position.open_timestamp_ns + NANOS_PER_DAY * 3 + NANOS_PER_DAY / 2;
         let swap_accrued = position.accrue_swap(current_timestamp, 0.01);
 
-        // Swap should be 0.01 * 3.0 * 1.0 = 0.03 (only full days)
-        assert_eq!(position.swap, 0.03);
+                assert_eq!(position.swap, 0.03);
         assert!(swap_accrued);
     }
 
@@ -409,8 +378,7 @@ mod tests {
     fn test_closed_position_window() {
         let mut window = ClosedPositionWindow::new();
 
-        // Add a closed position
-        let closed_position = ClosedPosition {
+                let closed_position = ClosedPosition {
             position_id: "pos_1".to_string(),
             entry_price: 150.0,
             close_price: 151.0,
@@ -424,8 +392,7 @@ mod tests {
 
         window.add_closed_position(closed_position);
 
-        // Total P/L should be 1.0 + 0.01 = 1.01 (cutoff before the close)
-        assert_eq!(window.total_realised_pnl_since(1500000000000), 1.01);
+                assert_eq!(window.total_realised_pnl_since(1500000000000), 1.01);
     }
 
     #[test]
@@ -441,24 +408,18 @@ mod tests {
             open_timestamp_ns: close_timestamp_ns - NANOS_PER_DAY,
             close_timestamp_ns,
         };
-        let session_start = 100 * NANOS_PER_DAY; // arbitrary session-start cutoff
+        let session_start = 100 * NANOS_PER_DAY;
 
         let mut window = ClosedPositionWindow::new();
-        // Added in close-time order (the real invariant: a position can only
-        // close at-or-after the cursor, so closes are monotonic).
-        // Closed in a previous session: excluded by the cutoff.
-        window.add_closed_position(closed_at(session_start - 1));
-        // Closed exactly at the session start: included (>= cutoff).
-        window.add_closed_position(closed_at(session_start));
-        // Closed mid-session: included.
-        window.add_closed_position(closed_at(session_start + NANOS_PER_DAY / 2));
+                                window.add_closed_position(closed_at(session_start - 1));
+                window.add_closed_position(closed_at(session_start));
+                window.add_closed_position(closed_at(session_start + NANOS_PER_DAY / 2));
 
-        // since(cutoff) excludes the previous-session close → 2.0; total is 3.0.
-        assert_eq!(window.total_realised_pnl_since(session_start), 2.0);
+                assert_eq!(window.total_realised_pnl_since(session_start), 2.0);
         assert_eq!(window.total_realised_pnl(), 3.0);
 
         window.prune_closed_before(session_start);
         assert_eq!(window.len(), 2);
-        assert_eq!(window.total_realised_pnl(), 2.0); // running total recomputed
+        assert_eq!(window.total_realised_pnl(), 2.0);
     }
 }

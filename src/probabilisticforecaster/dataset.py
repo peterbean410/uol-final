@@ -36,7 +36,6 @@ class ForexDataset(Dataset):
         horizon: int = 1,
         stride: int = 1,
     ) -> None:
-        # Validate feature dimension
         n_features = features_df.shape[1]
         if n_features != 16:
             raise ValueError(f"Expected 16 features, got {n_features}")
@@ -45,15 +44,12 @@ class ForexDataset(Dataset):
         self.horizon = horizon
         self.stride = stride
 
-        # Convert to numpy for efficient indexing
         self.features = features_df.values.astype(np.float32)
         self.close_prices = close_prices.values.astype(np.float64)
         self.timestamps = features_df.index
 
-        # Detect temporal gaps (>10 minutes between consecutive bars)
         gap_mask = self._detect_gaps(self.timestamps)
 
-        # Build valid sample indices (accounting for gaps and stride)
         self.valid_indices = self._build_valid_indices(gap_mask)
 
         if len(self.valid_indices) == 0:
@@ -72,14 +68,10 @@ class ForexDataset(Dataset):
         if len(timestamps) < 2:
             return np.zeros(len(timestamps), dtype=bool)
 
-        # Compute time differences between consecutive bars
         time_diffs = pd.Series(timestamps).diff()
 
-        # Mark positions where gap > 10 minutes
-        # gap_mask[i] = True means gap between bar i-1 and bar i
         gap_at_bar = (time_diffs > pd.Timedelta(minutes=10)).values
 
-        # Convert to: gap_after[i] = True means gap between bar i and bar i+1
         gap_after = np.zeros(len(timestamps), dtype=bool)
         if len(gap_at_bar) > 1:
             gap_after[:-1] = gap_at_bar[1:]
@@ -101,24 +93,16 @@ class ForexDataset(Dataset):
             List of valid starting indices.
         """
         n = len(self.features)
-        # Total span needed: lookback bars for features + horizon bars for label
-        # The feature window is [i, i+lookback-1] (inclusive)
-        # The label uses close at i+lookback-1+horizon
         total_span = self.lookback + self.horizon
 
         if n < total_span:
             return []
 
-        # Compute prefix sum of gaps for efficient range queries
-        # cumulative_gaps[i] = number of gaps in [0, i)
         cumulative_gaps = np.zeros(n, dtype=np.int64)
         cumulative_gaps[1:] = np.cumsum(gap_after[:-1])
 
         valid_indices = []
         for i in range(0, n - total_span + 1, self.stride):
-            # Check if any gap exists in the range [i, i+total_span-1)
-            # A gap at position j means gap between bar j and bar j+1
-            # We need to check gap_after[i] through gap_after[i+total_span-2]
             end_idx = i + total_span - 1
             gaps_in_range = cumulative_gaps[end_idx] - cumulative_gaps[i]
             if gaps_in_range == 0:
@@ -143,14 +127,9 @@ class ForexDataset(Dataset):
         """
         start = self.valid_indices[idx]
 
-        # Extract feature window: [start, start+lookback)
         features = self.features[start : start + self.lookback]
         features_tensor = torch.from_numpy(features.copy())
 
-        # Compute forward return label
-        # label = (close_{t+h} - close_t) / close_t
-        # where t = start + lookback - 1 (last bar in the window)
-        # and t+h = start + lookback - 1 + horizon
         t = start + self.lookback - 1
         t_h = t + self.horizon
         close_t = self.close_prices[t]

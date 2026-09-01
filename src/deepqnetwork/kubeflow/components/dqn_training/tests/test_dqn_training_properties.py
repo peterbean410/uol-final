@@ -25,10 +25,6 @@ from deepqnetwork.kubeflow.components.dqn_training.component import build_dqn_co
 from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 VALID_SYMBOLS = ("USDJPY", "AUDJPY")
 VALID_ACTIVATIONS = ("relu", "leaky_relu", "gelu")
 VALID_LOSS_FUNCTIONS = ("huber", "mse")
@@ -48,7 +44,6 @@ def valid_dqn_pipeline_configs_for_training(draw):
 
     training_mode = draw(st.sampled_from(VALID_TRAINING_MODES))
 
-    # Use small hidden dims and reduced episodes for test speed
     hidden_dims = draw(
         st.lists(st.integers(min_value=8, max_value=64), min_size=1, max_size=3)
     )
@@ -91,7 +86,6 @@ def valid_dqn_pipeline_configs_for_training(draw):
             st.floats(min_value=0.1, max_value=100.0, allow_nan=False, allow_infinity=False)
         ),
         loss_function=draw(st.sampled_from(VALID_LOSS_FUNCTIONS)),
-        # Reduced episodes for test speed
         num_episodes_per_range=draw(st.integers(min_value=1, max_value=5)),
         max_steps_per_episode=draw(st.integers(min_value=1, max_value=100)),
         checkpoint_interval=draw(st.integers(min_value=1, max_value=10)),
@@ -113,11 +107,6 @@ def _make_args(training_mode: str = "scratch", production_checkpoint_path: str =
     )
 
 
-# ---------------------------------------------------------------------------
-# Property DQN-5: Training produces valid checkpoint
-# ---------------------------------------------------------------------------
-
-
 class TestTrainingProducesValidCheckpoint:
     """Property DQN-5: Training produces valid checkpoint.
 
@@ -136,23 +125,18 @@ class TestTrainingProducesValidCheckpoint:
 
         **Validates: Requirements DQN-R7**
         """
-        # Build DQNConfig from pipeline config
         args = _make_args(training_mode=pipeline_config.training_mode)
         dqn_config = build_dqn_config(pipeline_config, args)
 
-        # Verify the config is a valid DQNConfig
         assert isinstance(dqn_config, DQNConfig)
 
-        # Instantiate DQNAgent with the config (uses default state_dim=53)
         device = torch.device("cpu")
         agent = DQNAgent(dqn_config, device)
 
-        # Verify agent was created successfully
         assert agent.q_network is not None
         assert agent.target_network is not None
         assert agent.optimizer is not None
 
-        # Save a checkpoint (mimicking what train() does)
         with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
             checkpoint_path = f.name
 
@@ -170,18 +154,15 @@ class TestTrainingProducesValidCheckpoint:
             }
             torch.save(checkpoint_data, checkpoint_path)
 
-            # Verify checkpoint is loadable by DQNAgent (restore path)
             new_agent = DQNAgent(dqn_config, device)
             loaded_checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             new_agent.q_network.load_state_dict(loaded_checkpoint["q_network_state_dict"])
             new_agent.target_network.load_state_dict(loaded_checkpoint["target_network_state_dict"])
             new_agent.optimizer.load_state_dict(loaded_checkpoint["optimizer_state_dict"])
 
-            # Verify checkpoint is loadable by DQNAdvisor
             advisor = DQNAdvisor(checkpoint_path=checkpoint_path, device="cpu")
-            assert advisor.state_dim == 53  # Default state_dim
+            assert advisor.state_dim == 53
 
-            # Verify advisor can produce action recommendations
             state = np.random.randn(53).astype(np.float32)
             result = advisor.recommend_action(state)
             assert 0 <= result.action <= 4
@@ -189,11 +170,6 @@ class TestTrainingProducesValidCheckpoint:
 
         finally:
             os.unlink(checkpoint_path)
-
-
-# ---------------------------------------------------------------------------
-# Property DQN-6: Finetune uses lower learning rate
-# ---------------------------------------------------------------------------
 
 
 class TestFinetuneUsesLowerLearningRate:
@@ -213,22 +189,18 @@ class TestFinetuneUsesLowerLearningRate:
 
         **Validates: Requirements DQN-R8**
         """
-        # Force finetune mode
         pipeline_config = pipeline_config.override(training_mode="finetune")
 
-        # Ensure finetune_learning_rate differs from learning_rate for a meaningful test
         assume(pipeline_config.finetune_learning_rate != pipeline_config.learning_rate)
 
         args = _make_args(training_mode="finetune")
         dqn_config = build_dqn_config(pipeline_config, args)
 
-        # The effective learning rate should be finetune_learning_rate
         assert dqn_config.learning_rate == pipeline_config.finetune_learning_rate, (
             f"Expected finetune_learning_rate={pipeline_config.finetune_learning_rate}, "
             f"got learning_rate={dqn_config.learning_rate}"
         )
 
-        # The effective learning rate should NOT be the base learning_rate
         assert dqn_config.learning_rate != pipeline_config.learning_rate or (
             pipeline_config.finetune_learning_rate == pipeline_config.learning_rate
         ), (
@@ -236,7 +208,6 @@ class TestFinetuneUsesLowerLearningRate:
             f"Got: {dqn_config.learning_rate}, base: {pipeline_config.learning_rate}"
         )
 
-        # Also verify num_episodes_per_range uses finetune_num_episodes_per_range
         assert dqn_config.num_episodes_per_range == pipeline_config.finetune_num_episodes_per_range, (
             f"Expected finetune_num_episodes_per_range={pipeline_config.finetune_num_episodes_per_range}, "
             f"got num_episodes_per_range={dqn_config.num_episodes_per_range}"
@@ -250,22 +221,18 @@ class TestFinetuneUsesLowerLearningRate:
 
         **Validates: Requirements DQN-R8**
         """
-        # Force scratch mode
         pipeline_config = pipeline_config.override(training_mode="scratch")
 
-        # Ensure finetune_learning_rate differs from learning_rate for a meaningful test
         assume(pipeline_config.finetune_learning_rate != pipeline_config.learning_rate)
 
         args = _make_args(training_mode="scratch")
         dqn_config = build_dqn_config(pipeline_config, args)
 
-        # The effective learning rate should be the base learning_rate
         assert dqn_config.learning_rate == pipeline_config.learning_rate, (
             f"Expected base learning_rate={pipeline_config.learning_rate}, "
             f"got learning_rate={dqn_config.learning_rate}"
         )
 
-        # Also verify num_episodes_per_range uses base num_episodes_per_range
         assert dqn_config.num_episodes_per_range == pipeline_config.num_episodes_per_range, (
             f"Expected num_episodes_per_range={pipeline_config.num_episodes_per_range}, "
             f"got num_episodes_per_range={dqn_config.num_episodes_per_range}"

@@ -36,15 +36,6 @@ class DqnpfRegistryClient:
     MODEL_NAME = "dqnpf-intraday"
 
     def __init__(self, registry_url: str):
-        # The in-cluster model-registry-service exposes plain HTTP on 8080;
-        # model-registry SDK >= 0.2.16 defaults is_secure=True and raises
-        # `user token must be provided for secure connection` unless we
-        # opt out explicitly even for http:// URLs.
-        #
-        # The SDK builds its final endpoint as f"{server_address}:{port}",
-        # so the port must be handed to it via the `port` kwarg, embedding
-        # it in server_address (e.g. "...:8080") collides with the default
-        # port=443 and yields an invalid "...:8080:443" URL.
         parsed = urlsplit(registry_url)
         is_secure = parsed.scheme != "http"
         server_address = f"{parsed.scheme}://{parsed.hostname}"
@@ -85,7 +76,6 @@ class DqnpfRegistryClient:
         registered_at = datetime.now(timezone.utc)
         target_model_name = model_name or self.MODEL_NAME
 
-        # Ensure the registered model exists
         try:
             self.registry.get_registered_model(target_model_name)
         except Exception:
@@ -148,8 +138,6 @@ class DqnpfRegistryClient:
                 f"No production-stage version found for model '{model_name}'"
             )
 
-        # Sort newest-first. Combined versions stamp ``registered_at``; parent
-        # models (DQN/forecaster) stamp ``created_at``, accept either.
         def _registered_ts(v) -> str:
             props = v.custom_properties or {}
             return props.get("registered_at") or props.get("created_at") or ""
@@ -157,17 +145,14 @@ class DqnpfRegistryClient:
         production_versions.sort(key=_registered_ts, reverse=True)
         latest = production_versions[0]
 
-        # 1) Combined versions: explicit s3_path custom property.
         s3_path = (latest.custom_properties or {}).get("s3_path")
         if s3_path:
             return s3_path
 
-        # 2) Some SDK versions surface the artifact uri directly on the version.
         version_uri = getattr(latest, "uri", None)
         if version_uri:
             return version_uri
 
-        # 3) Canonical model-registry path: the uri lives on the ModelArtifact.
         get_artifact = getattr(self.registry, "get_model_artifact", None)
         if get_artifact is not None:
             artifact = get_artifact(model_name, latest.name)

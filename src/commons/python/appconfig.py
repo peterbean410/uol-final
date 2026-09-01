@@ -18,10 +18,8 @@ from pathlib import Path
 from ctrader_open_api import Auth
 from dotenv import load_dotenv
 
-# Refresh the token if it expires within this many seconds
 _TOKEN_EXPIRY_BUFFER_SECONDS = 60
 
-# Kubernetes service account paths
 _K8S_SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 _K8S_SA_CA_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 _K8S_SA_NS_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -52,9 +50,6 @@ class AppConfig:
         self.token_expiry: float = float(os.getenv("TOKEN_EXPIRY", "0"))
         self.fxnews_api_key: str = os.getenv("FXNEWS_API_KEY", "")
 
-        # OpenAI-compatible LLM endpoint used to enrich news with topic labels.
-        # In-cluster this is the LiteLLM proxy, which routes to the Gemma vLLM
-        # services in the peterbean namespace. Unset disables labelling.
         self.llm_endpoint: str = os.getenv("LLM_ENDPOINT", "")
         self.llm_model: str = os.getenv("LLM_MODEL", "gemma-4-31b-it")
         self.llm_api_key: str = os.getenv("LLM_API_KEY", "")

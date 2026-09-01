@@ -1,7 +1,4 @@
-# dqnpf-intraday Pipeline Configuration, Default Values
-# Mirrors dqnpf/config.yaml plus pipeline-level fields.
 
-# --- Mirrored IntegrationConfig fields ---
 symbol: "USDJPY"
 variance_threshold: 4.5
 max_risk_long_units: 2
@@ -14,25 +11,14 @@ forecaster_checkpoint_path: null
 device: "auto"
 grpc_address: "localhost:50051"
 num_episodes: 1
-# Out-of-sample validation window. The DQN models are trained on the 3-year span
-# date_start=2012-01-04 .. date_end=2014-12-31 (hours 23->47, 24h sessions), so a
-# valid OOS test MUST fall after 2014-12-31. We use date-range mode (one hour-bound
-# episode per calendar date), mirroring DQN training so the policy is evaluated on
-# the same kind of session it trained on. January 2015 = first OOS month.
-# (episode_start_ts/episode_end_ts are the legacy fixed-window knobs; left at 0 so
-# date-range mode is authoritative.)
 episode_start_ts: 0
 episode_end_ts: 0
-# OOS window = the adhoc20260720 held-out quarter (same as the DQN full-history
-# eval), so the combined DQN(prod)+PF(prod) screen is measured on the freshest
-# unseen data. Genuinely OOS for both production models.
 date_start: "2026-04-20"
 date_end: "2026-07-17"
 hour_of_day_start: 23
 hour_of_day_end: 47
 seed: 0
 
-# --- Pipeline-level fields ---
 dqn_model_registry_name: "deepqnetwork-usdjpy"
 forecaster_model_registry_name: "probabilistic-transformer-usdjpy-h1"
 dqn_lifecycle_stage: "production"

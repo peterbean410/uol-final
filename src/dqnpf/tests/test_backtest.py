@@ -59,11 +59,6 @@ def _rec(
     )
 
 
-# ---------------------------------------------------------------------------
-# compute_sharpe
-# ---------------------------------------------------------------------------
-
-
 def test_compute_sharpe_empty_returns_zero() -> None:
     assert compute_sharpe([]) == 0.0
 
@@ -77,11 +72,9 @@ def test_compute_sharpe_zero_std_returns_zero() -> None:
 
 
 def test_compute_sharpe_basic() -> None:
-    # mean = 0.2, sample std with n=5 -> ~0.158
     rewards = [0.1, 0.2, 0.3, 0.2, 0.2]
     out = compute_sharpe(rewards)
     assert out > 0
-    # Quick sanity check that result equals mean/std
     mean = sum(rewards) / len(rewards)
     var = sum((r - mean) ** 2 for r in rewards) / (len(rewards) - 1)
     expected = mean / var**0.5
@@ -92,18 +85,13 @@ def test_compute_sharpe_negative_mean() -> None:
     assert compute_sharpe([-0.1, -0.2, -0.3]) < 0
 
 
-# ---------------------------------------------------------------------------
-# quarterly_pnl
-# ---------------------------------------------------------------------------
-
-
 def test_quarterly_pnl_groups_by_year_quarter() -> None:
     records = [
-        _rec(reward=1.0, timestamp_ns=_ts(2024, 1, 15)),  # Q1
-        _rec(reward=2.0, timestamp_ns=_ts(2024, 3, 31)),  # Q1
-        _rec(reward=3.0, timestamp_ns=_ts(2024, 4, 1)),  # Q2
-        _rec(reward=4.0, timestamp_ns=_ts(2024, 12, 31)),  # Q4
-        _rec(reward=5.0, timestamp_ns=_ts(2025, 1, 1)),  # 2025 Q1
+        _rec(reward=1.0, timestamp_ns=_ts(2024, 1, 15)),
+        _rec(reward=2.0, timestamp_ns=_ts(2024, 3, 31)),
+        _rec(reward=3.0, timestamp_ns=_ts(2024, 4, 1)),
+        _rec(reward=4.0, timestamp_ns=_ts(2024, 12, 31)),
+        _rec(reward=5.0, timestamp_ns=_ts(2025, 1, 1)),
     ]
     out = quarterly_pnl(records)
     assert out == {"2024-Q1": 3.0, "2024-Q2": 3.0, "2024-Q4": 4.0, "2025-Q1": 5.0}
@@ -111,11 +99,6 @@ def test_quarterly_pnl_groups_by_year_quarter() -> None:
 
 def test_quarterly_pnl_empty() -> None:
     assert quarterly_pnl([]) == {}
-
-
-# ---------------------------------------------------------------------------
-# suppression_stats
-# ---------------------------------------------------------------------------
 
 
 def test_suppression_stats_empty() -> None:
@@ -147,11 +130,6 @@ def test_suppression_stats_ignores_baseline_reason() -> None:
     assert by_reason == {}
 
 
-# ---------------------------------------------------------------------------
-# conditional_pnl / counts / negative proportion
-# ---------------------------------------------------------------------------
-
-
 def test_conditional_pnl_separates_regimes() -> None:
     records = [
         _rec(reward=1.0, high_sigma=True),
@@ -175,7 +153,7 @@ def test_count_trades_skips_hold() -> None:
 def test_count_trades_in_regime() -> None:
     records = [
         _rec(final_action=1, high_sigma=True),
-        _rec(final_action=0, high_sigma=True),  # HOLD: skipped
+        _rec(final_action=0, high_sigma=True),
         _rec(final_action=2, high_sigma=False),
         _rec(final_action=3, high_sigma=True),
     ]
@@ -197,11 +175,6 @@ def test_negative_pnl_proportion_basic() -> None:
     ]
     assert negative_pnl_proportion(records, high_sigma=True) == 2 / 3
     assert negative_pnl_proportion(records, high_sigma=False) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# compare_results
-# ---------------------------------------------------------------------------
 
 
 def test_compare_results_basic_aggregation() -> None:
@@ -232,11 +205,6 @@ def test_compare_results_basic_aggregation() -> None:
     assert cmp.high_sigma_time_fraction == pytest.approx(2 / 3)
 
 
-# ---------------------------------------------------------------------------
-# validate_thresholds
-# ---------------------------------------------------------------------------
-
-
 def _passing_comparison() -> BacktestComparison:
     """Build a BacktestComparison that passes every Req 14 threshold."""
     return BacktestComparison(
@@ -259,7 +227,6 @@ def _passing_comparison() -> BacktestComparison:
         quarterly_pnl_combined={"2024-Q1": 0.3, "2024-Q2": 0.3, "2024-Q3": 0.4},
         quarterly_pnl_baseline={"2024-Q1": 0.2, "2024-Q2": 0.2, "2024-Q3": 0.1},
         high_sigma_time_fraction=0.3,
-        # Money-based fields are what 14.1 / 14.3 / 14.5 validate against.
         combined_sharpe_pnl=0.8,
         baseline_sharpe_pnl=0.4,
         high_sigma_negative_raw_pnl_proportion_combined=0.2,
@@ -278,7 +245,7 @@ def test_threshold_report_passes_on_good_comparison() -> None:
 
 def test_threshold_141_fails_when_sharpe_not_better() -> None:
     cmp = _passing_comparison()
-    cmp.combined_sharpe_pnl = 0.3  # money-PnL Sharpe below baseline (0.4)
+    cmp.combined_sharpe_pnl = 0.3
     report = validate_thresholds(cmp)
     assert report.passed is False
     assert any("14.1" in f for f in report.failures)
@@ -286,25 +253,23 @@ def test_threshold_141_fails_when_sharpe_not_better() -> None:
 
 def test_threshold_142_fails_when_trades_not_reduced() -> None:
     cmp = _passing_comparison()
-    cmp.trades_combined = 12  # > baseline
+    cmp.trades_combined = 12
     report = validate_thresholds(cmp)
     assert any("14.2 trades" in f for f in report.failures)
 
 
 def test_threshold_142_fails_when_reduction_not_in_high_sigma() -> None:
-    # Reduce trades but in low-sigma only.
     cmp = _passing_comparison()
     cmp.trades_combined = 5
     cmp.trades_baseline = 10
     cmp.high_sigma_trades_combined = 5
-    cmp.high_sigma_trades_baseline = 5  # no high-sigma reduction
+    cmp.high_sigma_trades_baseline = 5
     report = validate_thresholds(cmp)
     assert any("14.2 concentration" in f for f in report.failures)
 
 
 def test_threshold_143_fails_when_negative_pnl_proportion_worse() -> None:
     cmp = _passing_comparison()
-    # money-based proportion worse than baseline 0.5
     cmp.high_sigma_negative_raw_pnl_proportion_combined = 0.6
     report = validate_thresholds(cmp)
     assert any("14.3" in f for f in report.failures)
@@ -313,7 +278,7 @@ def test_threshold_143_fails_when_negative_pnl_proportion_worse() -> None:
 def test_threshold_144_fails_on_low_sigma_degradation() -> None:
     cmp = _passing_comparison()
     cmp.low_sigma_pnl_baseline = 1.0
-    cmp.low_sigma_pnl_combined = 0.5  # 50% drop, far over 5% tolerance
+    cmp.low_sigma_pnl_combined = 0.5
     report = validate_thresholds(cmp)
     assert any("14.4" in f for f in report.failures)
 
@@ -321,23 +286,18 @@ def test_threshold_144_fails_on_low_sigma_degradation() -> None:
 def test_threshold_144_passes_within_tolerance() -> None:
     cmp = _passing_comparison()
     cmp.low_sigma_pnl_baseline = 1.0
-    cmp.low_sigma_pnl_combined = 0.96  # 4% drop, within 5% tolerance
+    cmp.low_sigma_pnl_combined = 0.96
     report = validate_thresholds(cmp)
     assert all("14.4" not in f for f in report.failures)
 
 
 def test_threshold_146_failures_listed_when_multiple_break() -> None:
     cmp = _passing_comparison()
-    cmp.combined_sharpe_pnl = 0.0  # breaks 14.1 (money Sharpe not > baseline)
-    cmp.trades_combined = 100  # breaks 14.2
+    cmp.combined_sharpe_pnl = 0.0
+    cmp.trades_combined = 100
     report = validate_thresholds(cmp)
     assert report.passed is False
     assert len(report.failures) >= 2
-
-
-# ---------------------------------------------------------------------------
-# StepRecord.screened
-# ---------------------------------------------------------------------------
 
 
 def test_step_record_screened_property() -> None:
@@ -345,11 +305,6 @@ def test_step_record_screened_property() -> None:
     assert _rec(reason="baseline").screened is False
     assert _rec(reason="budget_exhausted").screened is True
     assert _rec(reason="directional_conflict").screened is True
-
-
-# ---------------------------------------------------------------------------
-# _distribution
-# ---------------------------------------------------------------------------
 
 
 def test_distribution_empty_returns_zeros() -> None:
@@ -370,7 +325,6 @@ def test_distribution_min_max_median_p95() -> None:
     d = _distribution([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
     assert d["min"] == 0.0
     assert d["max"] == 9.0
-    # nearest-rank on n=10: median -> idx round(0.5*9)=4 -> 4.0; p95 -> idx round(0.95*9)=9 -> 9.0
     assert d["median"] == 4.0
     assert d["p95"] == 9.0
 
@@ -379,11 +333,6 @@ def test_distribution_handles_negative_and_unsorted() -> None:
     d = _distribution([-2.0, 5.0, -10.0, 0.0])
     assert d["min"] == -10.0
     assert d["max"] == 5.0
-
-
-# ---------------------------------------------------------------------------
-# compare_results: signal distributions
-# ---------------------------------------------------------------------------
 
 
 def test_compare_results_reports_signal_distributions() -> None:
@@ -401,7 +350,6 @@ def test_compare_results_reports_signal_distributions() -> None:
     assert cmp.sigma_distribution_combined["min"] == 1.0
     assert cmp.sigma_distribution_combined["max"] == 6.0
     assert cmp.abs_mu_distribution_combined["max"] == 3.5
-    # |mu| > 1.0 for mu in {2.0, 3.5, 1.5} -> 3/5
     assert cmp.abs_mu_above_tolerance_fraction == pytest.approx(0.6)
 
 
@@ -416,13 +364,7 @@ def test_compare_results_empty_signal_distributions_are_zeroed() -> None:
     assert cmp.abs_mu_above_tolerance_fraction == 0.0
 
 
-# ---------------------------------------------------------------------------
-# compare_results: money-based (raw PnL) fields
-# ---------------------------------------------------------------------------
-
-
 def test_negative_raw_pnl_proportion_uses_money_not_reward() -> None:
-    # reward is positive but raw PnL is negative on 2 of 3 high-sigma steps.
     recs = [
         _rec(reward=1.0, high_sigma=True),
         _rec(reward=1.0, high_sigma=True),
@@ -432,7 +374,6 @@ def test_negative_raw_pnl_proportion_uses_money_not_reward() -> None:
     recs[1].raw_pnl_delta = -1.0
     recs[2].raw_pnl_delta = 3.0
     assert negative_raw_pnl_proportion(recs, high_sigma=True) == pytest.approx(2 / 3)
-    # reward-based proportion sees zero negatives (all rewards > 0).
     assert negative_pnl_proportion(recs, high_sigma=True) == 0.0
 
 
@@ -448,18 +389,11 @@ def test_compare_results_money_fields_from_raw_pnl() -> None:
 
     cmp = compare_results(combined, baseline)
 
-    # high-sigma raw PnL: combined has 1 negative of 2 (0.5); baseline 1 of 1 (1.0)
     assert cmp.high_sigma_negative_raw_pnl_proportion_combined == pytest.approx(0.5)
     assert cmp.high_sigma_negative_raw_pnl_proportion_baseline == pytest.approx(1.0)
-    # money Sharpe derives from raw_pnl_delta, independent of reward sign
     assert cmp.combined_sharpe_pnl == pytest.approx(
         compute_sharpe([2.0, -1.0])
     )
-
-
-# ---------------------------------------------------------------------------
-# compare_results: max_total_margin
-# ---------------------------------------------------------------------------
 
 
 def test_compare_results_max_total_margin() -> None:
@@ -468,7 +402,7 @@ def test_compare_results_max_total_margin() -> None:
         _rec(max_total_margin=0.0),
         _rec(max_total_margin=1.0),
         _rec(max_total_margin=3.0),
-        _rec(max_total_margin=2.0),  # lower than peak; monotonically non-decreasing
+        _rec(max_total_margin=2.0),
     ]
     baseline = [
         _rec(reason="baseline", max_total_margin=0.0),
@@ -479,50 +413,33 @@ def test_compare_results_max_total_margin() -> None:
     assert cmp.max_total_margin_baseline == 5.0
 
 
-# ---------------------------------------------------------------------------
-# forecaster_action: mu/sigma -> discrete action, scaled by conviction
-# ---------------------------------------------------------------------------
-
-
 def test_forecaster_position_direction_is_sign_of_mu() -> None:
-    # mu >= 0 -> long (pi > 0), mu < 0 -> short (pi < 0). Always in the market.
     assert forecaster_position(2.0, 2.0, risk_aversion=0.2) > 0
     assert forecaster_position(-2.0, 2.0, risk_aversion=0.2) < 0
 
 
 def test_forecaster_position_scales_with_sigma() -> None:
-    # pi* = mu / (sigma^2 * gamma). Same mu, larger sigma -> smaller |pi|.
     near = forecaster_position(1.0, 6.0, risk_aversion=0.2)
     far = forecaster_position(1.0, 20.0, risk_aversion=0.2)
     assert 0 < far < near <= 1.0
 
 
 def test_forecaster_position_truncates_to_unit_interval() -> None:
-    # Large |pi*| is truncated to [-1, 1] (eq 3.1.8).
-    assert forecaster_position(4.0, 1.0, risk_aversion=0.1) == 1.0    # pi*=40->1
-    assert forecaster_position(-4.0, 1.0, risk_aversion=0.1) == -1.0  # pi*=-40->-1
+    assert forecaster_position(4.0, 1.0, risk_aversion=0.1) == 1.0
+    assert forecaster_position(-4.0, 1.0, risk_aversion=0.1) == -1.0
 
 
 def test_forecaster_position_matches_mean_variance_formula() -> None:
-    # pi* = mu / (sigma^2 * gamma), un-truncated case.
     assert forecaster_position(1.0, 5.0, risk_aversion=0.2) == pytest.approx(
         1.0 / (25.0 * 0.2)
     )
 
 
 def test_forecaster_position_sigma_nonpositive_full_position() -> None:
-    # sigma <= 0 -> +/-1 (paper's sigma=0 directional case).
     assert forecaster_position(1.0, 0.0, risk_aversion=0.1) == 1.0
     assert forecaster_position(-1.0, 0.0, risk_aversion=0.1) == -1.0
 
 
-# ---------------------------------------------------------------------------
-# compare_results: forecaster-only arm
-# ---------------------------------------------------------------------------
-
-
-# Training window the DQN model was trained on (read from the checkpoint).
-# 15:00 UTC start through 15:00 next day (hour_end=39 -> 24h session).
 _TRAINING_WINDOW = {
     "date_start": "",
     "date_end": "",
@@ -547,9 +464,7 @@ def test_resolve_episode_windows_date_range_inherits_trained_hours() -> None:
     """Date-range mode with no hour override inherits the DQN's trained session."""
     config = IntegrationConfig(date_start="2012-01-01", date_end="2012-01-03")
     windows = _resolve_episode_windows(config, _TRAINING_WINDOW)
-    # One episode per calendar date in [date_start, date_end].
     assert len(windows) == 3
-    # First episode: 2012-01-01 15:00 UTC -> 2012-01-02 15:00 UTC (24h session).
     start = datetime(2012, 1, 1, 15, tzinfo=timezone.utc)
     end = datetime(2012, 1, 2, 15, tzinfo=timezone.utc)
     assert windows[0] == (int(start.timestamp()), int(end.timestamp()))

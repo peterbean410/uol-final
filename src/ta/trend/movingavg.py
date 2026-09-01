@@ -9,15 +9,14 @@ import talib
 import pandas as pd
 
 
-# Map of indicator name → TA-Lib function
 _MA_FUNCS = {
-    "SMA":   talib.SMA,     # Simple Moving Average
-    "EMA":   talib.EMA,     # Exponential Moving Average
-    "WMA":   talib.WMA,     # Weighted Moving Average
-    "DEMA":  talib.DEMA,    # Double Exponential Moving Average
-    "TEMA":  talib.TEMA,    # Triple Exponential Moving Average
-    "KAMA":  talib.KAMA,    # Kaufman Adaptive Moving Average
-    "TRIMA": talib.TRIMA,   # Triangular Moving Average
+    "SMA":   talib.SMA,
+    "EMA":   talib.EMA,
+    "WMA":   talib.WMA,
+    "DEMA":  talib.DEMA,
+    "TEMA":  talib.TEMA,
+    "KAMA":  talib.KAMA,
+    "TRIMA": talib.TRIMA,
 }
 
 

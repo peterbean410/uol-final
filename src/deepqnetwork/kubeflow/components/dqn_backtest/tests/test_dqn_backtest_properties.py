@@ -23,11 +23,6 @@ from deepqnetwork.kubeflow.components.dqn_backtest.component import (
 )
 
 
-# ---------------------------------------------------------------------------
-# resolve_eval_windows: date-range (distinct sessions) vs legacy fixed-window
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_eval_windows_date_range_one_per_date() -> None:
     """Date-range mode yields one distinct window per calendar date."""
     windows = resolve_eval_windows(
@@ -39,7 +34,6 @@ def test_resolve_eval_windows_date_range_one_per_date() -> None:
         eval_episode_end_ts=0,
         num_eval_episodes=10,
     )
-    # 4 calendar dates -> 4 windows, all distinct, each a 24h (23->47) session.
     assert len(windows) == 4
     assert len(set(windows)) == 4
     for start_ts, end_ts in windows:
@@ -72,11 +66,6 @@ def test_resolve_eval_windows_partial_dates_fall_back_to_legacy() -> None:
         num_eval_episodes=2,
     )
     assert windows == [(5, 9), (5, 9)]
-
-
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
 
 
 @st.composite
@@ -168,11 +157,6 @@ def backtest_metrics_strategy(draw):
     )
 
 
-# ---------------------------------------------------------------------------
-# Property DQN-7: Backtest metric bounds
-# ---------------------------------------------------------------------------
-
-
 class TestBacktestMetricBounds:
     """Property DQN-7: Backtest metric bounds.
 
@@ -223,11 +207,6 @@ class TestBacktestMetricBounds:
         )
 
 
-# ---------------------------------------------------------------------------
-# Property DQN-8: Degradation gate blocks promotion
-# ---------------------------------------------------------------------------
-
-
 class TestDegradationGateBlocksPromotion:
     """Property DQN-8: Degradation gate blocks promotion.
 
@@ -254,12 +233,11 @@ class TestDegradationGateBlocksPromotion:
 
         **Validates: Requirements DQN-R9**
         """
-        # Current Sharpe is lower than production by more than the threshold (0.1)
         current_sharpe = prod_sharpe - degradation
-        assume(degradation > 0.1)  # Ensure it exceeds the default threshold
+        assume(degradation > 0.1)
 
         current_metrics = BacktestMetrics(
-            cumulative_pnl=100.0,  # Profitable to avoid triggering other gates
+            cumulative_pnl=100.0,
             sharpe_ratio=current_sharpe,
             max_drawdown=0.1,
             win_rate=0.6,
@@ -271,14 +249,12 @@ class TestDegradationGateBlocksPromotion:
             "cumulative_pnl": 50.0,
         }
 
-        # Use a high absolute threshold that won't trigger (current_sharpe could be high)
-        # We specifically test the relative degradation check here
         gate_passed, reason = degradation_gate(
             current_metrics=current_metrics,
             production_metrics=production_metrics,
             sharpe_degradation_threshold=0.1,
-            sharpe_absolute_threshold=-100.0,  # Disable absolute check
-            pnl_absolute_threshold=-1000.0,  # Disable absolute P&L check
+            sharpe_absolute_threshold=-100.0,
+            pnl_absolute_threshold=-1000.0,
         )
 
         assert gate_passed is False, (
@@ -305,14 +281,14 @@ class TestDegradationGateBlocksPromotion:
         """
         current_metrics = BacktestMetrics(
             cumulative_pnl=current_pnl,
-            sharpe_ratio=5.0,  # High Sharpe to avoid triggering other gates
+            sharpe_ratio=5.0,
             max_drawdown=0.1,
             win_rate=0.6,
             avg_episode_reward=1.0,
             avg_episode_length=1000.0,
         )
         production_metrics = {
-            "sharpe_ratio": 2.0,  # Lower than current to avoid relative check
+            "sharpe_ratio": 2.0,
             "cumulative_pnl": prod_pnl,
         }
 
@@ -320,8 +296,8 @@ class TestDegradationGateBlocksPromotion:
             current_metrics=current_metrics,
             production_metrics=production_metrics,
             sharpe_degradation_threshold=0.1,
-            sharpe_absolute_threshold=-100.0,  # Disable absolute Sharpe check
-            pnl_absolute_threshold=-1000.0,  # Disable absolute P&L check
+            sharpe_absolute_threshold=-100.0,
+            pnl_absolute_threshold=-1000.0,
         )
 
         assert gate_passed is False, (
@@ -346,7 +322,7 @@ class TestDegradationGateBlocksPromotion:
         assume(current_sharpe < 1.0)
 
         current_metrics = BacktestMetrics(
-            cumulative_pnl=100.0,  # Profitable to avoid triggering P&L gates
+            cumulative_pnl=100.0,
             sharpe_ratio=current_sharpe,
             max_drawdown=0.1,
             win_rate=0.6,
@@ -354,7 +330,7 @@ class TestDegradationGateBlocksPromotion:
             avg_episode_length=1000.0,
         )
         production_metrics = {
-            "sharpe_ratio": current_sharpe - 1.0,  # Lower than current to avoid relative check
+            "sharpe_ratio": current_sharpe - 1.0,
             "cumulative_pnl": 50.0,
         }
 
@@ -363,7 +339,7 @@ class TestDegradationGateBlocksPromotion:
             production_metrics=production_metrics,
             sharpe_degradation_threshold=0.1,
             sharpe_absolute_threshold=1.0,
-            pnl_absolute_threshold=-1000.0,  # Disable absolute P&L check
+            pnl_absolute_threshold=-1000.0,
         )
 
         assert gate_passed is False, (
@@ -386,22 +362,22 @@ class TestDegradationGateBlocksPromotion:
 
         current_metrics = BacktestMetrics(
             cumulative_pnl=current_pnl,
-            sharpe_ratio=5.0,  # High Sharpe to avoid triggering Sharpe gates
+            sharpe_ratio=5.0,
             max_drawdown=0.1,
             win_rate=0.6,
             avg_episode_reward=1.0,
             avg_episode_length=1000.0,
         )
         production_metrics = {
-            "sharpe_ratio": 2.0,  # Lower than current to avoid relative check
-            "cumulative_pnl": -50.0,  # Negative to avoid P&L sign flip check
+            "sharpe_ratio": 2.0,
+            "cumulative_pnl": -50.0,
         }
 
         gate_passed, reason = degradation_gate(
             current_metrics=current_metrics,
             production_metrics=production_metrics,
             sharpe_degradation_threshold=0.1,
-            sharpe_absolute_threshold=-100.0,  # Disable absolute Sharpe check
+            sharpe_absolute_threshold=-100.0,
             pnl_absolute_threshold=0.0,
         )
 

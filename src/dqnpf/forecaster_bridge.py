@@ -23,20 +23,8 @@ logger = logging.getLogger(__name__)
 _BAR_COLUMNS = ["Timestamp", "Open", "High", "Low", "Close", "Volume"]
 LOOKBACK_WINDOW = 36
 FEATURE_DIM = 16
-# Rolling window compute_features warms up over and then drops from the front.
-# Must match probabilisticforecaster.features.compute_features' default.
 HISTORICAL_WINDOW = 1440
-# Completed M5 bars to request from RecentBars. compute_features drops the first
-# HISTORICAL_WINDOW rows, so we need HISTORICAL_WINDOW + LOOKBACK_WINDOW bars for
-# at least LOOKBACK_WINDOW feature rows to survive. Without this the RPC's
-# default 64-bar window is < HISTORICAL_WINDOW and the forecaster never leaves
-# warm-up (every step falls back to DQN-only).
 RECENT_BARS_COUNT = HISTORICAL_WINDOW + LOOKBACK_WINDOW
-# The forecaster emits mu/sigma as raw forward-return *fractions* (e.g. sigma
-# ~0.00137 = 0.137%). The integration layer's thresholds (variance_threshold,
-# directional_tolerance) are documented and tuned in *basis points*. Convert
-# the forecaster output to bps here, at the single integration boundary, so the
-# documented bps contract holds. 1 unit fraction = 10,000 bps.
 BPS_PER_UNIT = 10_000.0
 
 
@@ -155,6 +143,4 @@ class ForecasterBridge:
 
         tensor = _features_to_tensor(features_df)
         mu, sigma = self._forecaster.predict(tensor)
-        # Convert raw return fractions -> basis points (the units the
-        # integration layer's thresholds are expressed in).
         return float(mu) * BPS_PER_UNIT, float(sigma) * BPS_PER_UNIT

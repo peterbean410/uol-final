@@ -22,11 +22,7 @@ import numpy as np
 import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
 
-# ---------------------------------------------------------------------------
-# Module-level mocks for unavailable dependencies
-# ---------------------------------------------------------------------------
 
-# Mock kserve (not installed locally, only available in the container image)
 if "kserve" not in sys.modules:
 
     class _FakeKServeModel:
@@ -40,9 +36,6 @@ if "kserve" not in sys.modules:
     _mock_kserve.Model = _FakeKServeModel
     sys.modules["kserve"] = _mock_kserve
 
-# Mock the external Kubeflow ``model_registry`` SDK (not installed locally) so
-# the real ``registry_client`` module can be imported and ``monkeypatch`` can
-# replace ``resolve_production_checkpoint`` per-test.
 sys.modules.setdefault("model_registry", MagicMock())
 sys.modules.setdefault("model_registry.types", MagicMock())
 
@@ -65,10 +58,6 @@ def _stub_resolve_production_checkpoint(monkeypatch):
 from dqnpf.config import IntegrationConfig
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 _SYMBOLS = ["USDJPY", "AUDJPY"]
 
 _valid_action = st.integers(min_value=0, max_value=4)
@@ -78,15 +67,10 @@ _finite_float = st.floats(
 _positive_sigma = st.floats(
     min_value=0.01, max_value=50.0, allow_nan=False, allow_infinity=False
 )
-_observation_dim = 53  # modelenv state vector dimension
+_observation_dim = 53
 
-# The predictor now passes the latest bar timestamp into IntegrationLayer.screen,
-# which resets the per-symbol risk budget on each UTC day boundary. Budget
-# accumulation tests must therefore keep all requests within a single UTC day,
-# otherwise a day rollover would zero the counters mid-test. _DAY_BASE is the
-# UTC midnight of the reference timestamp used throughout this module.
 _NANOS_PER_DAY = 86_400_000_000_000
-_M5_NS = 300_000_000_000  # 5 minutes in nanoseconds
+_M5_NS = 300_000_000_000
 _REF_TS_NS = 1_700_000_000_000_000_000
 _DAY_BASE = (_REF_TS_NS // _NANOS_PER_DAY) * _NANOS_PER_DAY
 
@@ -109,10 +93,6 @@ def _observation_strategy():
     )
 
 
-# ---------------------------------------------------------------------------
-# Fake collaborators
-# ---------------------------------------------------------------------------
-
 ACTION_NAMES = ["HOLD", "BUY_1", "BUY_2", "SELL_1", "SELL_2"]
 
 
@@ -128,11 +108,6 @@ class FakeActionResult:
 
 def _make_fake_action_result(action: int) -> FakeActionResult:
     return FakeActionResult(action=action, action_name=ACTION_NAMES[action])
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 def _build_predictor(
@@ -186,10 +161,8 @@ def _load_predictor_with_mocks(
     mock_forecaster.predict.return_value = (mu, sigma)
 
     mock_env_client = MagicMock()
-    # reference_data returns a fake observation
     mock_env_client.reference_data.return_value = MagicMock()
 
-    # recent_bars returns a response with M5 bars
     mock_bars_response = MagicMock()
     mock_bar = MagicMock()
     mock_bar.timestamp_ns = 1_700_000_000_000_000_000
@@ -218,25 +191,17 @@ def _load_predictor_with_mocks(
             "dqnpf.kubeflow.serving.dqnpf_predictor.StatePreprocessor",
         ) as mock_preprocessor_cls,
     ):
-        # StatePreprocessor.process returns a tensor-like with .numpy()
         mock_state = np.zeros(_observation_dim, dtype=np.float32)
         mock_preprocessor_cls.return_value.process.return_value = MagicMock(
             numpy=MagicMock(return_value=mock_state)
         )
         predictor.load()
 
-    # Replace internal collaborators with our controllable mocks
     predictor._dqn = mock_dqn
     predictor._forecaster = mock_forecaster
     predictor._env_client = mock_env_client
 
     return predictor, mock_dqn, mock_forecaster, mock_env_client
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-1: Predictor loads both checkpoints from registry
-# **Validates: Requirements 22.3, 22.5**
-# ---------------------------------------------------------------------------
 
 
 @given(
@@ -255,16 +220,10 @@ def test_predictor_loads_both_checkpoints(symbol: str) -> None:
     assert predictor.ready is True
     assert predictor._dqn is not None
     assert predictor._forecaster is not None
-    # Verify per-symbol layers were created
     assert symbol in predictor._layers
     assert symbol in predictor._bridges
     assert symbol in predictor._caches
 
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-2: ScreenedAction validity
-# **Validates: Requirements 22.3, 22.6**
-# ---------------------------------------------------------------------------
 
 _VALID_ACTIONS = {0, 1, 2, 3, 4}
 _VALID_REASONS = {"pass", "budget_exhausted", "directional_conflict", "gate_bypassed"}
@@ -293,11 +252,9 @@ def test_screened_action_validity(
         _load_predictor_with_mocks(predictor, dqn_action=action, mu=mu, sigma=sigma)
     )
 
-    # Configure the ForecasterBridge to return our controlled (mu, sigma)
     for bridge in predictor._bridges.values():
         bridge.compute_signal = MagicMock(return_value=(mu, sigma))
 
-    # Invalidate signal cache so it calls compute_signal
     for cache in predictor._caches.values():
         cache.invalidate()
 
@@ -317,12 +274,6 @@ def test_screened_action_validity(
     assert isinstance(response["risk_short_used"], int)
     assert isinstance(response["screened"], bool)
     assert isinstance(response["action_name"], str)
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-3: Budget state persists across requests
-# **Validates: Requirements 22.5, 22.6**
-# ---------------------------------------------------------------------------
 
 
 @given(
@@ -347,29 +298,24 @@ def test_budget_state_persists_across_requests(
         max_risk_long_units=max_risk_long,
         max_risk_short_units=max_risk_short,
     )
-    # Use BUY_1 (action=1, direction=LONG, risk_units=1) with high sigma
     predictor, mock_dqn, mock_forecaster, mock_env_client = (
         _load_predictor_with_mocks(
             predictor,
-            dqn_action=1,  # BUY_1
+            dqn_action=1,
             mu=0.5,
-            sigma=10.0,  # well above variance_threshold=2.0
+            sigma=10.0,
         )
     )
 
-    # Configure the ForecasterBridge to return high sigma
     for bridge in predictor._bridges.values():
         bridge.compute_signal = MagicMock(return_value=(0.5, 10.0))
 
     observation = [0.0] * _observation_dim
 
     for i in range(num_requests):
-        # Invalidate cache each time to force fresh signal computation
         for cache in predictor._caches.values():
             cache.invalidate()
 
-        # Keep every request within the same UTC day so the budget accumulates
-        # across requests instead of resetting on a day boundary.
         payload = {
             "symbol": "USDJPY",
             "observation": observation,
@@ -378,25 +324,15 @@ def test_budget_state_persists_across_requests(
 
         response = predictor.predict(payload)
 
-        # Budget counters must never exceed the configured max
         assert response["risk_long_used"] <= max_risk_long
         assert response["risk_short_used"] <= max_risk_short
 
-    # After all requests, verify the layer's internal state is consistent
     layer = predictor._layers["USDJPY"]
     assert layer.risk_long_used <= max_risk_long
     assert layer.risk_short_used <= max_risk_short
 
-    # If we sent more requests than the budget allows, some must have been screened
     if num_requests > max_risk_long:
-        # The budget should be at max (all units consumed)
         assert layer.risk_long_used == max_risk_long
-
-
-# ---------------------------------------------------------------------------
-# Property DQNPF-4: Hot-reload swaps in-process model atomically
-# **Validates: Requirement 22.12**
-# ---------------------------------------------------------------------------
 
 
 @given(
@@ -418,7 +354,6 @@ def test_hot_reload_atomicity(
     either the old model (action=1) or the new model (action=2), never a
     partially-loaded state. Budget state is preserved after the swap.
     """
-    # Build predictor with "old" model returning action=1
     predictor, _ = _build_predictor(
         symbols=["USDJPY"],
         variance_threshold=2.0,
@@ -428,20 +363,15 @@ def test_hot_reload_atomicity(
     predictor, mock_dqn_old, mock_forecaster_old, mock_env_client = (
         _load_predictor_with_mocks(
             predictor,
-            dqn_action=1,  # OLD model returns BUY_1
+            dqn_action=1,
             mu=0.5,
-            sigma=10.0,  # above variance_threshold
+            sigma=10.0,
         )
     )
 
-    # Configure ForecasterBridge to return controlled signal
     for bridge in predictor._bridges.values():
         bridge.compute_signal = MagicMock(return_value=(0.5, 10.0))
 
-    # Set up initial budget state to verify preservation. Pin _current_day to
-    # the request day so the first timestamped screen does not treat the seeded
-    # budget as a stale prior-day balance and zero it out (the predictor now
-    # resets the budget on UTC day boundaries).
     predictor._layers["USDJPY"]._risk_long_units = 2
     predictor._layers["USDJPY"]._risk_short_units = 1
     predictor._layers["USDJPY"]._current_day = _DAY_BASE // _NANOS_PER_DAY
@@ -449,25 +379,21 @@ def test_hot_reload_atomicity(
     initial_risk_long = 2
     initial_risk_short = 1
 
-    # Prepare "new" model mocks (returns action=2 = BUY_2)
     mock_dqn_new = MagicMock()
     mock_dqn_new.recommend_action.return_value = _make_fake_action_result(2)
 
     mock_forecaster_new = MagicMock()
     mock_forecaster_new.predict.return_value = (0.5, 10.0)
 
-    # Create a mock ForecasterBridge that returns controlled signal
     def _make_mock_bridge(*args, **kwargs):
         mock_bridge = MagicMock()
         mock_bridge.compute_signal = MagicMock(return_value=(0.5, 10.0))
         return mock_bridge
 
-    # Collect results from all threads
     results: list[dict] = []
     results_lock = threading.Lock()
     errors: list[Exception] = []
 
-    # Barrier to synchronize threads so they start predict() roughly together
     barrier = threading.Barrier(num_threads + 1, timeout=10)
 
     observation = [0.0] * _observation_dim
@@ -475,14 +401,11 @@ def test_hot_reload_atomicity(
     def worker(thread_id: int) -> None:
         """Worker thread that calls predict() multiple times."""
         try:
-            barrier.wait()  # Wait for all threads + main to be ready
+            barrier.wait()
             for req_idx in range(requests_per_thread):
-                # Invalidate cache to force fresh signal computation
                 for cache in predictor._caches.values():
                     cache.invalidate()
 
-                # All requests stay within one UTC day so the swap preserves the
-                # seeded budget instead of a day boundary resetting it.
                 payload = {
                     "symbol": "USDJPY",
                     "observation": observation,
@@ -496,14 +419,12 @@ def test_hot_reload_atomicity(
             with results_lock:
                 errors.append(exc)
 
-    # Start worker threads
     threads = []
     for i in range(num_threads):
         t = threading.Thread(target=worker, args=(i,), daemon=True)
         threads.append(t)
         t.start()
 
-    # Trigger hot-reload from the main thread after barrier releases
     def do_hot_reload() -> None:
         """Perform hot-reload with mocked model constructors and bridge."""
         with (
@@ -522,27 +443,15 @@ def test_hot_reload_atomicity(
         ):
             predictor._hot_reload("/new/dqn/path.pt", "/new/fc/path.pt")
 
-    # Release the barrier (all workers + main start together)
     barrier.wait()
 
-    # Trigger hot-reload concurrently with the predict() calls
     do_hot_reload()
 
-    # Wait for all threads to complete
     for t in threads:
         t.join(timeout=10)
 
-    # No exceptions should have occurred in worker threads
     assert not errors, f"Worker threads raised exceptions: {errors}"
 
-    # Verify atomicity: each response must use either old (action=1) or new (action=2)
-    # The old model returns action=1 (BUY_1); the new model returns action=2 (BUY_2).
-    # Due to budget screening, some actions may be overridden to HOLD (action=0).
-    # Valid actions from old model: 1 (BUY_1 passed) or 0 (BUY_1 screened to HOLD)
-    # Valid actions from new model: 2 (BUY_2 passed) or 0 (BUY_2 screened to HOLD)
-    # The key invariant: we should never see action=2 from the old model or action=1
-    # from the new model. Since both models can produce HOLD (0) via screening,
-    # we check that non-HOLD actions are exclusively 1 or 2.
     non_hold_actions = {r["action"] for r in results if r["action"] != 0}
     valid_non_hold = {1, 2}
     assert non_hold_actions.issubset(valid_non_hold), (
@@ -550,11 +459,7 @@ def test_hot_reload_atomicity(
         f"Expected only actions from old model (1) or new model (2)."
     )
 
-    # Verify budget state is preserved after the swap
-    # The new layer should have inherited the budget state from the old layer
     layer = predictor._layers["USDJPY"]
-    # Budget can only increase (BUY actions consume budget), never decrease
-    # during this test. So it must be >= initial values.
     assert layer.risk_long_used >= initial_risk_long, (
         f"Budget state lost: risk_long_used={layer.risk_long_used} < "
         f"initial={initial_risk_long}"
@@ -563,11 +468,6 @@ def test_hot_reload_atomicity(
         f"Budget state lost: risk_short_used={layer.risk_short_used} < "
         f"initial={initial_risk_short}"
     )
-
-
-# ---------------------------------------------------------------------------
-# KServe v2 gRPC path: InferRequest in, InferResponse out
-# ---------------------------------------------------------------------------
 
 
 class _FakeInferOutput:
@@ -588,7 +488,7 @@ class _FakeInferResponse:
 
 
 def _patch_infer_types(monkeypatch):
-    import kserve  # the module-level mock installed at the top of this file
+    import kserve
 
     monkeypatch.setattr(kserve, "InferOutput", _FakeInferOutput, raising=False)
     monkeypatch.setattr(

@@ -40,17 +40,14 @@ def _generate_synthetic_ohlc(n_bars: int = 1600, seed: int = 42) -> pd.DataFrame
     """
     rng = np.random.default_rng(seed)
 
-    # Random walk for close prices around 150.0
     returns = rng.normal(0, 0.0001, size=n_bars)
     close = 150.0 * np.exp(np.cumsum(returns))
 
-    # Generate OHLC from close with realistic spreads
     spread = rng.uniform(0.005, 0.02, size=n_bars)
     high = close + spread
     low = close - spread
     open_price = close + rng.normal(0, 0.005, size=n_bars)
 
-    # Ensure high >= max(open, close) and low <= min(open, close)
     high = np.maximum(high, np.maximum(open_price, close))
     low = np.minimum(low, np.minimum(open_price, close))
 
@@ -81,18 +78,14 @@ class TestEndToEndPipeline:
         """Full pipeline produces valid predictions and PnL from synthetic data."""
         torch.manual_seed(42)
 
-        # Step 1: Generate synthetic OHLC data (1600 bars > 1440 required)
         ohlc_df = _generate_synthetic_ohlc(n_bars=1600)
         assert len(ohlc_df) == 1600
 
-        # Step 2: Compute features
         features_df = compute_features(ohlc_df, historical_window=1440)
         assert features_df.shape[1] == 16
         assert len(features_df) > 0
-        # After dropping first 1440 bars, we should have 160 rows
         assert len(features_df) == 160
 
-        # Step 3: Build dataset
         close_prices = pd.Series(
             ohlc_df.set_index(pd.to_datetime(ohlc_df["Timestamp"], utc=True))["Close"]
         ).reindex(features_df.index)
@@ -106,44 +99,34 @@ class TestEndToEndPipeline:
         )
         assert len(dataset) > 0
 
-        # Step 4: Get a sample and run through model
         features_sample, label_sample = dataset[0]
         assert features_sample.shape == (36, 16)
         assert label_sample.shape == (1,)
 
-        # Step 5: Model forward pass
         model = ProbabilisticTransformer(config)
         model.eval()
 
         with torch.no_grad():
-            # Add batch dimension
-            x = features_sample.unsqueeze(0)  # (1, 36, 16)
+            x = features_sample.unsqueeze(0)
             mu, sigma = model(x)
 
-        # Verify output shapes
         assert mu.shape == (1, 36, 1)
         assert sigma.shape == (1, 36, 1)
 
-        # Verify sigma > 0
         assert (sigma > 0).all(), "All sigma values must be strictly positive"
 
-        # Extract last position prediction
         mu_val = mu[0, -1, 0].item()
         sigma_val = sigma[0, -1, 0].item()
         assert sigma_val > 0
 
-        # Step 6: Strategy computes position
         strategy = DirectionalStrategy()
         position = strategy.compute_position(mu_val, sigma_val, config)
         assert position != 0.0 or mu_val == 0.0
         assert abs(position) <= config.position_size
 
-        # Step 7: Compute PnL for one bar
-        # Use the actual label as the realized return
         actual_return = label_sample[0].item()
         pnl = position * actual_return
 
-        # PnL should be a finite number
         assert np.isfinite(pnl), f"PnL must be finite, got {pnl}"
 
     def test_batch_forward_pass_shapes(self):
@@ -164,7 +147,6 @@ class TestEndToEndPipeline:
             horizon=config.forecast_horizon,
         )
 
-        # Build a small batch
         batch_size = min(4, len(dataset))
         batch_features = torch.stack([dataset[i][0] for i in range(batch_size)])
         assert batch_features.shape == (batch_size, 36, 16)
@@ -184,14 +166,11 @@ class TestEndToEndPipeline:
         """Full pipeline: synthetic data → features → dataset → train → evaluate → backtest."""
         torch.manual_seed(42)
 
-        # Step 1: Generate synthetic OHLC data
         ohlc_df = _generate_synthetic_ohlc(n_bars=1600, seed=99)
 
-        # Step 2: Compute features
         features_df = compute_features(ohlc_df, historical_window=1440)
         assert features_df.shape[1] == 16
 
-        # Step 3: Build dataset with close prices aligned to features
         close_prices = pd.Series(
             ohlc_df.set_index(pd.to_datetime(ohlc_df["Timestamp"], utc=True))["Close"]
         ).reindex(features_df.index)
@@ -209,14 +188,11 @@ class TestEndToEndPipeline:
         )
         assert len(dataset) > 0
 
-        # Split into train/test (80/20)
         n_total = len(dataset)
         n_train = int(n_total * 0.8)
         train_dataset = torch.utils.data.Subset(dataset, list(range(n_train)))
         test_indices = list(range(n_train, n_total))
 
-        # Create a proper ForexDataset for test (evaluate_model needs ForexDataset)
-        # Use the same features_df but slice for test portion
         test_start_idx = n_train
         test_features_df = features_df.iloc[test_start_idx:]
         test_close_prices = close_prices.iloc[test_start_idx:]
@@ -227,7 +203,6 @@ class TestEndToEndPipeline:
             horizon=config.forecast_horizon,
         )
 
-        # Step 4: Train model
         model = ProbabilisticTransformer(config)
         history = train_model(
             model=model,
@@ -236,12 +211,10 @@ class TestEndToEndPipeline:
             upload_to_s3=False,
         )
 
-        # Verify training produced loss history
         assert len(history["epoch_loss"]) == config.epochs
         assert all(np.isfinite(loss) for loss in history["epoch_loss"])
         assert len(history["batch_losses"]) > 0
 
-        # Step 5: Evaluate model
         metrics = evaluate_model(model, test_dataset, config)
         assert isinstance(metrics, EvaluationMetrics)
         assert np.isfinite(metrics.nll)
@@ -249,7 +222,6 @@ class TestEndToEndPipeline:
         assert 0.0 <= metrics.covered_ratio_95 <= 1.0
         assert metrics.rmse >= 0.0
 
-        # Step 6: Generate predictions for backtest
         model.eval()
         predictions_list = []
         from torch.utils.data import DataLoader
@@ -273,15 +245,12 @@ class TestEndToEndPipeline:
 
         predictions_df = pd.DataFrame(predictions_list)
 
-        # Build prices DataFrame for backtest
-        # Need timestamps from predictions plus one extra for PnL calc
         price_timestamps = test_features_df.index.tolist()
         prices_df = pd.DataFrame({
             "timestamp": price_timestamps,
             "close": test_close_prices.values,
         })
 
-        # Step 7: Run backtest with directional strategy
         strategy = DirectionalStrategy()
         result = run_backtest(predictions_df, prices_df, strategy, config)
 
@@ -302,14 +271,11 @@ class TestModelSaveLoadRoundTrip:
         model = ProbabilisticTransformer(config)
         model.eval()
 
-        # Generate random input
         x = torch.randn(4, 36, 16)
 
-        # Get predictions from original model
         with torch.no_grad():
             mu1, sigma1 = model(x)
 
-        # Save model state dict (matching training.py format)
         model_path = tmp_path / "test_model.pt"
         checkpoint = {
             "model_state_dict": model.state_dict(),
@@ -329,17 +295,14 @@ class TestModelSaveLoadRoundTrip:
         }
         torch.save(checkpoint, model_path)
 
-        # Create new model and load saved state
         new_model = ProbabilisticTransformer(config)
         loaded_checkpoint = torch.load(model_path, weights_only=False)
         new_model.load_state_dict(loaded_checkpoint["model_state_dict"])
         new_model.eval()
 
-        # Get predictions from loaded model
         with torch.no_grad():
             mu2, sigma2 = new_model(x)
 
-        # Exact equality since same weights, same input, deterministic forward pass
         assert torch.equal(mu1, mu2), "mu predictions must be identical after load"
         assert torch.equal(sigma1, sigma2), "sigma predictions must be identical after load"
 
@@ -351,7 +314,6 @@ class TestModelSaveLoadRoundTrip:
         model = ProbabilisticTransformer(config)
         model.eval()
 
-        # Save model
         model_path = tmp_path / "test_model.pt"
         checkpoint = {
             "model_state_dict": model.state_dict(),
@@ -366,13 +328,11 @@ class TestModelSaveLoadRoundTrip:
         }
         torch.save(checkpoint, model_path)
 
-        # Load into new model
         new_model = ProbabilisticTransformer(config)
         loaded = torch.load(model_path, weights_only=False)
         new_model.load_state_dict(loaded["model_state_dict"])
         new_model.eval()
 
-        # Test with multiple different inputs
         for seed in [0, 1, 2, 3]:
             torch.manual_seed(seed)
             x = torch.randn(2, 36, 16)
@@ -395,10 +355,8 @@ class TestModelSaveLoadRoundTrip:
             model_path=str(tmp_path / "inference_roundtrip.pt"),
         )
 
-        # Create and train a model
         model = ProbabilisticTransformer(config)
 
-        # Create a small synthetic dataset for training
         n_bars = 1600
         ohlc_df = _generate_synthetic_ohlc(n_bars=n_bars, seed=77)
         features_df = compute_features(ohlc_df, historical_window=1440)
@@ -413,10 +371,8 @@ class TestModelSaveLoadRoundTrip:
             horizon=config.forecast_horizon,
         )
 
-        # Train the model (saves checkpoint to config.model_path)
         train_model(model=model, train_dataset=dataset, config=config, upload_to_s3=False)
 
-        # Get predictions from the trained model directly
         model.eval()
         test_input = torch.randn(1, 36, 16)
         with torch.no_grad():
@@ -425,13 +381,10 @@ class TestModelSaveLoadRoundTrip:
         mu_direct_val = mu_direct[0, -1, 0].item()
         sigma_direct_val = sigma_direct[0, -1, 0].item()
 
-        # Load via ForecasterInference
         inference = ForecasterInference(model_path=config.model_path, config=config)
 
-        # Single prediction
         mu_inf, sigma_inf = inference.predict(test_input.squeeze(0))
 
-        # Predictions must be identical (same weights, same input, deterministic)
         assert abs(mu_direct_val - mu_inf) < 1e-6, (
             f"mu mismatch: direct={mu_direct_val}, inference={mu_inf}"
         )
@@ -439,14 +392,12 @@ class TestModelSaveLoadRoundTrip:
             f"sigma mismatch: direct={sigma_direct_val}, inference={sigma_inf}"
         )
 
-        # Batch prediction
         batch_input = torch.randn(4, 36, 16)
         with torch.no_grad():
             mu_batch_direct, sigma_batch_direct = model(batch_input)
 
         mu_batch_inf, sigma_batch_inf = inference.predict_batch(batch_input)
 
-        # Compare last-position predictions
         mu_batch_direct_last = mu_batch_direct[:, -1, 0]
         sigma_batch_direct_last = sigma_batch_direct[:, -1, 0]
 
@@ -466,7 +417,6 @@ class TestFullStrategyBacktestIntegration:
         torch.manual_seed(42)
         rng = np.random.default_rng(42)
 
-        # Generate synthetic predictions
         n_predictions = 100
         timestamps = pd.date_range(
             start="2023-06-01 00:00", periods=n_predictions + 1, freq="5min", tz="UTC"
@@ -480,7 +430,6 @@ class TestFullStrategyBacktestIntegration:
             }
         )
 
-        # Generate matching prices (need one extra for PnL calculation)
         close_prices = 150.0 + np.cumsum(rng.normal(0, 0.01, size=n_predictions + 1))
         prices_df = pd.DataFrame(
             {
@@ -489,12 +438,10 @@ class TestFullStrategyBacktestIntegration:
             }
         )
 
-        # Run backtest
         config = ForecasterConfig()
         strategy = DirectionalStrategy()
         result = run_backtest(predictions_df, prices_df, strategy, config)
 
-        # Validate BacktestResult
         assert isinstance(result, BacktestResult)
         assert np.isfinite(result.sharpe_ratio), "Sharpe ratio must be finite"
         assert result.max_drawdown >= 0, "Max drawdown must be non-negative"
@@ -530,7 +477,6 @@ class TestFullStrategyBacktestIntegration:
         strategy = DirectionalStrategy()
         result = run_backtest(predictions_df, prices_df, strategy, config)
 
-        # All daily PnL values should be finite
         assert result.daily_pnl.apply(np.isfinite).all(), "All daily PnL values must be finite"
         assert np.isfinite(result.sharpe_ratio)
         assert np.isfinite(result.max_drawdown)

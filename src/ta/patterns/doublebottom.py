@@ -17,31 +17,26 @@ from dataclasses import dataclass, asdict
 import pandas as pd
 
 
-# ──────────────────────────────────────────────
-# Pattern detection
-# ──────────────────────────────────────────────
 @dataclass
 class DoubleBottom:
     """A detected double-bottom pattern."""
-    idx1: int               # DataFrame index of first bottom
-    idx2: int               # DataFrame index of second bottom
-    ts1: str                # Timestamp of first bottom
-    ts2: str                # Timestamp of second bottom
-    low1: float             # Price at first bottom
-    low2: float             # Price at second bottom
-    neckline: float         # Highest high between the two bottoms
-    neckline_idx: int       # DataFrame index of the neckline bar
-    depth_pct: float        # (neckline - avg_bottom) / neckline * 100
-    width_bars: int         # Number of bars between the two bottoms
-    confirmed: bool         # True if price closed above the neckline after bottom 2
+    idx1: int
+    idx2: int
+    ts1: str
+    ts2: str
+    low1: float
+    low2: float
+    neckline: float
+    neckline_idx: int
+    depth_pct: float
+    width_bars: int
+    confirmed: bool
 
-    # Local extrema before the pattern
     min_before_val: float | None = None
     min_before_ts: str | None = None
     max_before_val: float | None = None
     max_before_ts: str | None = None
 
-    # Local extrema after the pattern
     min_after_val: float | None = None
     min_after_ts: str | None = None
     max_after_val: float | None = None
@@ -138,29 +133,24 @@ def detect_double_bottoms(
         low1, low2 = lows.iloc[a], lows.iloc[b]
         avg_low = (low1 + low2) / 2
 
-        # ── Tolerance check ──
         diff_pct = abs(low1 - low2) / avg_low * 100
         if diff_pct > tolerance_pct:
             continue
 
-        # ── Minimum width ──
         width = b - a
         if width < min_width:
             continue
 
-        # ── Neckline: highest high between the two bottoms ──
         between = highs.iloc[a + 1 : b]
         if between.empty:
             continue
         neckline_idx = int(between.idxmax())
         neckline = float(highs.iloc[neckline_idx])
 
-        # ── Depth: the neckline must be meaningfully above the bottoms ──
         depth_pct = (neckline - avg_low) / neckline * 100
         if depth_pct < 0.1:
             continue
 
-        # ── Confirmation: did price close above the neckline after bottom 2? ──
         remaining = closes.iloc[b + 1 :]
         confirmed = bool((remaining > neckline).any()) if not remaining.empty else False
 
@@ -189,7 +179,6 @@ def detect_double_bottoms(
             max_after_val=max_after_val, max_after_ts=max_after_ts,
         ))
 
-    # ── Check for potential forming double bottom at the right edge ──
     if minima:
         a = minima[-1]
         if a + 1 < len(df):

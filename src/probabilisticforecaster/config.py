@@ -7,10 +7,8 @@ trading strategy, and model persistence paths.
 from dataclasses import dataclass
 
 
-# S3 bucket for model storage
 S3_BUCKET = "prod-fintech-forex-sg-731833471586"
 
-# S3 path template for model persistence
 S3_MODEL_PATH_TEMPLATE = (
     "transformerforecaster/model/"
     "symbol={SYMBOL}/horizon={HORIZON}/version={version}/{timestamp}.pt"
@@ -25,29 +23,24 @@ class ForecasterConfig:
     training, and trading strategy execution.
     """
 
-    # Data
     symbol: str = "USDJPY"
-    lookback_window: int = 36  # 3 hours of 5-min bars
-    historical_window: int = 1440  # 5 days × 288 bars
-    forecast_horizon: int = 1  # bars ahead (1=5min, 3=15min, 6=30min, 12=60min)
+    lookback_window: int = 36
+    historical_window: int = 1440
+    forecast_horizon: int = 1
 
-    # Model
     num_features: int = 16
     num_layers: int = 3
     num_heads: int = 4
     dropout: float = 0.1
 
-    # Training
     learning_rate: float = 0.001
     batch_size: int = 64
     epochs: int = 5
     random_seed: int = 42
 
-    # Strategy
-    position_size: float = 10_000_000  # 10m notional
-    risk_aversion: float = 0.05  # γ for mean-variance
+    position_size: float = 10_000_000
+    risk_aversion: float = 0.05
 
-    # Paths
     model_path: str = "models/transformer_forecaster.pt"
 
     def get_s3_model_path(self, version: int, timestamp: str) -> str:

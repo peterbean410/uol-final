@@ -32,7 +32,6 @@ from datetime import datetime, timezone
 import boto3
 import torch
 
-# Add parent paths so we can import the deepqnetwork package
 sys.path.insert(0, "/app")
 
 from deepqnetwork.config import DQNConfig
@@ -43,23 +42,16 @@ from probabilisticforecaster.kubeflow.monitoring.metrics import get_logger
 
 logger = get_logger(__name__, component="dqn_training")
 
-# S3 bucket for artifacts
 S3_BUCKET = os.environ.get("S3_BUCKET", "prod-fintech-forex-sg-731833471586")
 
-# Modelenv sidecar configuration
 MODELENV_BINARY = "/usr/local/bin/modelenv-server"
 MODELENV_HOST = "localhost"
 MODELENV_PORT = 50051
-# Seconds to wait for modelenv's startup data preload. It downloads the full
-# training window's bars + per-day news snapshots from S3 (~1 file/s cold);
-# a 14-year window (adhoc20260720: 2012->2026) is thousands of files, so a
-# cold/partially-cold cache PVC can legitimately take over an hour, 600s
-# killed a healthy sidecar mid-preload. Overridable via env for odd cases.
 MODELENV_HEALTH_CHECK_TIMEOUT = int(
     os.environ.get("MODELENV_HEALTH_CHECK_TIMEOUT", "7200")
 )
-MODELENV_HEALTH_CHECK_INTERVAL = 1   # seconds
-MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
+MODELENV_HEALTH_CHECK_INTERVAL = 1
+MODELENV_SHUTDOWN_TIMEOUT = 10
 
 
 class ModelenvSidecar:
@@ -82,20 +74,10 @@ class ModelenvSidecar:
         self._stderr_lines: list[str] = []
         self._stderr_pump: "threading.Thread | None" = None
         self._symbol = symbol
-        # When all four are set, modelenv scopes its startup tick preload to
-        # this window (date_start..=date_end × [hour_start..hour_end]) instead
-        # of the full M1 reference span. Out-of-window tick files are still
-        # downloaded lazily on Reset().
         self._date_start = date_start
         self._date_end = date_end
         self._hour_start = hour_start
         self._hour_end = hour_end
-        # When set (ISO date/datetime, UTC assumed if naive), passed to modelenv
-        # as --price-snapshot-ts so ALL interval snapshots resolve "latest at or
-        # before" this instant instead of at the training window's date_end.
-        # Needed when date_end's own snapshot partitions predate a history
-        # consolidation and hold only lane-local bars (adhoc20260720: the
-        # 2026-04-17 partitions were 2026-only, so 2012 episodes found no bars).
         self._price_snapshot_date = price_snapshot_date
 
     def start(self) -> None:
@@ -166,11 +148,6 @@ class ModelenvSidecar:
             extra={"pid": self._process.pid},
         )
 
-        # Stream modelenv stderr to the parent's stderr live (visible in
-        # `kubectl logs`) AND retain it in self._stderr_lines for the
-        # post-mortem dump on graceful shutdown. Without the pump, the
-        # pipe buffers silently and the only chance to see modelenv logs
-        # is a graceful shutdown drain, useless when Reset hangs.
         def _pump_stderr() -> None:
             assert self._process is not None and self._process.stderr is not None
             try:
@@ -210,7 +187,6 @@ class ModelenvSidecar:
         deadline = time.time() + MODELENV_HEALTH_CHECK_TIMEOUT
 
         while time.time() < deadline:
-            # Check if process has exited prematurely
             if self._process is not None and self._process.poll() is not None:
                 stderr_output = self._capture_stderr()
                 raise RuntimeError(
@@ -218,7 +194,6 @@ class ModelenvSidecar:
                     f"{self._process.returncode}. stderr: {stderr_output}"
                 )
 
-            # Try TCP connection to the gRPC port
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(1.0)
@@ -236,7 +211,6 @@ class ModelenvSidecar:
 
             time.sleep(MODELENV_HEALTH_CHECK_INTERVAL)
 
-        # Timeout reached
         stderr_output = self._capture_stderr()
         raise RuntimeError(
             f"modelenv sidecar did not become ready within "
@@ -256,7 +230,6 @@ class ModelenvSidecar:
         pid = self._process.pid
         logger.info("Stopping modelenv sidecar", extra={"pid": pid})
 
-        # Send SIGTERM for graceful shutdown
         try:
             self._process.send_signal(signal.SIGTERM)
         except OSError as e:
@@ -266,7 +239,6 @@ class ModelenvSidecar:
             )
             return
 
-        # Wait for graceful shutdown
         try:
             self._process.wait(timeout=MODELENV_SHUTDOWN_TIMEOUT)
             logger.info(
@@ -274,7 +246,6 @@ class ModelenvSidecar:
                 extra={"pid": pid, "returncode": self._process.returncode},
             )
         except subprocess.TimeoutExpired:
-            # Force kill if graceful shutdown fails
             logger.warning(
                 "modelenv sidecar did not stop gracefully, sending SIGKILL",
                 extra={"pid": pid},
@@ -285,7 +256,6 @@ class ModelenvSidecar:
             except (OSError, subprocess.TimeoutExpired):
                 pass
 
-        # Capture stderr for debugging
         stderr_output = self._capture_stderr()
         if stderr_output:
             logger.info(
@@ -320,7 +290,6 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
     Returns:
         A DQNConfig instance ready for training.
     """
-    # Determine effective LR and episodes based on training mode
     training_mode = args.training_mode or pipeline_config.training_mode
 
     if training_mode == "finetune":
@@ -328,11 +297,6 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
     else:
         effective_lr = pipeline_config.learning_rate
 
-    # Episode-count knobs are mode-specific; route only the one that applies so
-    # the resulting DQNConfig never trips train()'s mis-set guard. The compiled
-    # KFP graph always passes --num-episodes, so in date-range mode (where
-    # repeats_per_date governs) we deliberately drop it here. num_episodes_per_range
-    # (including the finetune override) applies to fixed-window mode only.
     if pipeline_config.date_start and pipeline_config.date_end:
         eff_num_episodes = None
         eff_repeats = pipeline_config.repeats_per_date
@@ -345,7 +309,6 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         eff_repeats = None
 
     config = DQNConfig(
-        # Environment
         grpc_address=pipeline_config.grpc_address,
         symbol=pipeline_config.symbol,
         episode_start_ts=pipeline_config.episode_start_ts,
@@ -355,7 +318,6 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         date_end=pipeline_config.date_end,
         hour_of_day_start=pipeline_config.hour_of_day_start,
         hour_of_day_end=pipeline_config.hour_of_day_end,
-        # Agent
         gamma=pipeline_config.gamma,
         epsilon_start=pipeline_config.epsilon_start,
         epsilon_end=pipeline_config.epsilon_end,
@@ -365,7 +327,6 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         target_update_freq=pipeline_config.target_update_freq,
         train_freq=pipeline_config.train_freq,
         tau=pipeline_config.tau,
-        # Network
         hidden_dims=pipeline_config.hidden_dims,
         activation=pipeline_config.activation,
         dropout=pipeline_config.dropout,
@@ -375,18 +336,15 @@ def build_dqn_config(pipeline_config: DQNPipelineConfig, args: argparse.Namespac
         weight_decay=pipeline_config.weight_decay,
         grad_clip_norm=pipeline_config.grad_clip_norm,
         loss_function=pipeline_config.loss_function,
-        # Training
         num_episodes_per_range=eff_num_episodes,
         repeats_per_date=eff_repeats,
         max_steps_per_episode=pipeline_config.max_steps_per_episode,
         checkpoint_interval=pipeline_config.checkpoint_interval,
         checkpoint_dir="/tmp/dqn_checkpoints",
-        # Mode
         mode="train",
         checkpoint=args.production_checkpoint_path if training_mode == "finetune" else None,
         device="auto",
-        # S3
-        s3_checkpoint_prefix=None,  # We handle S3 upload separately in this component
+        s3_checkpoint_prefix=None,
         model_version=None,
     )
 
@@ -421,7 +379,6 @@ def upload_checkpoint_to_s3(
             f"No checkpoint files found in {checkpoint_dir}"
         )
 
-    # Use the last (highest episode) checkpoint
     final_checkpoint_path = checkpoint_files[-1]
 
     logger.info(
@@ -564,11 +521,6 @@ def parse_args() -> argparse.Namespace:
             "own snapshot partitions predate a history consolidation."
         ),
     )
-    # Reward-shaping overrides for the decision-persistence experiments
-    # (specs/experiments/dqn-decision-persistence.md). Empty = modelenv default
-    # (action_penalty 0.001, holding_penalty 1e-6, lambda 0.5). Set as env before
-    # the sidecar starts; modelenv reads MODELENV_REWARD_* and the sidecar Popen
-    # inherits os.environ. These shape TRAINING only, backtest PnL is fill-based.
     parser.add_argument("--reward-action-penalty", type=str, default="",
                         help="Override MODELENV_REWARD_ACTION_PENALTY (turnover penalty)")
     parser.add_argument("--reward-holding-penalty", type=str, default="",
@@ -619,8 +571,6 @@ def main() -> None:
     """Main entry point for the DQN training component."""
     args = parse_args()
 
-    # Apply reward-shaping overrides as env BEFORE the sidecar starts (it inherits
-    # os.environ). modelenv reads these; empty string = keep modelenv's default.
     for cli_val, env_key in (
         (args.reward_action_penalty, "MODELENV_REWARD_ACTION_PENALTY"),
         (args.reward_holding_penalty, "MODELENV_REWARD_HOLDING_PENALTY"),
@@ -639,10 +589,8 @@ def main() -> None:
         },
     )
 
-    # Step 1: Load pipeline configuration
     pipeline_config = DQNPipelineConfig.from_yaml(args.config_path)
 
-    # Apply CLI overrides to pipeline config
     overrides = {}
     if args.symbol is not None:
         overrides["symbol"] = args.symbol
@@ -660,14 +608,10 @@ def main() -> None:
         overrides["hour_of_day_start"] = args.hour_of_day_start
     if args.hour_of_day_end is not None:
         overrides["hour_of_day_end"] = args.hour_of_day_end
-    # The compiled KFP graph always passes --num-episodes, but it only applies to
-    # fixed-window mode. In date-range mode repeats_per_date governs, so dropping
-    # it here keeps the always-present arg from tripping the mode-mismatch guard.
     eff_date_start = overrides.get("date_start", pipeline_config.date_start)
     eff_date_end = overrides.get("date_end", pipeline_config.date_end)
     if args.num_episodes_per_range is not None and not (eff_date_start and eff_date_end):
         overrides["num_episodes_per_range"] = args.num_episodes_per_range
-    # Mirror image: repeats_per_date applies only in date-range mode.
     if args.repeats_per_date is not None and (eff_date_start and eff_date_end):
         overrides["repeats_per_date"] = args.repeats_per_date
     if args.learning_rate is not None:
@@ -684,7 +628,6 @@ def main() -> None:
             extra={"overrides": overrides},
         )
 
-    # Validate configuration
     errors = pipeline_config.validate()
     if errors:
         logger.error(
@@ -693,14 +636,12 @@ def main() -> None:
         )
         raise ValueError(f"Invalid pipeline configuration: {errors}")
 
-    # Step 2: Determine training mode
     training_mode = args.training_mode or pipeline_config.training_mode
     logger.info(
         "Training mode resolved",
         extra={"training_mode": training_mode},
     )
 
-    # Step 3: For finetune mode, download production checkpoint
     if training_mode == "finetune":
         if not args.production_checkpoint_path:
             raise ValueError(
@@ -709,7 +650,6 @@ def main() -> None:
         local_checkpoint_path = download_production_checkpoint(
             args.production_checkpoint_path, bucket=args.bucket
         )
-        # Update args so build_dqn_config can reference it
         args.production_checkpoint_path = local_checkpoint_path
         logger.info(
             "Finetune mode: production checkpoint ready",
@@ -727,7 +667,6 @@ def main() -> None:
             },
         )
 
-    # Step 4: Build DQNConfig for training
     dqn_config = build_dqn_config(pipeline_config, args)
 
     logger.info(
@@ -741,10 +680,6 @@ def main() -> None:
         },
     )
 
-    # Step 5: Start modelenv sidecar. Pass the trainer's per-date episode
-    # window into modelenv so its startup preload only fetches ticks in that
-    # range (instead of the full M1 reference span, which can be many months).
-    # modelenv still lazily downloads any out-of-window tick file on Reset().
     sidecar = ModelenvSidecar(
         symbol=dqn_config.symbol,
         date_start=dqn_config.date_start or None,
@@ -757,7 +692,6 @@ def main() -> None:
         sidecar.start()
         sidecar.wait_for_ready()
 
-        # Step 6: Run DQN training
         logger.info("Starting DQN training loop")
         train(dqn_config)
         logger.info("DQN training loop completed")
@@ -769,17 +703,14 @@ def main() -> None:
         )
         raise
     finally:
-        # Step 7: Always stop the sidecar on exit
         sidecar.stop()
 
-    # Step 8: Upload final checkpoint to the KFP-advertised store
     upload_checkpoint_to_s3(
         checkpoint_dir=dqn_config.checkpoint_dir,
         output_uri=args.checkpoint_output_path,
         bucket=args.bucket,
     )
 
-    # Step 9: Log completion
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     logger.info(
         "DQN training component completed successfully",
@@ -789,10 +720,6 @@ def main() -> None:
             "symbol": dqn_config.symbol,
             "num_episodes_per_range": dqn_config.num_episodes_per_range,
             "learning_rate": dqn_config.learning_rate,
-            # Overnight financing the modelenv sidecar applied during training.
-            # Sidecar runs in Training mode without swap CLI flags, so these are
-            # the built-in default-table rates unless overridden via
-            # MODELENV_SWAP_* / MODELENV_NO_SWAP env. See deepqnetwork/swap_rates.py.
             "swap_rates": resolve_swap_rates(dqn_config.symbol),
             "completed_at": timestamp,
         },

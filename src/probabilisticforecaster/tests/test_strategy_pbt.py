@@ -13,11 +13,6 @@ from probabilisticforecaster.config import ForecasterConfig
 from probabilisticforecaster.strategy import DirectionalStrategy, MeanVarianceStrategy
 
 
-# ---------------------------------------------------------------------------
-# Property 10: Directional Strategy Sign Correctness
-# ---------------------------------------------------------------------------
-
-
 class TestDirectionalStrategySignCorrectness:
     """Property 10: Directional Strategy Sign Correctness.
 
@@ -44,7 +39,6 @@ class TestDirectionalStrategySignCorrectness:
         strategy = DirectionalStrategy()
         position = strategy.compute_position(mu, sigma, config)
 
-        # Sign of position must match sign of mu
         if mu > 0:
             assert position > 0, (
                 f"Expected positive position for mu={mu}, got {position}"
@@ -54,7 +48,6 @@ class TestDirectionalStrategySignCorrectness:
                 f"Expected negative position for mu={mu}, got {position}"
             )
 
-        # Absolute value must equal position_size
         assert abs(position) == config.position_size, (
             f"Expected |position| == {config.position_size}, "
             f"got |{position}| = {abs(position)}"
@@ -76,11 +69,6 @@ class TestDirectionalStrategySignCorrectness:
         assert position == 0.0, (
             f"Expected position == 0 for mu=0, got {position}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Property 11: Mean-Variance Position Formula Correctness
-# ---------------------------------------------------------------------------
 
 
 class TestMeanVariancePositionFormula:
@@ -112,7 +100,6 @@ class TestMeanVariancePositionFormula:
         assume(sigma > 0)
         assume(gamma > 0)
 
-        # Compute expected: pi_star = mu / (sigma^2 * gamma), clip to [-1, 1], scale
         denominator = sigma**2 * gamma
         assume(math.isfinite(denominator))
         assume(denominator > 0)
@@ -124,7 +111,6 @@ class TestMeanVariancePositionFormula:
         config = ForecasterConfig(risk_aversion=gamma)
         expected_position = pi_clipped * config.position_size
 
-        # Compute actual using the strategy
         strategy = MeanVarianceStrategy(risk_aversion=gamma)
         actual_position = strategy.compute_position(mu, sigma, config)
 

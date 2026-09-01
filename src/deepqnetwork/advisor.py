@@ -26,7 +26,6 @@ from .utils import resolve_device
 
 logger = logging.getLogger(__name__)
 
-# Canonical action names matching the environment's discrete action space
 ACTION_NAMES: list[str] = ["HOLD", "BUY_1", "BUY_2", "SELL_1", "SELL_2"]
 
 
@@ -80,34 +79,26 @@ class DQNAdvisor:
         self._device = resolve_device(device)
         self._checkpoint_path = checkpoint_path
 
-        # Load checkpoint
         checkpoint = torch.load(
             checkpoint_path, map_location=self._device, weights_only=False
         )
 
-        # Resolve network config from checkpoint or override
         ckpt_config = checkpoint.get("config", {})
         if config is not None:
             ckpt_config.update(config)
 
-        # Persisted training config (full asdict(DQNConfig) saved at train time).
-        # Exposes the training window so evaluators (e.g. the DQNPF backtest) can
-        # replay the policy on the same hour-bound sessions it trained on.
         self._config = dict(ckpt_config)
 
-        # Extract network architecture parameters
         hidden_dims = ckpt_config.get("hidden_dims", [256, 256, 128])
         activation = ckpt_config.get("activation", "relu")
         dropout = ckpt_config.get("dropout", 0.0)
 
-        # Infer state_dim from the first layer's weight shape
         state_dict = checkpoint["q_network_state_dict"]
         first_layer_key = next(
             k for k in state_dict.keys() if k.endswith(".weight")
         )
         state_dim = state_dict[first_layer_key].shape[1]
 
-        # Build Q-Network
         self._q_network = QNetwork(
             state_dim=state_dim,
             action_dim=5,
@@ -116,14 +107,11 @@ class DQNAdvisor:
             dropout=dropout,
         )
 
-        # Load weights and set to eval mode
         self._q_network.load_state_dict(state_dict)
         self._q_network.to(self._device)
         self._q_network.eval()
 
-        # Preprocessor for converting raw arrays to tensors
         self._preprocessor = StatePreprocessor(self._device)
-        # Manually set state_dim so preprocessor doesn't require a protobuf observation
         self._preprocessor._state_dim = state_dim
 
         self._state_dim = state_dim
@@ -216,21 +204,16 @@ class DQNAdvisor:
                 f"State has shape {state_array.shape}, expected ({self._state_dim},)."
             )
 
-        # Convert to tensor and add batch dimension
         state_tensor = torch.from_numpy(state_array).unsqueeze(0).to(self._device)
 
-        # Forward pass with no gradient computation
         with torch.no_grad():
             q_values_tensor = self._q_network(state_tensor)
 
-        # Extract Q-values as numpy array
         q_values = q_values_tensor.squeeze(0).cpu().numpy()
 
-        # Greedy action selection
         action = int(np.argmax(q_values))
         action_name = ACTION_NAMES[action]
 
-        # Confidence: max(Q) - mean(Q)
         confidence = float(q_values.max() - q_values.mean())
 
         return ActionResult(
@@ -273,14 +256,11 @@ class DQNAdvisor:
                 f"State has shape {state_array.shape}, expected ({self._state_dim},)."
             )
 
-        # Convert to tensor and add batch dimension
         state_tensor = torch.from_numpy(state_array).unsqueeze(0).to(self._device)
 
-        # Forward pass with no gradient computation
         with torch.no_grad():
             q_values_tensor = self._q_network(state_tensor)
 
-        # Apply temperature-scaled softmax
         scaled = q_values_tensor.squeeze(0) / temperature
         probabilities = torch.softmax(scaled, dim=0).cpu().numpy()
 

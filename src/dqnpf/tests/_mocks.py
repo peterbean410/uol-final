@@ -15,11 +15,6 @@ from typing import Callable
 from dqnpf.action_mapper import ACTION_NAMES
 
 
-# ---------------------------------------------------------------------------
-# Protobuf-shaped messages
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class MockBar:
     timestamp_ns: int
@@ -61,12 +56,7 @@ class MockStepResponse:
     info: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Builders
-# ---------------------------------------------------------------------------
-
-
-_START_TS_NS = 1_700_000_000_000_000_000  # 2023-11-14 UTC
+_START_TS_NS = 1_700_000_000_000_000_000
 _M5_NS = 5 * 60 * 1_000_000_000
 
 
@@ -106,11 +96,6 @@ def make_response(m5_bars: list[MockBar]) -> MockRecentBarsResponse:
 
 def make_observation(reward: float = 0.0, done: bool = False) -> MockObservation:
     return MockObservation(reward=reward, done=done)
-
-
-# ---------------------------------------------------------------------------
-# Fake collaborators
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -156,7 +141,7 @@ class MockEnvClient:
 
     def step(self, action: int, client_order_id: str) -> MockStepResponse:
         self.step_calls.append((action, client_order_id))
-        idx = len(self.step_calls)  # next observation index
+        idx = len(self.step_calls)
         if idx < len(self._observations):
             obs = self._observations[idx]
         else:

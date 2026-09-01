@@ -9,7 +9,6 @@ metadata:
     role: alert-rules
 spec:
   groups:
-    # --- Pipeline Run Failure Alerts (Requirement 9.1, 9.3) ---
     - name: forecaster.pipeline.failures
       rules:
         - alert: ForecasterPipelineRunFailed
@@ -44,7 +43,6 @@ spec:
               More than 50% of pipeline runs have failed in the last hour.
               Current failure rate: {{ $value | humanizePercentage }}.
 
-    # --- Component Duration Anomaly Alerts (Requirement 9.1) ---
     - name: forecaster.pipeline.duration
       rules:
         - alert: ForecasterComponentDurationAnomaly
@@ -75,7 +73,6 @@ spec:
               Pipeline run for symbol={{ $labels.symbol }} has been running for
               {{ $value | humanizeDuration }}, exceeding the 8-hour maximum.
 
-    # --- Model Degradation Alerts (Requirement 9.2, 9.4) ---
     - name: forecaster.model.degradation
       rules:
         - alert: ForecasterModelNLLDegraded
@@ -124,8 +121,3 @@ spec:
               Mean prediction (mu) has shifted more than 3 standard deviations
               from the 7-day baseline for symbol={{ $labels.symbol }}.
 
-    # --- KServe Latency and Error Rate Alerts ---
-    # Removed: the standalone `forecaster-predictor` InferenceService is
-    # deprecated (kubeflow-ml-pipeline spec, Requirement 5). Latency, error
-    # rate, and zero-traffic alerts for live inference now live under the
-    # dqnpf-intraday monitoring stack (Task 31.5, `dqnpf-intraday-predictor`).

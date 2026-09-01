@@ -17,31 +17,26 @@ from dataclasses import dataclass, asdict
 import pandas as pd
 
 
-# ──────────────────────────────────────────────
-# Pattern detection
-# ──────────────────────────────────────────────
 @dataclass
 class DoubleTop:
     """A detected double-top pattern."""
-    idx1: int               # DataFrame index of first top
-    idx2: int               # DataFrame index of second top
-    ts1: str                # Timestamp of first top
-    ts2: str                # Timestamp of second top
-    high1: float            # Price at first top
-    high2: float            # Price at second top
-    neckline: float         # Lowest low between the two tops
-    neckline_idx: int       # DataFrame index of the neckline bar
-    depth_pct: float        # (avg_top - neckline) / avg_top * 100
-    width_bars: int         # Number of bars between the two tops
-    confirmed: bool         # True if price closed below the neckline after top 2
+    idx1: int
+    idx2: int
+    ts1: str
+    ts2: str
+    high1: float
+    high2: float
+    neckline: float
+    neckline_idx: int
+    depth_pct: float
+    width_bars: int
+    confirmed: bool
 
-    # Local extrema before the pattern
     min_before_val: float | None = None
     min_before_ts: str | None = None
     max_before_val: float | None = None
     max_before_ts: str | None = None
 
-    # Local extrema after the pattern
     min_after_val: float | None = None
     min_after_ts: str | None = None
     max_after_val: float | None = None
@@ -138,29 +133,24 @@ def detect_double_tops(
         high1, high2 = highs.iloc[a], highs.iloc[b]
         avg_high = (high1 + high2) / 2
 
-        # ── Tolerance check ──
         diff_pct = abs(high1 - high2) / avg_high * 100
         if diff_pct > tolerance_pct:
             continue
 
-        # ── Minimum width ──
         width = b - a
         if width < min_width:
             continue
 
-        # ── Neckline: lowest low between the two tops ──
         between = lows.iloc[a + 1 : b]
         if between.empty:
             continue
         neckline_idx = int(between.idxmin())
         neckline = float(lows.iloc[neckline_idx])
 
-        # ── Depth: the tops must be meaningfully above the neckline ──
         depth_pct = (avg_high - neckline) / avg_high * 100
         if depth_pct < 0.1:
             continue
 
-        # ── Confirmation: did price close below the neckline after top 2? ──
         remaining = closes.iloc[b + 1 :]
         confirmed = bool((remaining < neckline).any()) if not remaining.empty else False
 
@@ -189,7 +179,6 @@ def detect_double_tops(
             max_after_val=max_after_val, max_after_ts=max_after_ts,
         ))
 
-    # ── Check for potential forming double top at the right edge ──
     if maxima:
         a = maxima[-1]
         if a + 1 < len(df):

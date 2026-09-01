@@ -61,7 +61,6 @@ class TestForecasterInferenceInit:
 
     def test_incompatible_config_raises_error(self, config):
         """Test that incompatible saved config raises RuntimeError."""
-        # Save model with different num_features
         incompatible_config = ForecasterConfig(num_features=32, num_heads=4, num_layers=3)
         model = ProbabilisticTransformer(incompatible_config)
 
@@ -113,7 +112,7 @@ class TestForecasterInferencePredict:
     def test_predict_wrong_feature_dim_raises_error(self, saved_model_path, config):
         """Test that wrong feature dimension raises ValueError."""
         inference = ForecasterInference(saved_model_path, config)
-        features = torch.randn(36, 10)  # Wrong: 10 instead of 16
+        features = torch.randn(36, 10)
 
         with pytest.raises(ValueError, match="Input feature dimension 10 != expected 16"):
             inference.predict(features)
@@ -121,7 +120,7 @@ class TestForecasterInferencePredict:
     def test_predict_wrong_ndim_raises_error(self, saved_model_path, config):
         """Test that wrong number of dimensions raises ValueError."""
         inference = ForecasterInference(saved_model_path, config)
-        features = torch.randn(2, 36, 16)  # 3D instead of 2D
+        features = torch.randn(2, 36, 16)
 
         with pytest.raises(ValueError, match="Expected 2D input"):
             inference.predict(features)
@@ -163,7 +162,7 @@ class TestForecasterInferencePredictBatch:
     def test_predict_batch_wrong_feature_dim_raises_error(self, saved_model_path, config):
         """Test that wrong feature dimension raises ValueError."""
         inference = ForecasterInference(saved_model_path, config)
-        features = torch.randn(4, 36, 8)  # Wrong: 8 instead of 16
+        features = torch.randn(4, 36, 8)
 
         with pytest.raises(ValueError, match="Input feature dimension 8 != expected 16"):
             inference.predict_batch(features)
@@ -171,7 +170,7 @@ class TestForecasterInferencePredictBatch:
     def test_predict_batch_wrong_ndim_raises_error(self, saved_model_path, config):
         """Test that wrong number of dimensions raises ValueError."""
         inference = ForecasterInference(saved_model_path, config)
-        features = torch.randn(36, 16)  # 2D instead of 3D
+        features = torch.randn(36, 16)
 
         with pytest.raises(ValueError, match="Expected 3D input"):
             inference.predict_batch(features)

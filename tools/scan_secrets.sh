@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Fail loudly if anything that looks like a credential reached the public tree.
 set -uo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 echo "secret scan over $ROOT"
@@ -7,13 +6,11 @@ echo "secret scan over $ROOT"
 FAIL=0
 report() { echo "  !! $1"; FAIL=1; }
 
-# 1. files that should never exist here
 while IFS= read -r f; do report "sensitive file: ${f#$ROOT/}"; done < <(
   find "$ROOT" -type f \( -name '.env' -o -name 'kubeconfig' -o -name '*.pem' \
        -o -name '*.p12' -o -name 'id_rsa*' -o -name '*accessKeys*.csv' \) \
        -not -path '*/.git/*' 2>/dev/null)
 
-# 2. high-signal content patterns
 PATTERNS=(
   'AKIA[0-9A-Z]{16}'                                  # AWS access key id
   '(aws_secret_access_key|password|passwd|api_key|secret_key|access_token)[[:space:]]*=[[:space:]]*.?["'"'"'][A-Za-z0-9/+=_.-]{20,}["'"'"']'  # literal credential

@@ -96,7 +96,6 @@ class MeanVarianceStrategy(TradingStrategy):
         """
         gamma = self._risk_aversion if self._risk_aversion is not None else config.risk_aversion
 
-        # Fallback to directional when sigma is zero
         if sigma == 0.0:
             if mu > 0:
                 return config.position_size
@@ -105,10 +104,8 @@ class MeanVarianceStrategy(TradingStrategy):
             else:
                 return 0.0
 
-        # Mean-variance optimal proportion
         pi_star = mu / (sigma**2 * gamma)
 
-        # Clip to [-1, 1] and scale by position size
         pi_clipped = max(-1.0, min(1.0, pi_star))
         return pi_clipped * config.position_size
 

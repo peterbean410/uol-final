@@ -25,20 +25,13 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
-# Symbols to train; each gets an independent KFP pipeline run
 _SYMBOLS = ["USDJPY", "AUDJPY"]
 
-# KFP API endpoint (in-cluster service address)
 _KFP_HOST = "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
-# Episode lookback window: 90 days of tick data for training
 _EPISODE_LOOKBACK_DAYS = 90
 
-# Default step size in seconds for the modelenv environment
 _STEP_SIZE_SECONDS = 5
 
 default_args = {
@@ -59,27 +52,19 @@ def _compute_episode_timestamps(logical_date: datetime) -> tuple[int, int]:
         - episode_end_ts: end of the logical_date day (23:59:59 UTC)
         - episode_start_ts: 90 days before episode_end_ts
     """
-    # End of the logical date day (23:59:59 UTC)
     end_of_day = logical_date.replace(hour=23, minute=59, second=59, microsecond=0)
     episode_end_ts = int(calendar.timegm(end_of_day.timetuple()))
 
-    # 90 days before end of day
     start_day = end_of_day - timedelta(days=_EPISODE_LOOKBACK_DAYS)
     episode_start_ts = int(calendar.timegm(start_day.timetuple()))
 
     return episode_start_ts, episode_end_ts
 
 
-# ---------------------------------------------------------------------------
-# DAG 1: Weekly Scratch Retrain
-# ---------------------------------------------------------------------------
-# Precedence rule: If a drift-triggered retrain is running or completed for
-# the same day, the weekly retrain is skipped.
-
 with DAG(
     dag_id="dqn_weekly_retrain",
     start_date=datetime(2026, 5, 1),
-    schedule="0 2 * * 6",  # Every Saturday at 02:00 UTC
+    schedule="0 2 * * 6",
     default_args=default_args,
     catchup=False,
     tags=["dqn", "kubeflow", "retrain"],
@@ -153,15 +138,10 @@ with DAG(
         check_no_retrain >> wait_for_snapshot >> submit_retrain
 
 
-# ---------------------------------------------------------------------------
-# DAG 2: Drift-Triggered Full Retrain
-# ---------------------------------------------------------------------------
-# Triggered externally by performance drift detection or manual trigger.
-
 with DAG(
     dag_id="dqn_drift_retrain",
     start_date=datetime(2026, 5, 1),
-    schedule=None,  # Triggered externally by drift detection
+    schedule=None,
     default_args=default_args,
     catchup=False,
     tags=["dqn", "kubeflow", "retrain", "drift"],
@@ -210,14 +190,10 @@ with DAG(
         wait_for_snapshot >> submit_drift_retrain
 
 
-# ---------------------------------------------------------------------------
-# DAG 3: Katib Hyperparameter Tuning (Manual Trigger)
-# ---------------------------------------------------------------------------
-
 with DAG(
     dag_id="dqn_katib_tuning",
     start_date=datetime(2026, 5, 1),
-    schedule=None,  # Manual trigger only; no automatic schedule
+    schedule=None,
     default_args=default_args,
     catchup=False,
     tags=["dqn", "kubeflow", "katib", "tuning"],
@@ -244,7 +220,6 @@ with DAG(
         max_trials = params["max_trials"]
         parallel_trials = params["parallel_trials"]
 
-        # Load in-cluster Kubernetes config
         k8s_config.load_incluster_config()
         api = client.CustomObjectsApi()
 
@@ -252,7 +227,6 @@ with DAG(
             f"dqn-tuning-{symbol.lower()}-{context['run_id'][:8]}"
         )
 
-        # Read base DQN experiment YAML and patch with runtime params
         with open(
             "deepqnetwork/kubeflow/katib/dqn_experiment.yaml"
         ) as f:
@@ -262,7 +236,6 @@ with DAG(
         experiment["spec"]["maxTrialCount"] = max_trials
         experiment["spec"]["parallelTrialCount"] = parallel_trials
 
-        # Create the Katib experiment CR
         api.create_namespaced_custom_object(
             group="kubeflow.org",
             version="v1beta1",
@@ -271,8 +244,7 @@ with DAG(
             body=experiment,
         )
 
-        # Poll until experiment reaches terminal state
-        deadline = time.time() + 86400  # 24h max
+        deadline = time.time() + 86400
         while time.time() < deadline:
             exp = api.get_namespaced_custom_object(
                 group="kubeflow.org",

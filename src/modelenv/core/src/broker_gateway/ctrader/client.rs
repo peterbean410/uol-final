@@ -98,11 +98,9 @@ async fn route_events(
             || msg.payload_type == pt::ERROR_RES
             || msg.payload_type == pt::OA_ERROR_RES
         {
-            // Deliver to the in-flight order path; drop if nobody is waiting.
-            let _ = order_tx.send(msg);
+                        let _ = order_tx.send(msg);
         }
-        // else: heartbeat / unrelated → ignore.
-    }
+            }
 }
 
 /// Timeout for API calls (default: 30 seconds)
@@ -147,8 +145,7 @@ pub struct CtraderClient {
     /// cTrader lots submitted per one modelenv position unit.
     lot_size_per_unit: f64,
 
-    // --- live connection state (None/0 until `connect()`) ---
-    /// Parsed numeric account id used on every RPC.
+        /// Parsed numeric account id used on every RPC.
     account_id_num: i64,
     /// Broker numeric symbol id, resolved on connect.
     symbol_id: Option<i64>,
@@ -340,8 +337,7 @@ impl CtraderClient {
     /// Opens TLS to the configured endpoint, runs app+account auth, resolves the
     /// symbol id, and starts the keep-alive heartbeat.
     pub async fn connect(&mut self) -> Result<()> {
-        // Cheap credential validation first (no network) so misconfig fails fast.
-        if self.client_id.trim().is_empty() {
+                if self.client_id.trim().is_empty() {
             return Err(anyhow!(
                 "AuthenticationError {{ client_id: <empty>, details: app client ID is required }}"
             ));
@@ -398,13 +394,10 @@ impl CtraderClient {
 
         let heartbeat = auth::spawn_heartbeat(conn.clone(), HEARTBEAT_INTERVAL);
 
-        // Subscribe to streaming spot (bid/ask) events. Non-fatal: read/order
-        // paths work without it; `current_ticks` will error clearly if none arrive.
-        if let Err(e) = data::subscribe_spots(&conn, account_id_num, symbol_id, self.timeout).await {
+                        if let Err(e) = data::subscribe_spots(&conn, account_id_num, symbol_id, self.timeout).await {
             warn!("cTrader spot subscription failed ({e}); live ticks will be unavailable");
         }
-        // Route unsolicited events: spot → tick buffer, execution/error → order path.
-        let tick_state = Arc::new(Mutex::new(TickState::default()));
+                let tick_state = Arc::new(Mutex::new(TickState::default()));
         let (order_tx, order_rx) = mpsc::unbounded_channel();
         let router = tokio::spawn(route_events(events, tick_state.clone(), order_tx, symbol_id));
 
@@ -478,11 +471,7 @@ impl CtraderClient {
         let account = self.account_id_num;
         let timeout = self.timeout;
         let conn = self.require_conn()?;
-        // Request a wider window and take the most recent completed bar. A
-        // count=1 / few-minute window can come back empty (the current minute is
-        // in-progress and the window is too tight), so fetch ~30 M1 bars and use
-        // the last, robust to the in-progress minute and brief gaps.
-        let bars =
+                                        let bars =
             data::get_trendbars(conn, account, sid, data::TRENDBAR_M1, 30, Self::now_ms(), timeout)
                 .await?;
         debug!("current_bar: {} M1 bars returned for {symbol}", bars.len());
@@ -579,8 +568,7 @@ impl CtraderClient {
         let account = self.account_id_num;
         let timeout = self.timeout;
         let client_order_id = format!("{}-{}", self.symbol, action.client_order_id);
-        // Clone the (cheap) connection, then borrow the events receiver mutably.
-        let conn = self
+                let conn = self
             .conn
             .clone()
             .ok_or_else(|| anyhow!("Not connected to cTrader API"))?;
@@ -674,8 +662,7 @@ impl CtraderClient {
         let to_ms = Self::now_ms();
         let from_ms = to_ms - DEAL_HISTORY_WINDOW_MS;
         let mut fills = data::recent_fills(conn, account, from_ms, to_ms, count, timeout).await?;
-        // data::recent_fills yields newest-first; callers expect ascending.
-        fills.reverse();
+                fills.reverse();
         Ok(fills)
     }
 
@@ -796,7 +783,6 @@ impl CtraderClient {
     }
 }
 
-// The client is driven behind a tokio::Mutex in the gateway.
 unsafe impl Send for CtraderClient {}
 unsafe impl Sync for CtraderClient {}
 
@@ -851,7 +837,6 @@ mod tests {
         client
     }
 
-    // ---- config surface ----
 
     #[test]
     fn defaults_min_lot() {
@@ -863,12 +848,10 @@ mod tests {
     fn lot_size_is_configurable() {
         let c = test_client("USDJPY").with_lot_size_per_unit(0.05);
         assert_eq!(c.lot_size_per_unit(), 0.05);
-        // invalid lot sizes are ignored, keeping the prior value.
-        let c2 = test_client("USDJPY").with_lot_size_per_unit(-1.0);
+                let c2 = test_client("USDJPY").with_lot_size_per_unit(-1.0);
         assert_eq!(c2.lot_size_per_unit(), 0.01);
     }
 
-    // ---- validation / not-connected (no network) ----
 
     #[tokio::test]
     async fn connect_rejects_missing_access_token() {
@@ -909,8 +892,7 @@ mod tests {
     async fn current_ticks_returns_buffered_spot_ticks() {
         let mut client =
             wired_client("USDJPY", |s| drop(tokio::spawn(async move { let _ = s; })));
-        // Inject a streamed tick, as the spot router would.
-        client
+                client
             .tick_state
             .as_ref()
             .unwrap()
@@ -930,8 +912,7 @@ mod tests {
 
     #[tokio::test]
     async fn current_ticks_errors_without_connection() {
-        // Never connected -> no tick buffer -> error, never synthetic data.
-        let mut client = test_client("USDJPY");
+                let mut client = test_client("USDJPY");
         let err = client.current_ticks("USDJPY").await.unwrap_err();
         assert!(err.to_string().contains("Not connected"));
     }
@@ -943,8 +924,7 @@ mod tests {
         let ticks = std::sync::Arc::new(tokio::sync::Mutex::new(TickState::default()));
         let handle = tokio::spawn(super::route_events(raw_rx, ticks.clone(), order_tx, 4));
 
-        // Spot event (bid+ask ×10^5) for symbol 4 -> tick buffer.
-        let spot = ProtoOaSpotEvent {
+                let spot = ProtoOaSpotEvent {
             payload_type: Some(wire::payload_type::SPOT_EVENT as i32),
             ctid_trader_account_id: 47678494,
             symbol_id: 4,
@@ -956,8 +936,7 @@ mod tests {
         raw_tx
             .send(wire::envelope(wire::payload_type::SPOT_EVENT, spot.encode_to_vec(), None))
             .unwrap();
-        // Execution event -> order channel.
-        let exec = ProtoOaExecutionEvent {
+                let exec = ProtoOaExecutionEvent {
             payload_type: Some(wire::payload_type::EXECUTION_EVENT as i32),
             ctid_trader_account_id: 47678494,
             execution_type: 3,
@@ -976,7 +955,6 @@ mod tests {
         handle.abort();
     }
 
-    // ---- behavioural, over a mock cTrader server ----
 
     async fn reconcile_server<S>(mut s: S)
     where
@@ -1084,7 +1062,7 @@ mod tests {
             let accepted = ProtoOaExecutionEvent {
                 payload_type: Some(wire::payload_type::EXECUTION_EVENT as i32),
                 ctid_trader_account_id: 47678494,
-                execution_type: 2, // ORDER_ACCEPTED
+                execution_type: 2,
                 ..Default::default()
             };
             let _ = wire::write_frame(
@@ -1099,7 +1077,7 @@ mod tests {
             let filled = ProtoOaExecutionEvent {
                 payload_type: Some(wire::payload_type::EXECUTION_EVENT as i32),
                 ctid_trader_account_id: 47678494,
-                execution_type: 3, // ORDER_FILLED
+                execution_type: 3,
                 deal: Some(usdjpy_buy_deal()),
                 ..Default::default()
             };
@@ -1125,7 +1103,7 @@ mod tests {
             .unwrap();
         assert_eq!(fill.order_id, "7001");
         assert_eq!(fill.side, 0);
-        assert!((fill.size - 0.01).abs() < 1e-9); // 1 unit × 0.01 lot default
+        assert!((fill.size - 0.01).abs() < 1e-9);
         assert!((fill.price - 150.123).abs() < 1e-9);
     }
 

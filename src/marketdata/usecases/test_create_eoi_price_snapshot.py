@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# The module uses a hyphenated filename, so import via importlib
 import importlib
 
 _mod = importlib.import_module("marketdata.usecases.create-eoi-price-snapshot")
@@ -38,8 +37,6 @@ def _make_df(rows):
     return pd.DataFrame(rows)
 
 
-# ── Fixtures for partition data ──────────────────────────────────────
-
 CURRENT_DATA = [
     {"Timestamp": TS, "Symbol": "EURUSD", "price": 1.10},
     {"Timestamp": TS, "Symbol": "USDJPY", "price": 110},
@@ -51,8 +48,6 @@ PREVIOUS_DATA = [
 ]
 
 
-# ── Test Case 1: Daily snapshot (24h window) ────────────────────────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
@@ -63,30 +58,24 @@ def test_daily_snapshot_merge_and_path(mock_load, mock_load_prev, mock_upload):
 
     df = create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 1440, MagicMock(), BUCKET)
 
-    # upload called exactly once
     assert mock_upload.call_count == 1
 
     uploaded_df = mock_upload.call_args[0][0]
     s3_key = mock_upload.call_args[0][2]
 
-    # S3 path assertions
     assert s3_key.startswith("marketdata/eod-snapshot/")
     assert f"symbol={FX_SYMBOL}" in s3_key
     assert f"interval={INTERVAL}" in s3_key
     assert "year=2026/month=01/day=01" in s3_key
     assert "hour=" not in s3_key
 
-    # DataFrame assertions
     assert len(uploaded_df) == 3
     symbols = set(uploaded_df["Symbol"].tolist())
     assert symbols == {"EURUSD", "USDJPY", "GBPUSD"}
 
-    # Current partition takes precedence for EURUSD
     eurusd_price = uploaded_df.loc[uploaded_df["Symbol"] == "EURUSD", "price"].iloc[0]
     assert eurusd_price == 1.10
 
-
-# ── Test Case 2: Hourly snapshot (1h window) ────────────────────────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
@@ -108,8 +97,6 @@ def test_hourly_snapshot_path_contains_hour(mock_load, mock_load_prev, mock_uplo
     assert len(uploaded_df) == 3
 
 
-# ── Test Case 2b: Monthly snapshot (43200-min window) ───────────────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
@@ -129,8 +116,6 @@ def test_monthly_snapshot_uses_eom_prefix(mock_load, mock_load_prev, mock_upload
     assert "hour=" not in s3_key
 
 
-# ── Test Case 2c: Weekly snapshot (10080-min window) ────────────────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
@@ -149,8 +134,6 @@ def test_weekly_snapshot_uses_eow_prefix(mock_load, mock_load_prev, mock_upload)
     assert "day=" not in s3_key
     assert "hour=" not in s3_key
 
-
-# ── Test Case 2d: Monthly lookback steps one calendar month ─────────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
@@ -175,8 +158,6 @@ def test_monthly_previous_snapshot_is_prior_calendar_month(mock_load, mock_load_
     assert "year=2026/month=02" in previous_snapshot_key
 
 
-# ── Test Case 3: Missing previous snapshot (first run in chain) ─────
-
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
 @patch.object(_mod, "_load_partition")
@@ -192,8 +173,6 @@ def test_missing_previous_snapshot(mock_load, mock_load_prev, mock_upload):
     uploaded_df = mock_upload.call_args[0][0]
     assert len(uploaded_df) == 1
 
-
-# ── Test Case 4: Empty current data ─────────────────────────────────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
@@ -215,15 +194,11 @@ def test_empty_current_falls_back_to_previous(mock_load, mock_load_prev, mock_up
     assert not uploaded_df.empty
 
 
-# ── Test Case 5: Invalid TIME_WINDOW_IN_MINUTES ─────────────────────
-
 def test_invalid_time_window_raises_value_error():
     """TIME_WINDOW_IN_MINUTES=30 should raise ValueError."""
     with pytest.raises(ValueError, match="Invalid TIME_WINDOW_IN_MINUTES=30"):
         create_snapshot(FX_SYMBOL, INTERVAL, EXECUTION_DT, 30, MagicMock(), BUCKET)
 
-
-# ── Test Case 6: Correct merge of current and previous partitions ────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
@@ -247,23 +222,18 @@ def test_merge_current_overrides_previous_preserves_unique(mock_load, mock_load_
 
     uploaded_df = mock_upload.call_args[0][0]
 
-    # 4 unique symbols after merge
     assert len(uploaded_df) == 4
     symbols = set(uploaded_df["Symbol"].tolist())
     assert symbols == {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD"}
 
-    # Current partition values win for overlapping symbols
     eurusd = uploaded_df.loc[uploaded_df["Symbol"] == "EURUSD", "price"].iloc[0]
     gbpusd = uploaded_df.loc[uploaded_df["Symbol"] == "GBPUSD", "price"].iloc[0]
     assert eurusd == 1.10
     assert gbpusd == 1.35
 
-    # Previous-only symbol preserved
     audusd = uploaded_df.loc[uploaded_df["Symbol"] == "AUDUSD", "price"].iloc[0]
     assert audusd == 0.65
 
-
-# ── Test Case 7: Large data volume and memory management ─────────────
 
 @patch.object(_mod, "_upload_to_s3")
 @patch.object(_mod, "_load_snapshot_file")
@@ -282,7 +252,6 @@ def test_large_data_volume_merge(mock_load, mock_load_prev, mock_upload):
         "price": rng.uniform(1.0, 200.0, size=n),
     })
 
-    # Current partition: overlaps first 10k symbols with new prices, plus 10k new symbols
     overlap = 10_000
     new_count = 10_000
     curr_timestamps = list(timestamps[:overlap]) + list(
@@ -303,13 +272,10 @@ def test_large_data_volume_merge(mock_load, mock_load_prev, mock_upload):
     assert mock_upload.call_count == 1
     uploaded_df = mock_upload.call_args[0][0]
 
-    # 50k from previous - 10k overlapping + 10k overlapping from current + 10k new = 60k
     expected_rows = (n - overlap) + overlap + new_count
     assert len(uploaded_df) == expected_rows
 
-    # Verify no duplicate (Timestamp, Symbol) pairs
     dupes = uploaded_df.duplicated(subset=["Timestamp", "Symbol"])
     assert not dupes.any()
 
-    # Timestamps should be sorted
     assert uploaded_df["Timestamp"].is_monotonic_increasing

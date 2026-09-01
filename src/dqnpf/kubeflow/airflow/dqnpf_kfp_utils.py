@@ -21,13 +21,11 @@ from kfp.client import Client
 
 logger = logging.getLogger(__name__)
 
-# KFP run statuses considered terminal
 _TERMINAL_SUCCEEDED = {"Succeeded", "Completed"}
 _TERMINAL_FAILED = {"Failed", "Error"}
 _TERMINAL_SKIPPED = {"Skipped"}
 _TERMINAL_STATUSES = _TERMINAL_SUCCEEDED | _TERMINAL_FAILED | _TERMINAL_SKIPPED
 
-# Status mapping: KFP status → Airflow task state
 _STATUS_MAP: dict[str, str] = {
     "Succeeded": "success",
     "Completed": "success",
@@ -36,10 +34,8 @@ _STATUS_MAP: dict[str, str] = {
     "Skipped": "skipped",
 }
 
-# Default KFP host (in-cluster service address)
 DEFAULT_KFP_HOST = "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
-# Polling interval in seconds
 _POLL_INTERVAL_SECONDS = 60
 
 
@@ -204,11 +200,6 @@ class DqnpfKFPTrigger:
         return "failed"
 
 
-# ---------------------------------------------------------------------------
-# Precondition check (extracted as testable function)
-# ---------------------------------------------------------------------------
-
-# Default parent model registry names
 DEFAULT_DQN_MODEL_REGISTRY_NAME = "deepqnetwork-usdjpy"
 DEFAULT_FORECASTER_MODEL_REGISTRY_NAME = "probabilistic-transformer-usdjpy-h1"
 
@@ -238,9 +229,6 @@ def check_parent_models_available(
 
     errors: list[str] = []
 
-    # resolve_production_checkpoint's 2nd positional arg is registry_url, not a
-    # lifecycle stage; it always resolves the production version. Omit it so
-    # the in-cluster default URL is used (passing "production" made it the URL).
     try:
         resolve_production_checkpoint(dqn_model_registry_name)
     except ValueError as e:

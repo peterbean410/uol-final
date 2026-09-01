@@ -27,7 +27,6 @@ from ta.support import fr
 from ta.trend import adx, ic, macd, movingavg
 from ta.volatility import bb
 
-# ── Time-window constants (mirrored from create-eoi-price-snapshot) ──
 HOUR_MINUTES = 60
 DAILY_MINUTES = 1440
 WEEK_MINUTES = 10080
@@ -134,14 +133,12 @@ def create_ta_snapshot(fx_symbol: str, interval: str, end_dt: datetime,
 
     ta_root = _ta_snapshot_root(time_window_minutes)
 
-    # Main indicator snapshot
     ta_key = _build_snapshot_key(
         ta_root, fx_symbol, interval, end_dt, time_window_minutes,
         tatype="INDICATOR",
     )
     _upload_to_s3(df, bucket, ta_key, s3)
 
-    # ── Patterns (separate parquet files under their own tatype partitions) ──
     db_patterns, _, _ = doublebottom.detect_double_bottoms(df)
     if not db_patterns.empty:
         db_key = _build_snapshot_key(

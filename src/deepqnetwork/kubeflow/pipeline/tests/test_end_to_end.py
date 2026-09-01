@@ -20,11 +20,6 @@ from deepqnetwork.kubeflow.pipeline.end_to_end import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Tests for evaluate_degradation_gate
-# ---------------------------------------------------------------------------
-
-
 class TestDegradationGate:
     """Tests for the degradation gate evaluation logic."""
 
@@ -79,7 +74,7 @@ class TestDegradationGate:
         passed, reason = evaluate_degradation_gate(
             candidate_sharpe=1.2,
             candidate_pnl=50.0,
-            production_sharpe=1.5,  # degradation = 0.3 > 0.1
+            production_sharpe=1.5,
             production_pnl=40.0,
         )
         assert passed is False
@@ -90,7 +85,7 @@ class TestDegradationGate:
         passed, reason = evaluate_degradation_gate(
             candidate_sharpe=1.35,
             candidate_pnl=50.0,
-            production_sharpe=1.4,  # degradation = 0.05 <= 0.1
+            production_sharpe=1.4,
             production_pnl=40.0,
         )
         assert passed is True
@@ -103,7 +98,6 @@ class TestDegradationGate:
             production_sharpe=1.4,
             production_pnl=50.0,
         )
-        # Note: this is caught by the absolute P&L check first
         assert passed is False
 
     def test_gate_allows_both_negative_pnl(self):
@@ -118,7 +112,6 @@ class TestDegradationGate:
             production_sharpe=1.4,
             production_pnl=-10.0,
         )
-        # Blocked by absolute P&L threshold
         assert passed is False
 
     def test_bootstrap_no_production_model(self):
@@ -150,7 +143,6 @@ class TestDegradationGate:
             production_sharpe=None,
             production_pnl=None,
         )
-        # Sharpe < 1.0 blocks, so exactly 1.0 should pass
         assert passed is True
 
     def test_sharpe_degradation_exactly_at_threshold(self):
@@ -158,15 +150,10 @@ class TestDegradationGate:
         passed, reason = evaluate_degradation_gate(
             candidate_sharpe=1.3,
             candidate_pnl=50.0,
-            production_sharpe=1.4,  # degradation = 0.1, not > 0.1
+            production_sharpe=1.4,
             production_pnl=40.0,
         )
         assert passed is True
-
-
-# ---------------------------------------------------------------------------
-# Tests for build_dqn_pipeline_e2e_config
-# ---------------------------------------------------------------------------
 
 
 class TestBuildPipelineConfig:
@@ -196,7 +183,6 @@ class TestBuildPipelineConfig:
             training_mode="finetune",
             checkpoint="s3://bucket/checkpoint.pt",
         )
-        # Finetune uses finetune_learning_rate (1e-5) and finetune_num_episodes_per_range (500)
         assert params["learning_rate"] == 1e-5
         assert params["num_episodes_per_range"] == 500
 
@@ -227,12 +213,8 @@ class TestBuildPipelineConfig:
                 symbol="USDJPY",
                 date_start="2024-01-01",
                 date_end="2024-02-01",
-                learning_rate=0.1,  # Too high
+                learning_rate=0.1,
             )
-
-# ---------------------------------------------------------------------------
-# Tests for constants
-# ---------------------------------------------------------------------------
 
 
 class TestConstants:

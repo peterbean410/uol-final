@@ -19,10 +19,6 @@ from probabilisticforecaster.inference import ForecasterInference
 from probabilisticforecaster.model import ProbabilisticTransformer
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 SEQ_LEN = 36
 NUM_FEATURES = 16
 
@@ -70,7 +66,7 @@ def valid_2d_input_tensors(draw):
                 ),
             )
         )
-    else:  # mixed
+    else:
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -132,7 +128,7 @@ def valid_3d_input_tensors(draw):
                 ),
             )
         )
-    else:  # mixed
+    else:
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -148,11 +144,6 @@ def valid_3d_input_tensors(draw):
         )
 
     return torch.from_numpy(arr)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures / Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_saved_model_path() -> tuple[str, ForecasterConfig]:
@@ -177,11 +168,6 @@ def _create_saved_model_path() -> tuple[str, ForecasterConfig]:
     torch.save(checkpoint, f.name)
     f.close()
     return f.name, config
-
-
-# ---------------------------------------------------------------------------
-# Property 14: Inference Weight Immutability
-# ---------------------------------------------------------------------------
 
 
 class TestInferenceWeightImmutability:
@@ -215,16 +201,13 @@ class TestInferenceWeightImmutability:
         try:
             inference = ForecasterInference(model_path, config)
 
-            # Snapshot all parameters before prediction
             param_snapshots = {
                 name: param.clone()
                 for name, param in inference._model.named_parameters()
             }
 
-            # Call predict
             inference.predict(features)
 
-            # Verify bitwise equality of all parameters
             for name, param in inference._model.named_parameters():
                 assert torch.equal(param, param_snapshots[name]), (
                     f"Parameter '{name}' was modified after calling predict. "
@@ -254,16 +237,13 @@ class TestInferenceWeightImmutability:
         try:
             inference = ForecasterInference(model_path, config)
 
-            # Snapshot all parameters before prediction
             param_snapshots = {
                 name: param.clone()
                 for name, param in inference._model.named_parameters()
             }
 
-            # Call predict_batch
             inference.predict_batch(features)
 
-            # Verify bitwise equality of all parameters
             for name, param in inference._model.named_parameters():
                 assert torch.equal(param, param_snapshots[name]), (
                     f"Parameter '{name}' was modified after calling predict_batch. "

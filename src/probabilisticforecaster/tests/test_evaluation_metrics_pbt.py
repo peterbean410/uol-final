@@ -25,11 +25,6 @@ from probabilisticforecaster.evaluation import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def evaluation_inputs(draw):
     """Generate random (mu, sigma, actual) numpy arrays for metric bound testing.
@@ -88,11 +83,6 @@ def evaluation_inputs(draw):
     return mu, sigma, actual
 
 
-# ---------------------------------------------------------------------------
-# Property 2: Evaluation metric bounds
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluationMetricBounds:
     """Property 2: Evaluation metric bounds.
 
@@ -136,11 +126,6 @@ class TestEvaluationMetricBounds:
             f"sigma range: [{sigma.min()}, {sigma.max()}], "
             f"actual range: [{actual.min()}, {actual.max()}]"
         )
-        # NLL has a lower bound determined by the minimum possible value
-        # of the Gaussian log-likelihood. For any finite inputs with sigma > 0,
-        # NLL is bounded below by 0.5 * log(2*pi*sigma_min^2) which is finite.
-        # It is NOT necessarily positive (can be negative for small sigma
-        # when predictions are very accurate), but it is always > -inf.
         assert nll > float("-inf"), "NLL should be bounded below"
 
     @given(inputs=evaluation_inputs())

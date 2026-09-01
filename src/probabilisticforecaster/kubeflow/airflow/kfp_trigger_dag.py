@@ -26,14 +26,9 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
-# Symbols to train; each gets an independent KFP pipeline run
 _SYMBOLS = ["USDJPY", "AUDJPY"]
 
-# KFP API endpoint (in-cluster service address)
 _KFP_HOST = "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
 default_args = {
@@ -43,16 +38,10 @@ default_args = {
 }
 
 
-# ---------------------------------------------------------------------------
-# DAG 1: Weekly Fine-Tune
-# ---------------------------------------------------------------------------
-# Precedence rule: If a drift-triggered retrain is running or completed for
-# the same day, the fine-tune is skipped. A full retrain supersedes fine-tuning.
-
 with DAG(
     dag_id="forecaster_weekly_finetune",
     start_date=datetime(2026, 5, 1),
-    schedule="0 2 * * 0",  # Every Sunday at 02:00 UTC
+    schedule="0 2 * * 0",
     default_args=default_args,
     catchup=False,
     tags=["forecaster", "kubeflow", "finetune"],
@@ -149,21 +138,16 @@ with DAG(
         escalate_retrain = PythonOperator(
             task_id=f"escalate_to_retrain_{symbol.lower()}",
             python_callable=_escalate_to_retrain,
-            trigger_rule="all_failed",  # Only runs if submit_finetune failed
+            trigger_rule="all_failed",
         )
 
         check_no_retrain >> wait_for_snapshot >> submit_finetune >> escalate_retrain
 
 
-# ---------------------------------------------------------------------------
-# DAG 2: Drift-Triggered Full Retrain
-# ---------------------------------------------------------------------------
-# Triggered externally by model-drift-detection or escalation from fine-tune.
-
 with DAG(
     dag_id="forecaster_drift_retrain",
     start_date=datetime(2026, 5, 1),
-    schedule=None,  # Triggered externally by drift detection or escalation
+    schedule=None,
     default_args=default_args,
     catchup=False,
     tags=["forecaster", "kubeflow", "retrain", "drift"],
@@ -215,14 +199,10 @@ with DAG(
         wait_for_snapshot >> submit_retrain
 
 
-# ---------------------------------------------------------------------------
-# DAG 3: Katib Hyperparameter Tuning (Manual Trigger)
-# ---------------------------------------------------------------------------
-
 with DAG(
     dag_id="forecaster_katib_tuning",
     start_date=datetime(2026, 5, 1),
-    schedule=None,  # Manual trigger only; no automatic schedule
+    schedule=None,
     default_args=default_args,
     catchup=False,
     tags=["forecaster", "kubeflow", "katib", "tuning"],
@@ -249,7 +229,6 @@ with DAG(
         max_trials = params["max_trials"]
         parallel_trials = params["parallel_trials"]
 
-        # Load in-cluster Kubernetes config
         k8s_config.load_incluster_config()
         api = client.CustomObjectsApi()
 
@@ -257,7 +236,6 @@ with DAG(
             f"forecaster-tuning-{symbol.lower()}-{context['run_id'][:8]}"
         )
 
-        # Read base experiment YAML and patch with runtime params
         with open(
             "probabilisticforecaster/kubeflow/katib/experiment.yaml"
         ) as f:
@@ -267,7 +245,6 @@ with DAG(
         experiment["spec"]["maxTrialCount"] = max_trials
         experiment["spec"]["parallelTrialCount"] = parallel_trials
 
-        # Create the Katib experiment CR
         api.create_namespaced_custom_object(
             group="kubeflow.org",
             version="v1beta1",
@@ -276,8 +253,7 @@ with DAG(
             body=experiment,
         )
 
-        # Poll until experiment reaches terminal state
-        deadline = time.time() + 86400  # 24h max
+        deadline = time.time() + 86400
         while time.time() < deadline:
             exp = api.get_namespaced_custom_object(
                 group="kubeflow.org",

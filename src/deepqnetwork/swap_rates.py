@@ -18,16 +18,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-# Mirror of core/src/environment.rs::default_daily_swap_rates(). Pepperstone
-# Standard USD/JPY: long +11.21 pips/day, short -24.24 pips/day per lot; modelenv
-# works in price units (1 pip = 0.01 for USDJPY), hence the x0.01 already applied.
 DEFAULT_DAILY_SWAP_RATES: dict[str, tuple[float, float]] = {
     "USDJPY": (0.1121, -0.2424),
 }
 
-# Units of the values below, recorded alongside them in reports.
 SWAP_RATE_UNITS = "price units/day per unit volume"
-
 
 
 def default_swap_rate_for(symbol: str) -> tuple[float, float]:

@@ -27,15 +27,10 @@ from commons.python.appconfig import AppConfig
 
 PRICE_DIVISOR = 100_000
 
-# Quote type mapping
 QUOTE_TYPE_BID = 1
 QUOTE_TYPE_ASK = 2
 
-# cTrader Open API per-request response timeout. The library default is 5s, which
-# is too aggressive for a busy/slow broker endpoint and caused transient
-# `twisted.internet.defer.TimeoutError: (5, 'Deferred')` download failures.
 RESPONSE_TIMEOUT_SECONDS = 30
-# Overall cap on the full auth -> tick fetch (ticks are higher-volume than bars).
 FETCH_TIMEOUT_SECONDS = 180
 
 
@@ -54,18 +49,16 @@ class _PriceTickFetcher:
         self.access_token = access_token
         self.account_id = int(account_id)
         self.symbol_name = symbol_name
-        self.quote_types = list(quote_types)  # e.g. [1] for BID, [1, 2] for both
+        self.quote_types = list(quote_types)
         self.from_ts = from_ts
         self.to_ts = to_ts
         self.num_ticks = num_ticks
         self.symbol_id = None
 
-        # State for current fetch phase
         self._phase_idx = 0
         self._current_qt = self.quote_types[0]
         self._phase_ticks = []
 
-        # Accumulated results per quote type
         self._results: dict[int, list[dict]] = {}
 
         self.result_df = None

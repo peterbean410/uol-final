@@ -20,20 +20,12 @@ from typing import Union
 from kfp import compiler, dsl, kubernetes
 from kfp.dsl import Dataset, Output
 
-# ECR registry base matches the rest of the platform's images.
 ECR_BASE = "731833471586.dkr.ecr.ap-southeast-1.amazonaws.com"
 COMPONENT_IMAGE = f"{ECR_BASE}/dqnpf-intraday-backtest:latest"
 
-# Compile-time pin onto the spark GPU node that does NOT host the gemma LLM
-# predictors (those live on spark-4214). Requires the multi-arch (arm64)
-# dqnpf-intraday-backtest image from images-chain.yml. Mirrors
-# deepqnetwork/kubeflow/pipeline/dqn_pipeline.py so DQN training/backtest and
-# this screening backtest co-locate and share warm dqn/base layers. Override
-# the host with DQNPF_SPARK_NODE_HOSTNAME.
 SPARK_NODE_HOSTNAME: str = os.getenv(
     "DQNPF_SPARK_NODE_HOSTNAME", "spark-5790"
 ).strip()
-# NoExecute taints carried by the spark nodes.
 SPARK_TAINTS = (
     ("workload", "ml"),
     ("arch", "arm64"),
@@ -58,12 +50,6 @@ def _pin_to_spark(task) -> None:
         label_value=SPARK_NODE_HOSTNAME,
     )
 
-# The in-pod modelenv sidecar runs in Training mode (modelenv's default) and
-# preloads market data on startup. The deepqnetwork warmup DAG populates this
-# RWX PVC; mounting it at modelenv's DEFAULT_LOCAL_CACHE_DIR lets the preload
-# read from the warm cache instead of pulling everything from S3 (which blows
-# past the sidecar healthcheck timeout). Matches the DQN training/backtest
-# components (see deepqnetwork/kubeflow/pipeline/dqn_pipeline.py).
 MODELENV_CACHE_PVC = "modelenv-cache"
 MODELENV_CACHE_MOUNT = "/tmp/modelenv-cache"
 
@@ -77,11 +63,6 @@ PIPELINE_DESCRIPTION = (
 DEFAULT_IR_PATH = Path(__file__).resolve().parent / "dqnpf_pipeline.yaml"
 
 
-# ---------------------------------------------------------------------------
-# Container component
-# ---------------------------------------------------------------------------
-
-
 @dsl.container_component
 def dqnpf_backtest(
     integration_config_yaml: str,
@@ -89,11 +70,6 @@ def dqnpf_backtest(
     forecaster_model_registry_name: str,
     backtest_report: Output[Dataset],
     trade_log: Output[Dataset],
-    # Strings (not floats) so they pass straight into the container args; the
-    # __main__ CLI parses them with argparse type=float. "0.0" = use modelenv's
-    # built-in default table: backtests apply the
-    # built-in financing table so PnL matches the swap regime the DQN trained
-    # under; pass "true" for a swap-free comparison run.
     swap_rate_long: str = "0.0",
     swap_rate_short: str = "0.0",
 ):
@@ -129,11 +105,6 @@ def dqnpf_backtest(
     )
 
 
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-
 @dsl.pipeline(name=PIPELINE_NAME, description=PIPELINE_DESCRIPTION)
 def dqnpf_intraday_pipeline(
     integration_config_yaml: str = (
@@ -158,22 +129,13 @@ def dqnpf_intraday_pipeline(
         swap_rate_short=swap_rate_short,
     )
     task.set_retry(num_retries=3)
-    # Disable caching: every backtest run resolves fresh production checkpoints
-    # and emits a versioned artifact, cached output would be a foot-gun.
     task.set_caching_options(enable_caching=False)
-    # Keep the screening backtest off the LLM-serving spark node and co-located
-    # with DQN training/backtest (warm shared dqn/base layers).
     _pin_to_spark(task)
-    # Mount the warm modelenv cache so the in-pod sidecar's training-data
-    # preload reads locally instead of downloading from S3 on every run.
     kubernetes.mount_pvc(
         task,
         pvc_name=MODELENV_CACHE_PVC,
         mount_path=MODELENV_CACHE_MOUNT,
     )
-    # The parent checkpoints resolve to minio:// KFP artifact URIs; the
-    # component downloads them via deepqnetwork.artifact_io, which needs the
-    # in-cluster MinIO credentials. Mirrors the DQN pipeline's _mount_minio_creds.
     kubernetes.use_secret_as_env(
         task,
         secret_name="mlpipeline-minio-artifact",
@@ -182,11 +144,6 @@ def dqnpf_intraday_pipeline(
             "secretkey": "MINIO_SECRET_KEY",
         },
     )
-
-
-# ---------------------------------------------------------------------------
-# Compilation helper
-# ---------------------------------------------------------------------------
 
 
 def compile_pipeline(output_path: Union[str, Path] = DEFAULT_IR_PATH) -> Path:

@@ -13,11 +13,6 @@ from hypothesis import strategies as st
 from probabilisticforecaster.training import gaussian_nll_loss
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-
 @st.composite
 def nll_inputs(draw):
     """Generate random (mu, sigma, target) tensors for NLL loss testing.
@@ -47,11 +42,6 @@ def nll_inputs(draw):
     return mu, sigma, target
 
 
-# ---------------------------------------------------------------------------
-# Property 8: Gaussian NLL Loss Correctness
-# ---------------------------------------------------------------------------
-
-
 class TestGaussianNLLLossCorrectness:
     """Property 8: Gaussian NLL Loss Correctness.
 
@@ -76,10 +66,8 @@ class TestGaussianNLLLossCorrectness:
         """
         mu, sigma, target = inputs
 
-        # Compute using the function under test
         actual_loss = gaussian_nll_loss(mu, sigma, target)
 
-        # Compute expected loss manually
         log_variance = torch.log(sigma ** 2)
         squared_error = ((target - mu) / sigma) ** 2
         log_2pi = math.log(2 * math.pi)

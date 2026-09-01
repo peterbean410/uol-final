@@ -54,10 +54,8 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
 
-    # Remove existing handlers to avoid duplicates on repeated calls
     root_logger.handlers.clear()
 
-    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_fmt = logging.Formatter(
@@ -67,13 +65,11 @@ def setup_logging(
     console_handler.setFormatter(console_fmt)
     root_logger.addHandler(console_handler)
 
-    # CSV file handler (for metrics logging)
     if csv_path is not None:
         csv_file = Path(csv_path)
         csv_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(str(csv_file), mode="a")
         file_handler.setLevel(log_level)
-        # CSV format: timestamp,level,name,message
         csv_fmt = logging.Formatter("%(asctime)s,%(levelname)s,%(name)s,%(message)s")
         file_handler.setFormatter(csv_fmt)
         root_logger.addHandler(file_handler)

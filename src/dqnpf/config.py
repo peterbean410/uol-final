@@ -75,16 +75,7 @@ class IntegrationConfig:
     variance_threshold: float = 4.5
     max_risk_long_units: int = 2
     max_risk_short_units: int = 1
-    # Risk-aversion coefficient gamma for the forecaster-only backtest baseline's
-    # mean-variance position sizing pi* = mu / (sigma^2 * gamma) (Qian eq 3.1.7),
-    # in the bps unit convention (mu, sigma are scaled by BPS_PER_UNIT). Must be
-    # > 0. Larger gamma = more risk-averse = smaller positions.
     forecaster_risk_aversion: float = 0.1
-    # Max exposure (base-currency units) the forecaster-only baseline scales its
-    # proportion pi in [-1,1] against; 1-bar PnL = pi * this * forward_return.
-    # Default 10m matches the paper's intraday max exposure (Qian Assumption
-    # 3.1.1). NOTE: larger than the modelenv arms' per-trade volume, so compare
-    # the forecaster arm on Sharpe, not absolute money.
     forecaster_position_size: float = 10_000_000.0
     forecast_horizon: int = 1
     min_bars_warmup: int = 1440

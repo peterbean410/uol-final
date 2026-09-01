@@ -1,15 +1,4 @@
 #!/usr/bin/env bash
-# Export the project's source into this public repository.
-#
-# This repository is CODE ONLY - no report, specifications or other documents.
-# The working repository is private and contains credentials (.env files, a
-# kubeconfig, broker tokens) and multi-gigabyte Rust/Python build trees. This
-# script copies ONLY first-party source, and refuses to run if the secret scan
-# in tools/scan_secrets.sh finds anything afterwards. This repository's git history
-# is the real development history of those paths, brought across with git-filter-repo;
-# this script only refreshes the working tree to the latest state.
-#
-#   ./tools/export_public.sh /path/to/private/forex
 set -euo pipefail
 
 SRC="${1:?usage: export_public.sh <path-to-private-forex-repo>}"

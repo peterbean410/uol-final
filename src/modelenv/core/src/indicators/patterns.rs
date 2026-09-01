@@ -9,7 +9,6 @@ const SWING_RADIUS: usize = 2;
 const BOTTOM_SIMILARITY_TOL: f64 = 0.005;
 const PEAK_RISE_TARGET: f64 = 0.01;
 
-// Minimum depth percentage threshold for valid patterns
 const MIN_DEPTH_PCT: f64 = 0.1;
 
 /// A detected double-bottom pattern with all metadata fields.
@@ -152,8 +151,7 @@ pub fn detect_double_bottoms(
     tolerance_pct: f64,
     min_width: usize,
 ) -> Result<DoubleBottomDetection, IndicatorError> {
-    // Validate parameters per requirement 10.11
-    if window == 0 {
+        if window == 0 {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "window",
             value: 0,
@@ -170,13 +168,12 @@ pub fn detect_double_bottoms(
     if tolerance_pct < 0.0 || !tolerance_pct.is_finite() {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "tolerance_pct",
-            value: 0, // Can't represent f64 in usize, but the reason explains
+            value: 0,
             reason: "tolerance_pct must be >= 0.0 and finite",
         });
     }
 
-    // Per requirement 10.4: return empty result if insufficient bars
-    if bars.len() < 2 * window + 1 {
+        if bars.len() < 2 * window + 1 {
         return Ok(DoubleBottomDetection {
             patterns: Vec::new(),
             latest_min: None,
@@ -186,19 +183,15 @@ pub fn detect_double_bottoms(
 
     let half_window = window / 2;
 
-    // Find all local minima and maxima
-    let local_minima = find_local_minima(bars, half_window);
+        let local_minima = find_local_minima(bars, half_window);
     let local_maxima = find_local_maxima(bars, half_window);
 
-    // Track latest extrema
-    let latest_min = local_minima.last().map(|&idx| bars[idx].low);
+        let latest_min = local_minima.last().map(|&idx| bars[idx].low);
     let latest_max = local_maxima.last().map(|&idx| bars[idx].high);
 
     let mut patterns = Vec::new();
 
-    // Find all valid double-bottom patterns from CONSECUTIVE pairs of local minima
-    // This matches the Python implementation which uses zip(minima, minima[1:])
-    for i in 0..local_minima.len().saturating_sub(1) {
+            for i in 0..local_minima.len().saturating_sub(1) {
         let idx1 = local_minima[i];
         let idx2 = local_minima[i + 1];
 
@@ -211,25 +204,19 @@ pub fn detect_double_bottoms(
             &local_minima,
             &local_maxima,
             half_window,
-            false, // not forming
+            false,
         ) {
             patterns.push(pattern);
         }
     }
 
-    // Check for forming pattern at right edge (requirement 10.13)
-    // Python only checks the LAST local minimum against the running minimum
-    if let Some(&last_min_idx) = local_minima.last() {
-        // Look for running minimum after the last local minimum
-        if last_min_idx + 1 < bars.len() {
+            if let Some(&last_min_idx) = local_minima.last() {
+                if last_min_idx + 1 < bars.len() {
             let (running_min_idx, running_min_val) =
                 find_running_min_after(bars, last_min_idx + 1);
 
-            // Only check if the running minimum is not already a local minimum
-            // (Python: if b not in minima)
-            if !local_minima.contains(&running_min_idx) {
-                // Use the last local minimum as idx1
-                let idx1 = last_min_idx;
+                                    if !local_minima.contains(&running_min_idx) {
+                                let idx1 = last_min_idx;
 
                 if let Some(pattern) = try_create_forming_pattern(
                     bars,
@@ -248,8 +235,7 @@ pub fn detect_double_bottoms(
         }
     }
 
-    // Sort patterns by idx2 ascending
-    patterns.sort_by_key(|p| p.idx2);
+        patterns.sort_by_key(|p| p.idx2);
 
     Ok(DoubleBottomDetection {
         patterns,
@@ -302,20 +288,15 @@ fn find_local_minima(bars: &[Bar], half_window: usize) -> Vec<usize> {
     for i in half_window..(bars.len() - half_window) {
         let center = bars[i].low;
         
-        // Find min and max in the segment [i - half_window, i + half_window]
-        let mut segment_min = center;
+                let mut segment_min = center;
         let mut segment_max = center;
         for j in (i.saturating_sub(half_window))..=(i + half_window).min(bars.len() - 1) {
             segment_min = segment_min.min(bars[j].low);
             segment_max = segment_max.max(bars[j].low);
         }
         
-        // Check if center is the minimum and there's variation in the segment
-        // (Python: if lows.iloc[i] == segment.min() and segment.min() != segment.max())
-        if (center - segment_min).abs() < 1e-12 && (segment_max - segment_min).abs() > 1e-12 {
-            // Check spacing constraint: at least half_window bars from previous minimum
-            // (Python: if not minima or i - minima[-1] >= half)
-            if minima.is_empty() || i - minima[minima.len() - 1] >= half_window {
+                        if (center - segment_min).abs() < 1e-12 && (segment_max - segment_min).abs() > 1e-12 {
+                                    if minima.is_empty() || i - minima[minima.len() - 1] >= half_window {
                 minima.push(i);
             }
         }
@@ -338,20 +319,15 @@ fn find_local_maxima(bars: &[Bar], half_window: usize) -> Vec<usize> {
     for i in half_window..(bars.len() - half_window) {
         let center = bars[i].high;
         
-        // Find min and max in the segment [i - half_window, i + half_window]
-        let mut segment_min = center;
+                let mut segment_min = center;
         let mut segment_max = center;
         for j in (i.saturating_sub(half_window))..=(i + half_window).min(bars.len() - 1) {
             segment_min = segment_min.min(bars[j].high);
             segment_max = segment_max.max(bars[j].high);
         }
         
-        // Check if center is the maximum and there's variation in the segment
-        // (Python: if highs.iloc[i] == segment.max() and segment.min() != segment.max())
-        if (center - segment_max).abs() < 1e-12 && (segment_max - segment_min).abs() > 1e-12 {
-            // Check spacing constraint: at least half_window bars from previous maximum
-            // (Python: if not maxima or i - maxima[-1] >= half)
-            if maxima.is_empty() || i - maxima[maxima.len() - 1] >= half_window {
+                        if (center - segment_max).abs() < 1e-12 && (segment_max - segment_min).abs() > 1e-12 {
+                                    if maxima.is_empty() || i - maxima[maxima.len() - 1] >= half_window {
                 maxima.push(i);
             }
         }
@@ -387,8 +363,7 @@ fn try_create_double_bottom(
     half_window: usize,
     is_forming: bool,
 ) -> Option<DoubleBottom> {
-    // Check width requirement (10.5)
-    let width_bars = idx2 - idx1;
+        let width_bars = idx2 - idx1;
     if width_bars < min_width {
         return None;
     }
@@ -396,8 +371,7 @@ fn try_create_double_bottom(
     let low1 = bars[idx1].low;
     let low2 = bars[idx2].low;
 
-    // Check tolerance requirement (10.5)
-    let min_low = low1.min(low2);
+        let min_low = low1.min(low2);
     if min_low <= 0.0 {
         return None;
     }
@@ -406,28 +380,22 @@ fn try_create_double_bottom(
         return None;
     }
 
-    // Find neckline (max high between idx1 and idx2, exclusive of endpoints for strict ordering)
-    let (neckline, neckline_idx) = find_neckline(bars, idx1, idx2)?;
+        let (neckline, neckline_idx) = find_neckline(bars, idx1, idx2)?;
 
-    // Verify neckline_idx is strictly between idx1 and idx2 (requirement 10.7)
-    if neckline_idx <= idx1 || neckline_idx >= idx2 {
+        if neckline_idx <= idx1 || neckline_idx >= idx2 {
         return None;
     }
 
-    // Calculate depth percentage (10.5, 10.10)
-    let avg_low = (low1 + low2) / 2.0;
+        let avg_low = (low1 + low2) / 2.0;
     let depth_pct_raw = (neckline - avg_low) / neckline * 100.0;
 
-    // Check minimum depth threshold
-    if depth_pct_raw < MIN_DEPTH_PCT {
+        if depth_pct_raw < MIN_DEPTH_PCT {
         return None;
     }
 
-    // Apply banker's rounding to 3 decimal places (10.10)
-    let depth_pct = bankers_round(depth_pct_raw, 3);
+        let depth_pct = bankers_round(depth_pct_raw, 3);
 
-    // Check confirmation (10.6)
-    let confirmed = if is_forming {
+        let confirmed = if is_forming {
         false
     } else {
         bars[(idx2 + 1)..]
@@ -435,23 +403,20 @@ fn try_create_double_bottom(
             .any(|bar| bar.close > neckline)
     };
 
-    // Find nearest extrema before idx1 and after idx2 (10.8)
-    let (min_before_val, min_before_ts) =
+        let (min_before_val, min_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_minima, true);
     let (max_before_val, max_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_maxima, false);
 
     let (min_after_val, min_after_ts, max_after_val, max_after_ts) = if is_forming {
-        // Forming patterns have no after extrema (10.13)
-        (None, None, None, None)
+                (None, None, None, None)
     } else {
         let (min_val, min_ts) = find_nearest_extremum_after(bars, idx2, local_minima, half_window, true);
         let (max_val, max_ts) = find_nearest_extremum_after(bars, idx2, local_maxima, half_window, false);
         (min_val, min_ts, max_val, max_ts)
     };
 
-    // Round price values to 5 decimal places to match Python's round(x, 5)
-    Some(DoubleBottom {
+        Some(DoubleBottom {
         idx1,
         idx2,
         ts1: bars[idx1].timestamp_ns,
@@ -487,11 +452,9 @@ fn try_create_forming_pattern(
     local_maxima: &[usize],
     _half_window: usize,
 ) -> Option<DoubleBottom> {
-    // Use the running minimum as idx2
-    let idx2 = running_min_idx;
+        let idx2 = running_min_idx;
 
-    // Check width requirement
-    let width_bars = idx2 - idx1;
+        let width_bars = idx2 - idx1;
     if width_bars < min_width {
         return None;
     }
@@ -499,8 +462,7 @@ fn try_create_forming_pattern(
     let low1 = bars[idx1].low;
     let low2 = running_min_val;
 
-    // Check tolerance requirement
-    let min_low = low1.min(low2);
+        let min_low = low1.min(low2);
     if min_low <= 0.0 {
         return None;
     }
@@ -509,34 +471,27 @@ fn try_create_forming_pattern(
         return None;
     }
 
-    // Find neckline (max high between idx1 and idx2)
-    let (neckline, neckline_idx) = find_neckline(bars, idx1, idx2)?;
+        let (neckline, neckline_idx) = find_neckline(bars, idx1, idx2)?;
 
-    // Verify neckline_idx is strictly between idx1 and idx2
-    if neckline_idx <= idx1 || neckline_idx >= idx2 {
+        if neckline_idx <= idx1 || neckline_idx >= idx2 {
         return None;
     }
 
-    // Calculate depth percentage
-    let avg_low = (low1 + low2) / 2.0;
+        let avg_low = (low1 + low2) / 2.0;
     let depth_pct_raw = (neckline - avg_low) / neckline * 100.0;
 
-    // Check minimum depth threshold
-    if depth_pct_raw < MIN_DEPTH_PCT {
+        if depth_pct_raw < MIN_DEPTH_PCT {
         return None;
     }
 
-    // Apply banker's rounding to 3 decimal places
-    let depth_pct = bankers_round(depth_pct_raw, 3);
+        let depth_pct = bankers_round(depth_pct_raw, 3);
 
-    // Find nearest extrema before idx1
-    let (min_before_val, min_before_ts) =
+        let (min_before_val, min_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_minima, true);
     let (max_before_val, max_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_maxima, false);
 
-    // Round price values to 5 decimal places to match Python's round(x, 5)
-    Some(DoubleBottom {
+        Some(DoubleBottom {
         idx1,
         idx2,
         ts1: bars[idx1].timestamp_ns,
@@ -547,12 +502,12 @@ fn try_create_forming_pattern(
         neckline_idx,
         depth_pct,
         width_bars,
-        confirmed: false, // Forming patterns are never confirmed
+        confirmed: false,
         min_before_val,
         min_before_ts,
         max_before_val,
         max_before_ts,
-        min_after_val: None, // Forming patterns have no after extrema
+        min_after_val: None,
         min_after_ts: None,
         max_after_val: None,
         max_after_ts: None,
@@ -562,7 +517,7 @@ fn try_create_forming_pattern(
 /// Find the neckline (max high) between two indices (exclusive of endpoints).
 fn find_neckline(bars: &[Bar], idx1: usize, idx2: usize) -> Option<(f64, usize)> {
     if idx2 <= idx1 + 1 {
-        return None; // No bars between idx1 and idx2
+        return None;
     }
 
     let mut max_high = f64::NEG_INFINITY;
@@ -585,7 +540,7 @@ fn find_neckline(bars: &[Bar], idx1: usize, idx2: usize) -> Option<(f64, usize)>
 /// Find the neckline (min low) between two indices for double-top patterns (exclusive of endpoints).
 fn find_neckline_min(bars: &[Bar], idx1: usize, idx2: usize) -> Option<(f64, usize)> {
     if idx2 <= idx1 + 1 {
-        return None; // No bars between idx1 and idx2
+        return None;
     }
 
     let mut min_low = f64::INFINITY;
@@ -612,8 +567,7 @@ fn find_nearest_extremum_before(
     extrema: &[usize],
     is_minimum: bool,
 ) -> (Option<f64>, Option<i64>) {
-    // Find the largest extremum index that is strictly less than idx
-    for &ext_idx in extrema.iter().rev() {
+        for &ext_idx in extrema.iter().rev() {
         if ext_idx < idx {
             let val = if is_minimum {
                 bars[ext_idx].low
@@ -634,10 +588,7 @@ fn find_nearest_extremum_after(
     _half_window: usize,
     is_minimum: bool,
 ) -> (Option<f64>, Option<i64>) {
-    // Find the smallest extremum index that is strictly greater than idx
-    // Note: extrema detection requires half_window bars on each side,
-    // so we need to check if there are valid extrema after idx
-    for &ext_idx in extrema.iter() {
+                for &ext_idx in extrema.iter() {
         if ext_idx > idx {
             let val = if is_minimum {
                 bars[ext_idx].low
@@ -658,8 +609,7 @@ fn bankers_round(value: f64, decimals: u32) -> f64 {
     let frac = scaled - floor;
 
     let rounded = if (frac - 0.5).abs() < 1e-10 {
-        // Exactly 0.5 - round to even
-        if floor as i64 % 2 == 0 {
+                if floor as i64 % 2 == 0 {
             floor
         } else {
             floor + 1.0
@@ -775,8 +725,7 @@ pub fn detect_double_tops(
     tolerance_pct: f64,
     min_width: usize,
 ) -> Result<DoubleTopDetection, IndicatorError> {
-    // Validate parameters per requirement 11.11
-    if window == 0 {
+        if window == 0 {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "window",
             value: 0,
@@ -793,13 +742,12 @@ pub fn detect_double_tops(
     if tolerance_pct < 0.0 || !tolerance_pct.is_finite() {
         return Err(IndicatorError::InvalidPeriod {
             param_name: "tolerance_pct",
-            value: 0, // Can't represent f64 in usize, but the reason explains
+            value: 0,
             reason: "tolerance_pct must be >= 0.0 and finite",
         });
     }
 
-    // Per requirement 11.4: return empty result if insufficient bars
-    if bars.len() < 2 * window + 1 {
+        if bars.len() < 2 * window + 1 {
         return Ok(DoubleTopDetection {
             patterns: Vec::new(),
             latest_min: None,
@@ -809,19 +757,15 @@ pub fn detect_double_tops(
 
     let half_window = window / 2;
 
-    // Find all local minima and maxima
-    let local_minima = find_local_minima(bars, half_window);
+        let local_minima = find_local_minima(bars, half_window);
     let local_maxima = find_local_maxima(bars, half_window);
 
-    // Track latest extrema
-    let latest_min = local_minima.last().map(|&idx| bars[idx].low);
+        let latest_min = local_minima.last().map(|&idx| bars[idx].low);
     let latest_max = local_maxima.last().map(|&idx| bars[idx].high);
 
     let mut patterns = Vec::new();
 
-    // Find all valid double-top patterns from CONSECUTIVE pairs of local maxima
-    // This matches the Python implementation which uses zip(maxima, maxima[1:])
-    for i in 0..local_maxima.len().saturating_sub(1) {
+            for i in 0..local_maxima.len().saturating_sub(1) {
         let idx1 = local_maxima[i];
         let idx2 = local_maxima[i + 1];
 
@@ -834,25 +778,19 @@ pub fn detect_double_tops(
             &local_minima,
             &local_maxima,
             half_window,
-            false, // not forming
+            false,
         ) {
             patterns.push(pattern);
         }
     }
 
-    // Check for forming pattern at right edge (requirement 11.14)
-    // Python only checks the LAST local maximum against the running maximum
-    if let Some(&last_max_idx) = local_maxima.last() {
-        // Look for running maximum after the last local maximum
-        if last_max_idx + 1 < bars.len() {
+            if let Some(&last_max_idx) = local_maxima.last() {
+                if last_max_idx + 1 < bars.len() {
             let (running_max_idx, running_max_val) =
                 find_running_max_after(bars, last_max_idx + 1);
 
-            // Only check if the running maximum is not already a local maximum
-            // (Python: if b not in maxima)
-            if !local_maxima.contains(&running_max_idx) {
-                // Use the last local maximum as idx1
-                let idx1 = last_max_idx;
+                                    if !local_maxima.contains(&running_max_idx) {
+                                let idx1 = last_max_idx;
 
                 if let Some(pattern) = try_create_forming_double_top(
                     bars,
@@ -871,8 +809,7 @@ pub fn detect_double_tops(
         }
     }
 
-    // Sort patterns by idx2 ascending (requirement 11.12)
-    patterns.sort_by_key(|p| p.idx2);
+        patterns.sort_by_key(|p| p.idx2);
 
     Ok(DoubleTopDetection {
         patterns,
@@ -938,8 +875,7 @@ fn try_create_double_top(
     half_window: usize,
     is_forming: bool,
 ) -> Option<DoubleTop> {
-    // Check width requirement (11.5)
-    let width_bars = idx2 - idx1;
+        let width_bars = idx2 - idx1;
     if width_bars < min_width {
         return None;
     }
@@ -947,9 +883,7 @@ fn try_create_double_top(
     let high1 = bars[idx1].high;
     let high2 = bars[idx2].high;
 
-    // Check tolerance requirement (11.5)
-    // |bars[idx1].high - bars[idx2].high| / max(bars[idx1].high, bars[idx2].high) * 100 <= tolerance_pct
-    let max_high = high1.max(high2);
+            let max_high = high1.max(high2);
     if max_high <= 0.0 {
         return None;
     }
@@ -958,30 +892,22 @@ fn try_create_double_top(
         return None;
     }
 
-    // Find neckline (min low between idx1 and idx2, exclusive of endpoints for strict ordering)
-    let (neckline, neckline_idx) = find_neckline_min(bars, idx1, idx2)?;
+        let (neckline, neckline_idx) = find_neckline_min(bars, idx1, idx2)?;
 
-    // Verify neckline_idx is strictly between idx1 and idx2 (requirement 11.7)
-    if neckline_idx <= idx1 || neckline_idx >= idx2 {
+        if neckline_idx <= idx1 || neckline_idx >= idx2 {
         return None;
     }
 
-    // Calculate depth percentage (11.5, 11.10)
-    // depth_pct = ((bars[idx1].high + bars[idx2].high) / 2 - neckline) / ((bars[idx1].high + bars[idx2].high) / 2) * 100
-    let avg_high = (high1 + high2) / 2.0;
+            let avg_high = (high1 + high2) / 2.0;
     let depth_pct_raw = (avg_high - neckline) / avg_high * 100.0;
 
-    // Check minimum depth threshold
-    if depth_pct_raw < MIN_DEPTH_PCT {
+        if depth_pct_raw < MIN_DEPTH_PCT {
         return None;
     }
 
-    // Apply banker's rounding to 3 decimal places (11.10)
-    let depth_pct = bankers_round(depth_pct_raw, 3);
+        let depth_pct = bankers_round(depth_pct_raw, 3);
 
-    // Check confirmation (11.6)
-    // confirmed = true if any bars[i].close < neckline for i in idx2+1..bars.len()
-    let confirmed = if is_forming {
+            let confirmed = if is_forming {
         false
     } else {
         bars[(idx2 + 1)..]
@@ -989,23 +915,20 @@ fn try_create_double_top(
             .any(|bar| bar.close < neckline)
     };
 
-    // Find nearest extrema before idx1 and after idx2 (11.8)
-    let (min_before_val, min_before_ts) =
+        let (min_before_val, min_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_minima, true);
     let (max_before_val, max_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_maxima, false);
 
     let (min_after_val, min_after_ts, max_after_val, max_after_ts) = if is_forming {
-        // Forming patterns have no after extrema (11.14)
-        (None, None, None, None)
+                (None, None, None, None)
     } else {
         let (min_val, min_ts) = find_nearest_extremum_after(bars, idx2, local_minima, half_window, true);
         let (max_val, max_ts) = find_nearest_extremum_after(bars, idx2, local_maxima, half_window, false);
         (min_val, min_ts, max_val, max_ts)
     };
 
-    // Round price values to 5 decimal places to match Python's round(x, 5)
-    Some(DoubleTop {
+        Some(DoubleTop {
         idx1,
         idx2,
         ts1: bars[idx1].timestamp_ns,
@@ -1041,11 +964,9 @@ fn try_create_forming_double_top(
     local_maxima: &[usize],
     _half_window: usize,
 ) -> Option<DoubleTop> {
-    // Use the running maximum as idx2
-    let idx2 = running_max_idx;
+        let idx2 = running_max_idx;
 
-    // Check width requirement
-    let width_bars = idx2 - idx1;
+        let width_bars = idx2 - idx1;
     if width_bars < min_width {
         return None;
     }
@@ -1053,8 +974,7 @@ fn try_create_forming_double_top(
     let high1 = bars[idx1].high;
     let high2 = running_max_val;
 
-    // Check tolerance requirement
-    let max_high = high1.max(high2);
+        let max_high = high1.max(high2);
     if max_high <= 0.0 {
         return None;
     }
@@ -1063,34 +983,27 @@ fn try_create_forming_double_top(
         return None;
     }
 
-    // Find neckline (min low between idx1 and idx2)
-    let (neckline, neckline_idx) = find_neckline_min(bars, idx1, idx2)?;
+        let (neckline, neckline_idx) = find_neckline_min(bars, idx1, idx2)?;
 
-    // Verify neckline_idx is strictly between idx1 and idx2
-    if neckline_idx <= idx1 || neckline_idx >= idx2 {
+        if neckline_idx <= idx1 || neckline_idx >= idx2 {
         return None;
     }
 
-    // Calculate depth percentage
-    let avg_high = (high1 + high2) / 2.0;
+        let avg_high = (high1 + high2) / 2.0;
     let depth_pct_raw = (avg_high - neckline) / avg_high * 100.0;
 
-    // Check minimum depth threshold
-    if depth_pct_raw < MIN_DEPTH_PCT {
+        if depth_pct_raw < MIN_DEPTH_PCT {
         return None;
     }
 
-    // Apply banker's rounding to 3 decimal places
-    let depth_pct = bankers_round(depth_pct_raw, 3);
+        let depth_pct = bankers_round(depth_pct_raw, 3);
 
-    // Find nearest extrema before idx1
-    let (min_before_val, min_before_ts) =
+        let (min_before_val, min_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_minima, true);
     let (max_before_val, max_before_ts) =
         find_nearest_extremum_before(bars, idx1, local_maxima, false);
 
-    // Round price values to 5 decimal places to match Python's round(x, 5)
-    Some(DoubleTop {
+        Some(DoubleTop {
         idx1,
         idx2,
         ts1: bars[idx1].timestamp_ns,
@@ -1101,12 +1014,12 @@ fn try_create_forming_double_top(
         neckline_idx,
         depth_pct,
         width_bars,
-        confirmed: false, // Forming patterns are never confirmed
+        confirmed: false,
         min_before_val,
         min_before_ts,
         max_before_val,
         max_before_ts,
-        min_after_val: None, // Forming patterns have no after extrema
+        min_after_val: None,
         min_after_ts: None,
         max_after_val: None,
         max_after_ts: None,
@@ -1150,8 +1063,7 @@ mod tests {
         }
     }
 
-    // ==================== double_bottom_score tests ====================
-
+    
     #[test]
     fn empty_or_short_returns_zero() {
         assert_eq!(double_bottom_score(&[]), 0.0);
@@ -1174,9 +1086,7 @@ mod tests {
 
     #[test]
     fn clean_double_bottom_scores_positive() {
-        // Build: down, low, up, peak, down, low, up
-        // Lows at index 4 and 12, peak around index 8.
-        let mut bars = Vec::new();
+                        let mut bars = Vec::new();
         for i in 0..4 {
             bars.push(bar(110.0 - i as f64, 111.0 - i as f64));
         }
@@ -1201,8 +1111,7 @@ mod tests {
 
     #[test]
     fn dissimilar_bottoms_score_zero() {
-        // Two troughs but the second is far below the first - not a double bottom.
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
         for i in 0..4 {
             bars.push(bar(110.0 - i as f64, 111.0 - i as f64));
         }
@@ -1222,8 +1131,7 @@ mod tests {
         assert_eq!(double_bottom_score(&bars), 0.0);
     }
 
-    // ==================== detect_double_bottoms tests ====================
-
+    
     #[test]
     fn detect_double_bottoms_invalid_window() {
         let bars = vec![bar(100.0, 101.0); 20];
@@ -1276,7 +1184,7 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_insufficient_bars() {
-        let bars = vec![bar(100.0, 101.0); 10]; // Less than 2*5+1 = 11
+        let bars = vec![bar(100.0, 101.0); 10];
         let result = detect_double_bottoms(&bars, 5, 0.3, 5).unwrap();
         assert!(result.patterns.is_empty());
         assert!(result.latest_min.is_none());
@@ -1299,62 +1207,45 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_finds_valid_pattern() {
-        // Create a clear double-bottom pattern:
-        // - First bottom at index ~5
-        // - Peak (neckline) at index ~10
-        // - Second bottom at index ~15
-        // - Confirmation close above neckline at index ~20
-        let mut bars = Vec::new();
+                                                let mut bars = Vec::new();
 
-        // Descending to first bottom (indices 0-4)
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64 * 2.0, 112.0 - i as f64 * 2.0, i as i64));
         }
 
-        // First bottom at index 5
-        bars.push(bar_with_ts(100.0, 101.0, 5));
+                bars.push(bar_with_ts(100.0, 101.0, 5));
 
-        // Rising to neckline (indices 6-9)
-        for i in 0..4 {
+                for i in 0..4 {
             bars.push(bar_with_ts(102.0 + i as f64 * 2.0, 104.0 + i as f64 * 2.0, 6 + i as i64));
         }
 
-        // Neckline peak at index 10
-        bars.push(bar_with_ts(108.0, 115.0, 10));
+                bars.push(bar_with_ts(108.0, 115.0, 10));
 
-        // Descending to second bottom (indices 11-14)
-        for i in 0..4 {
+                for i in 0..4 {
             bars.push(bar_with_ts(106.0 - i as f64 * 1.5, 108.0 - i as f64 * 1.5, 11 + i as i64));
         }
 
-        // Second bottom at index 15
-        bars.push(bar_with_ts(100.1, 101.1, 15));
+                bars.push(bar_with_ts(100.1, 101.1, 15));
 
-        // Rising after second bottom (indices 16-19)
-        for i in 0..4 {
+                for i in 0..4 {
             bars.push(bar_with_ts(102.0 + i as f64 * 2.0, 104.0 + i as f64 * 2.0, 16 + i as i64));
         }
 
-        // Confirmation: close above neckline at index 20
-        bars.push(bar_with_close(114.0, 118.0, 116.0, 20));
+                bars.push(bar_with_close(114.0, 118.0, 116.0, 20));
 
-        // Add more bars for extrema detection
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(115.0 + i as f64, 117.0 + i as f64, 21 + i as i64));
         }
 
         let result = detect_double_bottoms(&bars, 3, 0.5, 5).unwrap();
 
-        // Should find at least one pattern
-        assert!(
+                assert!(
             !result.patterns.is_empty(),
             "Expected to find double-bottom patterns, found none"
         );
 
-        // Check pattern invariants
-        for pattern in &result.patterns {
-            // idx1 < neckline_idx < idx2
-            assert!(
+                for pattern in &result.patterns {
+                        assert!(
                 pattern.idx1 < pattern.neckline_idx,
                 "idx1 ({}) should be < neckline_idx ({})",
                 pattern.idx1,
@@ -1367,15 +1258,13 @@ mod tests {
                 pattern.idx2
             );
 
-            // width_bars == idx2 - idx1
-            assert_eq!(
+                        assert_eq!(
                 pattern.width_bars,
                 pattern.idx2 - pattern.idx1,
                 "width_bars should equal idx2 - idx1"
             );
 
-            // depth_pct >= 0.1
-            assert!(
+                        assert!(
                 pattern.depth_pct >= 0.1,
                 "depth_pct ({}) should be >= 0.1",
                 pattern.depth_pct
@@ -1385,44 +1274,35 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_pattern_invariants() {
-        // Test that all detected patterns satisfy the invariants
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Create multiple potential double-bottom patterns
-        for cycle in 0..3 {
+                for cycle in 0..3 {
             let base = cycle * 20;
-            // Descending
-            for i in 0..5 {
+                        for i in 0..5 {
                 bars.push(bar_with_ts(
                     110.0 - i as f64 * 2.0,
                     112.0 - i as f64 * 2.0,
                     (base + i) as i64,
                 ));
             }
-            // Bottom
-            bars.push(bar_with_ts(100.0, 101.0, (base + 5) as i64));
-            // Rising
-            for i in 0..4 {
+                        bars.push(bar_with_ts(100.0, 101.0, (base + 5) as i64));
+                        for i in 0..4 {
                 bars.push(bar_with_ts(
                     102.0 + i as f64 * 3.0,
                     104.0 + i as f64 * 3.0,
                     (base + 6 + i) as i64,
                 ));
             }
-            // Peak
-            bars.push(bar_with_ts(112.0, 118.0, (base + 10) as i64));
-            // Descending
-            for i in 0..4 {
+                        bars.push(bar_with_ts(112.0, 118.0, (base + 10) as i64));
+                        for i in 0..4 {
                 bars.push(bar_with_ts(
                     110.0 - i as f64 * 2.5,
                     112.0 - i as f64 * 2.5,
                     (base + 11 + i) as i64,
                 ));
             }
-            // Second bottom
-            bars.push(bar_with_ts(100.05, 101.05, (base + 15) as i64));
-            // Rising with confirmation
-            for i in 0..4 {
+                        bars.push(bar_with_ts(100.05, 101.05, (base + 15) as i64));
+                        for i in 0..4 {
                 bars.push(bar_with_close(
                     115.0 + i as f64,
                     120.0 + i as f64,
@@ -1435,8 +1315,7 @@ mod tests {
         let result = detect_double_bottoms(&bars, 3, 0.5, 5).unwrap();
 
         for pattern in &result.patterns {
-            // Invariant 1: idx1 < neckline_idx < idx2
-            assert!(
+                        assert!(
                 pattern.idx1 < pattern.neckline_idx && pattern.neckline_idx < pattern.idx2,
                 "Pattern invariant violated: idx1={}, neckline_idx={}, idx2={}",
                 pattern.idx1,
@@ -1444,38 +1323,32 @@ mod tests {
                 pattern.idx2
             );
 
-            // Invariant 2: width_bars == idx2 - idx1
-            assert_eq!(
+                        assert_eq!(
                 pattern.width_bars,
                 pattern.idx2 - pattern.idx1,
                 "width_bars mismatch"
             );
 
-            // Invariant 3: depth_pct >= 0.1
-            assert!(pattern.depth_pct >= 0.1, "depth_pct too small");
+                        assert!(pattern.depth_pct >= 0.1, "depth_pct too small");
 
-            // Verify timestamps match indices
-            assert_eq!(pattern.ts1, bars[pattern.idx1].timestamp_ns);
+                        assert_eq!(pattern.ts1, bars[pattern.idx1].timestamp_ns);
             assert_eq!(pattern.ts2, bars[pattern.idx2].timestamp_ns);
 
-            // Verify low values match indices
-            assert!((pattern.low1 - bars[pattern.idx1].low).abs() < 1e-10);
+                        assert!((pattern.low1 - bars[pattern.idx1].low).abs() < 1e-10);
             assert!((pattern.low2 - bars[pattern.idx2].low).abs() < 1e-10);
         }
     }
 
     #[test]
     fn bankers_round_test() {
-        // Test banker's rounding (round half to even)
-        assert!((bankers_round(2.5, 0) - 2.0).abs() < 1e-10); // 2.5 -> 2 (even)
-        assert!((bankers_round(3.5, 0) - 4.0).abs() < 1e-10); // 3.5 -> 4 (even)
-        assert!((bankers_round(2.25, 1) - 2.2).abs() < 1e-10); // 2.25 -> 2.2 (even)
-        assert!((bankers_round(2.35, 1) - 2.4).abs() < 1e-10); // 2.35 -> 2.4 (even)
-        assert!((bankers_round(2.345, 2) - 2.34).abs() < 1e-10); // 2.345 -> 2.34 (even)
-        assert!((bankers_round(2.355, 2) - 2.36).abs() < 1e-10); // 2.355 -> 2.36 (even)
+                assert!((bankers_round(2.5, 0) - 2.0).abs() < 1e-10);
+        assert!((bankers_round(3.5, 0) - 4.0).abs() < 1e-10);
+        assert!((bankers_round(2.25, 1) - 2.2).abs() < 1e-10);
+        assert!((bankers_round(2.35, 1) - 2.4).abs() < 1e-10);
+        assert!((bankers_round(2.345, 2) - 2.34).abs() < 1e-10);
+        assert!((bankers_round(2.355, 2) - 2.36).abs() < 1e-10);
 
-        // Regular rounding cases
-        assert!((bankers_round(2.4, 0) - 2.0).abs() < 1e-10);
+                assert!((bankers_round(2.4, 0) - 2.0).abs() < 1e-10);
         assert!((bankers_round(2.6, 0) - 3.0).abs() < 1e-10);
         assert!((bankers_round(2.123, 2) - 2.12).abs() < 1e-10);
         assert!((bankers_round(2.127, 2) - 2.13).abs() < 1e-10);
@@ -1483,21 +1356,20 @@ mod tests {
 
     #[test]
     fn find_local_minima_test() {
-        // Create bars with clear local minima
-        let bars = vec![
-            bar(105.0, 106.0), // 0
-            bar(104.0, 105.0), // 1
-            bar(103.0, 104.0), // 2
-            bar(100.0, 101.0), // 3 - local minimum
-            bar(102.0, 103.0), // 4
-            bar(104.0, 105.0), // 5
-            bar(106.0, 107.0), // 6
-            bar(105.0, 106.0), // 7
-            bar(103.0, 104.0), // 8
-            bar(100.5, 101.5), // 9 - local minimum
-            bar(102.0, 103.0), // 10
-            bar(104.0, 105.0), // 11
-            bar(106.0, 107.0), // 12
+                let bars = vec![
+            bar(105.0, 106.0),
+            bar(104.0, 105.0),
+            bar(103.0, 104.0),
+            bar(100.0, 101.0),
+            bar(102.0, 103.0),
+            bar(104.0, 105.0),
+            bar(106.0, 107.0),
+            bar(105.0, 106.0),
+            bar(103.0, 104.0),
+            bar(100.5, 101.5),
+            bar(102.0, 103.0),
+            bar(104.0, 105.0),
+            bar(106.0, 107.0),
         ];
 
         let minima = find_local_minima(&bars, 2);
@@ -1507,21 +1379,20 @@ mod tests {
 
     #[test]
     fn find_local_maxima_test() {
-        // Create bars with clear local maxima
-        let bars = vec![
-            bar(100.0, 101.0), // 0
-            bar(102.0, 103.0), // 1
-            bar(104.0, 105.0), // 2
-            bar(106.0, 110.0), // 3 - local maximum
-            bar(104.0, 105.0), // 4
-            bar(102.0, 103.0), // 5
-            bar(100.0, 101.0), // 6
-            bar(102.0, 103.0), // 7
-            bar(104.0, 105.0), // 8
-            bar(106.0, 109.0), // 9 - local maximum
-            bar(104.0, 105.0), // 10
-            bar(102.0, 103.0), // 11
-            bar(100.0, 101.0), // 12
+                let bars = vec![
+            bar(100.0, 101.0),
+            bar(102.0, 103.0),
+            bar(104.0, 105.0),
+            bar(106.0, 110.0),
+            bar(104.0, 105.0),
+            bar(102.0, 103.0),
+            bar(100.0, 101.0),
+            bar(102.0, 103.0),
+            bar(104.0, 105.0),
+            bar(106.0, 109.0),
+            bar(104.0, 105.0),
+            bar(102.0, 103.0),
+            bar(100.0, 101.0),
         ];
 
         let maxima = find_local_maxima(&bars, 2);
@@ -1531,38 +1402,30 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_tolerance_check() {
-        // Create two bottoms that are too far apart in price
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // First bottom at 100
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64 * 2.0, 112.0 - i as f64 * 2.0, i as i64));
         }
         bars.push(bar_with_ts(100.0, 101.0, 5));
 
-        // Peak
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(105.0 + i as f64 * 2.0, 107.0 + i as f64 * 2.0, 6 + i as i64));
         }
         bars.push(bar_with_ts(114.0, 120.0, 11));
 
-        // Second bottom at 95 (5% difference, should fail with 0.3% tolerance)
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64 * 3.0, 112.0 - i as f64 * 3.0, 12 + i as i64));
         }
         bars.push(bar_with_ts(95.0, 96.0, 17));
 
-        // Trailing bars
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64, 102.0 + i as f64, 18 + i as i64));
         }
 
-        // With very tight tolerance, should not find pattern
-        let result = detect_double_bottoms(&bars, 3, 0.3, 5).unwrap();
+                let result = detect_double_bottoms(&bars, 3, 0.3, 5).unwrap();
         
-        // The 5% difference should exceed 0.3% tolerance
-        // Check that no pattern with these specific bottoms exists
-        let has_pattern_with_large_diff = result.patterns.iter().any(|p| {
+                        let has_pattern_with_large_diff = result.patterns.iter().any(|p| {
             let diff = (p.low1 - p.low2).abs() / p.low1.min(p.low2) * 100.0;
             diff > 0.3
         });
@@ -1574,28 +1437,22 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_width_check() {
-        // Create two bottoms that are too close together
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
         for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64, 112.0 - i as f64, i as i64));
         }
-        // First bottom
-        bars.push(bar_with_ts(100.0, 101.0, 5));
-        // Small peak
-        bars.push(bar_with_ts(102.0, 108.0, 6));
-        // Second bottom (only 2 bars apart)
-        bars.push(bar_with_ts(100.1, 101.1, 7));
+                bars.push(bar_with_ts(100.0, 101.0, 5));
+                bars.push(bar_with_ts(102.0, 108.0, 6));
+                bars.push(bar_with_ts(100.1, 101.1, 7));
 
         for i in 0..10 {
             bars.push(bar_with_ts(105.0 + i as f64, 107.0 + i as f64, 8 + i as i64));
         }
 
-        // With min_width=5, should not find pattern with width=2
-        let result = detect_double_bottoms(&bars, 2, 1.0, 5).unwrap();
+                let result = detect_double_bottoms(&bars, 2, 1.0, 5).unwrap();
         
-        // All patterns should have width >= 5
-        for pattern in &result.patterns {
+                for pattern in &result.patterns {
             assert!(
                 pattern.width_bars >= 5,
                 "Pattern width {} should be >= 5",
@@ -1606,34 +1463,30 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_confirmation() {
-        // Create a pattern and verify confirmation logic
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Build pattern
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64 * 2.0, 112.0 - i as f64 * 2.0, i as i64));
         }
-        bars.push(bar_with_ts(100.0, 101.0, 5)); // First bottom
+        bars.push(bar_with_ts(100.0, 101.0, 5));
 
         for i in 0..5 {
             bars.push(bar_with_ts(105.0 + i as f64 * 2.0, 107.0 + i as f64 * 2.0, 6 + i as i64));
         }
-        bars.push(bar_with_ts(114.0, 120.0, 11)); // Neckline at 120
+        bars.push(bar_with_ts(114.0, 120.0, 11));
 
         for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64 * 2.0, 112.0 - i as f64 * 2.0, 12 + i as i64));
         }
-        bars.push(bar_with_ts(100.05, 101.05, 17)); // Second bottom
+        bars.push(bar_with_ts(100.05, 101.05, 17));
 
-        // Add bars that close above neckline (120)
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_close(118.0 + i as f64, 125.0 + i as f64, 122.0, 18 + i as i64));
         }
 
         let result = detect_double_bottoms(&bars, 3, 0.5, 5).unwrap();
 
-        // Should have confirmed patterns (close > neckline)
-        let confirmed_count = result.patterns.iter().filter(|p| p.confirmed).count();
+                let confirmed_count = result.patterns.iter().filter(|p| p.confirmed).count();
         assert!(
             confirmed_count > 0 || result.patterns.is_empty(),
             "Expected confirmed patterns when close > neckline"
@@ -1642,26 +1495,23 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_latest_extrema() {
-        // Verify latest_min and latest_max are populated
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Create bars with clear extrema
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
-        bars.push(bar_with_ts(108.0, 115.0, 5)); // Local max
+        bars.push(bar_with_ts(108.0, 115.0, 5));
         for i in 0..5 {
             bars.push(bar_with_ts(106.0 - i as f64 * 2.0, 108.0 - i as f64 * 2.0, 6 + i as i64));
         }
-        bars.push(bar_with_ts(95.0, 96.0, 11)); // Local min
+        bars.push(bar_with_ts(95.0, 96.0, 11));
         for i in 0..5 {
             bars.push(bar_with_ts(98.0 + i as f64, 100.0 + i as f64, 12 + i as i64));
         }
 
         let result = detect_double_bottoms(&bars, 2, 1.0, 3).unwrap();
 
-        // Should have latest extrema
-        assert!(
+                assert!(
             result.latest_min.is_some() || result.latest_max.is_some(),
             "Should have at least one latest extremum"
         );
@@ -1669,24 +1519,19 @@ mod tests {
 
     #[test]
     fn detect_double_bottoms_default_uses_correct_params() {
-        // Test that detect_double_bottoms_default delegates with correct parameters
-        // (window=5, tolerance_pct=0.3, min_width=5)
-        use super::detect_double_bottoms_default;
+                        use super::detect_double_bottoms_default;
 
-        // Empty bars should return empty result (same as calling with explicit params)
-        let empty_bars: Vec<Bar> = vec![];
+                let empty_bars: Vec<Bar> = vec![];
         let result = detect_double_bottoms_default(&empty_bars).unwrap();
         assert!(result.patterns.is_empty());
         assert!(result.latest_min.is_none());
         assert!(result.latest_max.is_none());
 
-        // Insufficient bars (less than 2*5+1 = 11) should return empty result
-        let short_bars = vec![bar(100.0, 101.0); 10];
+                let short_bars = vec![bar(100.0, 101.0); 10];
         let result = detect_double_bottoms_default(&short_bars).unwrap();
         assert!(result.patterns.is_empty());
 
-        // Verify it produces same result as explicit call
-        let bars = vec![bar(100.0, 101.0); 30];
+                let bars = vec![bar(100.0, 101.0); 30];
         let default_result = detect_double_bottoms_default(&bars).unwrap();
         let explicit_result = detect_double_bottoms(&bars, 5, 0.3, 5).unwrap();
         assert_eq!(default_result.patterns.len(), explicit_result.patterns.len());
@@ -1694,8 +1539,7 @@ mod tests {
         assert_eq!(default_result.latest_max, explicit_result.latest_max);
     }
 
-    // ==================== detect_double_tops tests ====================
-
+    
     #[test]
     fn detect_double_tops_invalid_window() {
         let bars = vec![bar(100.0, 101.0); 20];
@@ -1748,7 +1592,7 @@ mod tests {
 
     #[test]
     fn detect_double_tops_insufficient_bars() {
-        let bars = vec![bar(100.0, 101.0); 10]; // Less than 2*5+1 = 11
+        let bars = vec![bar(100.0, 101.0); 10];
         let result = detect_double_tops(&bars, 5, 0.3, 5).unwrap();
         assert!(result.patterns.is_empty());
         assert!(result.latest_min.is_none());
@@ -1771,62 +1615,45 @@ mod tests {
 
     #[test]
     fn detect_double_tops_finds_valid_pattern() {
-        // Create a clear double-top pattern:
-        // - First top at index ~5
-        // - Trough (neckline) at index ~10
-        // - Second top at index ~15
-        // - Confirmation close below neckline at index ~20
-        let mut bars = Vec::new();
+                                                let mut bars = Vec::new();
 
-        // Ascending to first top (indices 0-4)
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
 
-        // First top at index 5
-        bars.push(bar_with_ts(109.0, 115.0, 5));
+                bars.push(bar_with_ts(109.0, 115.0, 5));
 
-        // Descending to neckline (indices 6-9)
-        for i in 0..4 {
+                for i in 0..4 {
             bars.push(bar_with_ts(108.0 - i as f64 * 2.0, 110.0 - i as f64 * 2.0, 6 + i as i64));
         }
 
-        // Neckline trough at index 10
-        bars.push(bar_with_ts(100.0, 101.0, 10));
+                bars.push(bar_with_ts(100.0, 101.0, 10));
 
-        // Ascending to second top (indices 11-14)
-        for i in 0..4 {
+                for i in 0..4 {
             bars.push(bar_with_ts(102.0 + i as f64 * 2.0, 104.0 + i as f64 * 2.0, 11 + i as i64));
         }
 
-        // Second top at index 15
-        bars.push(bar_with_ts(109.0, 114.9, 15));
+                bars.push(bar_with_ts(109.0, 114.9, 15));
 
-        // Descending after second top (indices 16-19)
-        for i in 0..4 {
+                for i in 0..4 {
             bars.push(bar_with_ts(108.0 - i as f64 * 2.0, 110.0 - i as f64 * 2.0, 16 + i as i64));
         }
 
-        // Confirmation: close below neckline at index 20
-        bars.push(bar_with_close(98.0, 102.0, 99.0, 20));
+                bars.push(bar_with_close(98.0, 102.0, 99.0, 20));
 
-        // Add more bars for extrema detection
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(95.0 - i as f64, 97.0 - i as f64, 21 + i as i64));
         }
 
         let result = detect_double_tops(&bars, 3, 0.5, 5).unwrap();
 
-        // Should find at least one pattern
-        assert!(
+                assert!(
             !result.patterns.is_empty(),
             "Expected to find double-top patterns, found none"
         );
 
-        // Check pattern invariants
-        for pattern in &result.patterns {
-            // idx1 < neckline_idx < idx2
-            assert!(
+                for pattern in &result.patterns {
+                        assert!(
                 pattern.idx1 < pattern.neckline_idx,
                 "idx1 ({}) should be < neckline_idx ({})",
                 pattern.idx1,
@@ -1839,15 +1666,13 @@ mod tests {
                 pattern.idx2
             );
 
-            // width_bars == idx2 - idx1
-            assert_eq!(
+                        assert_eq!(
                 pattern.width_bars,
                 pattern.idx2 - pattern.idx1,
                 "width_bars should equal idx2 - idx1"
             );
 
-            // depth_pct >= 0.1
-            assert!(
+                        assert!(
                 pattern.depth_pct >= 0.1,
                 "depth_pct ({}) should be >= 0.1",
                 pattern.depth_pct
@@ -1857,44 +1682,35 @@ mod tests {
 
     #[test]
     fn detect_double_tops_pattern_invariants() {
-        // Test that all detected patterns satisfy the invariants
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Create multiple potential double-top patterns
-        for cycle in 0..3 {
+                for cycle in 0..3 {
             let base = cycle * 20;
-            // Ascending
-            for i in 0..5 {
+                        for i in 0..5 {
                 bars.push(bar_with_ts(
                     100.0 + i as f64 * 2.0,
                     102.0 + i as f64 * 2.0,
                     (base + i) as i64,
                 ));
             }
-            // Top
-            bars.push(bar_with_ts(109.0, 115.0, (base + 5) as i64));
-            // Descending
-            for i in 0..4 {
+                        bars.push(bar_with_ts(109.0, 115.0, (base + 5) as i64));
+                        for i in 0..4 {
                 bars.push(bar_with_ts(
                     108.0 - i as f64 * 3.0,
                     110.0 - i as f64 * 3.0,
                     (base + 6 + i) as i64,
                 ));
             }
-            // Trough
-            bars.push(bar_with_ts(95.0, 96.0, (base + 10) as i64));
-            // Ascending
-            for i in 0..4 {
+                        bars.push(bar_with_ts(95.0, 96.0, (base + 10) as i64));
+                        for i in 0..4 {
                 bars.push(bar_with_ts(
                     97.0 + i as f64 * 3.0,
                     99.0 + i as f64 * 3.0,
                     (base + 11 + i) as i64,
                 ));
             }
-            // Second top
-            bars.push(bar_with_ts(109.0, 114.95, (base + 15) as i64));
-            // Descending with confirmation
-            for i in 0..4 {
+                        bars.push(bar_with_ts(109.0, 114.95, (base + 15) as i64));
+                        for i in 0..4 {
                 bars.push(bar_with_close(
                     92.0 - i as f64,
                     94.0 - i as f64,
@@ -1907,8 +1723,7 @@ mod tests {
         let result = detect_double_tops(&bars, 3, 0.5, 5).unwrap();
 
         for pattern in &result.patterns {
-            // Invariant 1: idx1 < neckline_idx < idx2
-            assert!(
+                        assert!(
                 pattern.idx1 < pattern.neckline_idx && pattern.neckline_idx < pattern.idx2,
                 "Pattern invariant violated: idx1={}, neckline_idx={}, idx2={}",
                 pattern.idx1,
@@ -1916,60 +1731,48 @@ mod tests {
                 pattern.idx2
             );
 
-            // Invariant 2: width_bars == idx2 - idx1
-            assert_eq!(
+                        assert_eq!(
                 pattern.width_bars,
                 pattern.idx2 - pattern.idx1,
                 "width_bars mismatch"
             );
 
-            // Invariant 3: depth_pct >= 0.1
-            assert!(pattern.depth_pct >= 0.1, "depth_pct too small");
+                        assert!(pattern.depth_pct >= 0.1, "depth_pct too small");
 
-            // Verify timestamps match indices
-            assert_eq!(pattern.ts1, bars[pattern.idx1].timestamp_ns);
+                        assert_eq!(pattern.ts1, bars[pattern.idx1].timestamp_ns);
             assert_eq!(pattern.ts2, bars[pattern.idx2].timestamp_ns);
 
-            // Verify high values match indices
-            assert!((pattern.high1 - bars[pattern.idx1].high).abs() < 1e-10);
+                        assert!((pattern.high1 - bars[pattern.idx1].high).abs() < 1e-10);
             assert!((pattern.high2 - bars[pattern.idx2].high).abs() < 1e-10);
         }
     }
 
     #[test]
     fn detect_double_tops_tolerance_check() {
-        // Create two tops that are too far apart in price
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // First top at 115
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
         bars.push(bar_with_ts(113.0, 115.0, 5));
 
-        // Trough
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(108.0 - i as f64 * 2.0, 110.0 - i as f64 * 2.0, 6 + i as i64));
         }
         bars.push(bar_with_ts(95.0, 96.0, 11));
 
-        // Second top at 108 (6% difference from 115, should fail with 0.3% tolerance)
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(98.0 + i as f64 * 2.0, 100.0 + i as f64 * 2.0, 12 + i as i64));
         }
         bars.push(bar_with_ts(106.0, 108.0, 17));
 
-        // Trailing bars
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 - i as f64, 102.0 - i as f64, 18 + i as i64));
         }
 
-        // With very tight tolerance, should not find pattern
-        let result = detect_double_tops(&bars, 3, 0.3, 5).unwrap();
+                let result = detect_double_tops(&bars, 3, 0.3, 5).unwrap();
         
-        // The 6% difference should exceed 0.3% tolerance
-        // Check that no pattern with these specific tops exists
-        let has_pattern_with_large_diff = result.patterns.iter().any(|p| {
+                        let has_pattern_with_large_diff = result.patterns.iter().any(|p| {
             let diff = (p.high1 - p.high2).abs() / p.high1.max(p.high2) * 100.0;
             diff > 0.3
         });
@@ -1981,28 +1784,22 @@ mod tests {
 
     #[test]
     fn detect_double_tops_width_check() {
-        // Create two tops that are too close together
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
         for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64, 102.0 + i as f64, i as i64));
         }
-        // First top
-        bars.push(bar_with_ts(109.0, 115.0, 5));
-        // Small trough
-        bars.push(bar_with_ts(100.0, 101.0, 6));
-        // Second top (only 2 bars apart)
-        bars.push(bar_with_ts(109.0, 114.9, 7));
+                bars.push(bar_with_ts(109.0, 115.0, 5));
+                bars.push(bar_with_ts(100.0, 101.0, 6));
+                bars.push(bar_with_ts(109.0, 114.9, 7));
 
         for i in 0..10 {
             bars.push(bar_with_ts(105.0 - i as f64, 107.0 - i as f64, 8 + i as i64));
         }
 
-        // With min_width=5, should not find pattern with width=2
-        let result = detect_double_tops(&bars, 2, 1.0, 5).unwrap();
+                let result = detect_double_tops(&bars, 2, 1.0, 5).unwrap();
         
-        // All patterns should have width >= 5
-        for pattern in &result.patterns {
+                for pattern in &result.patterns {
             assert!(
                 pattern.width_bars >= 5,
                 "Pattern width {} should be >= 5",
@@ -2013,34 +1810,30 @@ mod tests {
 
     #[test]
     fn detect_double_tops_confirmation() {
-        // Create a pattern and verify confirmation logic
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Build pattern
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
-        bars.push(bar_with_ts(109.0, 115.0, 5)); // First top
+        bars.push(bar_with_ts(109.0, 115.0, 5));
 
         for i in 0..5 {
             bars.push(bar_with_ts(108.0 - i as f64 * 2.0, 110.0 - i as f64 * 2.0, 6 + i as i64));
         }
-        bars.push(bar_with_ts(95.0, 96.0, 11)); // Neckline at 95
+        bars.push(bar_with_ts(95.0, 96.0, 11));
 
         for i in 0..5 {
             bars.push(bar_with_ts(97.0 + i as f64 * 2.0, 99.0 + i as f64 * 2.0, 12 + i as i64));
         }
-        bars.push(bar_with_ts(109.0, 114.95, 17)); // Second top
+        bars.push(bar_with_ts(109.0, 114.95, 17));
 
-        // Add bars that close below neckline (95)
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_close(90.0 - i as f64, 94.0 - i as f64, 92.0, 18 + i as i64));
         }
 
         let result = detect_double_tops(&bars, 3, 0.5, 5).unwrap();
 
-        // Should have confirmed patterns (close < neckline)
-        let confirmed_count = result.patterns.iter().filter(|p| p.confirmed).count();
+                let confirmed_count = result.patterns.iter().filter(|p| p.confirmed).count();
         assert!(
             confirmed_count > 0 || result.patterns.is_empty(),
             "Expected confirmed patterns when close < neckline"
@@ -2049,26 +1842,23 @@ mod tests {
 
     #[test]
     fn detect_double_tops_latest_extrema() {
-        // Verify latest_min and latest_max are populated
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Create bars with clear extrema
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
-        bars.push(bar_with_ts(108.0, 115.0, 5)); // Local max
+        bars.push(bar_with_ts(108.0, 115.0, 5));
         for i in 0..5 {
             bars.push(bar_with_ts(106.0 - i as f64 * 2.0, 108.0 - i as f64 * 2.0, 6 + i as i64));
         }
-        bars.push(bar_with_ts(95.0, 96.0, 11)); // Local min
+        bars.push(bar_with_ts(95.0, 96.0, 11));
         for i in 0..5 {
             bars.push(bar_with_ts(98.0 + i as f64, 100.0 + i as f64, 12 + i as i64));
         }
 
         let result = detect_double_tops(&bars, 2, 1.0, 3).unwrap();
 
-        // Should have latest extrema
-        assert!(
+                assert!(
             result.latest_min.is_some() || result.latest_max.is_some(),
             "Should have at least one latest extremum"
         );
@@ -2076,41 +1866,31 @@ mod tests {
 
     #[test]
     fn detect_double_tops_depth_calculation() {
-        // Test that depth_pct is calculated correctly:
-        // depth_pct = (avg_high - neckline) / avg_high * 100
-        let mut bars = Vec::new();
+                        let mut bars = Vec::new();
 
-        // Build a pattern with known values
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
-        // First top: high = 120
-        bars.push(bar_with_ts(118.0, 120.0, 5));
+                bars.push(bar_with_ts(118.0, 120.0, 5));
 
         for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64 * 2.0, 112.0 - i as f64 * 2.0, 6 + i as i64));
         }
-        // Neckline: low = 100
-        bars.push(bar_with_ts(100.0, 101.0, 11));
+                bars.push(bar_with_ts(100.0, 101.0, 11));
 
         for i in 0..5 {
             bars.push(bar_with_ts(102.0 + i as f64 * 2.0, 104.0 + i as f64 * 2.0, 12 + i as i64));
         }
-        // Second top: high = 120
-        bars.push(bar_with_ts(118.0, 120.0, 17));
+                bars.push(bar_with_ts(118.0, 120.0, 17));
 
-        // Trailing bars
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64, 112.0 - i as f64, 18 + i as i64));
         }
 
         let result = detect_double_tops(&bars, 3, 1.0, 5).unwrap();
 
-        // Expected: avg_high = 120, neckline = 100
-        // depth_pct = (120 - 100) / 120 * 100 = 16.667%
-        for pattern in &result.patterns {
-            // Verify depth_pct is reasonable (should be around 16.667% for this setup)
-            assert!(
+                        for pattern in &result.patterns {
+                        assert!(
                 pattern.depth_pct >= 0.1,
                 "depth_pct ({}) should be >= 0.1",
                 pattern.depth_pct
@@ -2120,34 +1900,29 @@ mod tests {
 
     #[test]
     fn detect_double_tops_neckline_is_min_low() {
-        // Verify that neckline is the minimum low between the two tops
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
 
-        // Build pattern
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(100.0 + i as f64 * 2.0, 102.0 + i as f64 * 2.0, i as i64));
         }
-        bars.push(bar_with_ts(118.0, 120.0, 5)); // First top
+        bars.push(bar_with_ts(118.0, 120.0, 5));
 
-        // Descending with varying lows
-        bars.push(bar_with_ts(110.0, 112.0, 6));
+                bars.push(bar_with_ts(110.0, 112.0, 6));
         bars.push(bar_with_ts(105.0, 107.0, 7));
-        bars.push(bar_with_ts(95.0, 97.0, 8)); // This should be the neckline (min low)
+        bars.push(bar_with_ts(95.0, 97.0, 8));
         bars.push(bar_with_ts(100.0, 102.0, 9));
         bars.push(bar_with_ts(105.0, 107.0, 10));
 
-        bars.push(bar_with_ts(118.0, 120.0, 11)); // Second top
+        bars.push(bar_with_ts(118.0, 120.0, 11));
 
-        // Trailing bars
-        for i in 0..5 {
+                for i in 0..5 {
             bars.push(bar_with_ts(110.0 - i as f64, 112.0 - i as f64, 12 + i as i64));
         }
 
         let result = detect_double_tops(&bars, 2, 1.0, 5).unwrap();
 
         for pattern in &result.patterns {
-            // Verify neckline is the minimum low between idx1 and idx2
-            let min_low_between = bars[(pattern.idx1 + 1)..pattern.idx2]
+                        let min_low_between = bars[(pattern.idx1 + 1)..pattern.idx2]
                 .iter()
                 .map(|b| b.low)
                 .fold(f64::INFINITY, f64::min);
@@ -2163,24 +1938,19 @@ mod tests {
 
     #[test]
     fn detect_double_tops_default_uses_correct_params() {
-        // Test that detect_double_tops_default delegates with correct parameters
-        // (window=5, tolerance_pct=0.3, min_width=5)
-        use super::detect_double_tops_default;
+                        use super::detect_double_tops_default;
 
-        // Empty bars should return empty result (same as calling with explicit params)
-        let empty_bars: Vec<Bar> = vec![];
+                let empty_bars: Vec<Bar> = vec![];
         let result = detect_double_tops_default(&empty_bars).unwrap();
         assert!(result.patterns.is_empty());
         assert!(result.latest_min.is_none());
         assert!(result.latest_max.is_none());
 
-        // Insufficient bars (less than 2*5+1 = 11) should return empty result
-        let short_bars = vec![bar(100.0, 101.0); 10];
+                let short_bars = vec![bar(100.0, 101.0); 10];
         let result = detect_double_tops_default(&short_bars).unwrap();
         assert!(result.patterns.is_empty());
 
-        // Verify it produces same result as explicit call
-        let bars = vec![bar(100.0, 101.0); 30];
+                let bars = vec![bar(100.0, 101.0); 30];
         let default_result = detect_double_tops_default(&bars).unwrap();
         let explicit_result = detect_double_tops(&bars, 5, 0.3, 5).unwrap();
         assert_eq!(default_result.patterns.len(), explicit_result.patterns.len());
@@ -2196,8 +1966,7 @@ mod property_tests {
 
     /// Strategy to generate a valid Bar with realistic OHLC values
     fn bar_strategy() -> impl Strategy<Value = Bar> {
-        // Generate base price and variations
-        (1.0f64..10000.0f64, 0.001f64..0.05f64, 0.001f64..0.05f64).prop_map(
+                (1.0f64..10000.0f64, 0.001f64..0.05f64, 0.001f64..0.05f64).prop_map(
             |(base, high_pct, low_pct)| {
                 let high = base * (1.0 + high_pct);
                 let low = base * (1.0 - low_pct);
@@ -2219,58 +1988,50 @@ mod property_tests {
     /// This creates bars with two distinct lows separated by a peak
     fn double_bottom_bars_strategy() -> impl Strategy<Value = Vec<Bar>> {
         (
-            50usize..200,           // total bars
-            5usize..20,             // position of first bottom
-            10usize..50,            // width between bottoms
-            100.0f64..1000.0f64,    // base price
-            0.05f64..0.3f64,        // depth factor (how deep the pattern is)
+            50usize..200,
+            5usize..20,
+            10usize..50,
+            100.0f64..1000.0f64,
+            0.05f64..0.3f64,
         )
             .prop_flat_map(|(total, first_pos, width, base_price, depth_factor)| {
                 let second_pos = (first_pos + width).min(total.saturating_sub(10));
                 let neckline_pos = first_pos + width / 2;
 
-                // Generate bars with the pattern structure
-                prop::collection::vec(bar_strategy(), total).prop_map(move |mut bars| {
-                    // Ensure we have enough bars
-                    if bars.len() < second_pos + 5 {
+                                prop::collection::vec(bar_strategy(), total).prop_map(move |mut bars| {
+                                        if bars.len() < second_pos + 5 {
                         return bars;
                     }
 
-                    // Set timestamps
-                    for (i, bar) in bars.iter_mut().enumerate() {
+                                        for (i, bar) in bars.iter_mut().enumerate() {
                         bar.timestamp_ns = i as i64;
                     }
 
-                    // Create the double-bottom pattern structure
-                    let neckline_price = base_price * (1.0 + depth_factor);
+                                        let neckline_price = base_price * (1.0 + depth_factor);
                     let bottom_price = base_price;
 
-                    // First bottom
-                    if first_pos < bars.len() {
+                                        if first_pos < bars.len() {
                         bars[first_pos].low = bottom_price;
                         bars[first_pos].high = bottom_price * 1.01;
                         bars[first_pos].open = bottom_price * 1.005;
                         bars[first_pos].close = bottom_price * 1.005;
                     }
 
-                    // Neckline (peak between bottoms)
-                    if neckline_pos < bars.len() && neckline_pos > first_pos && neckline_pos < second_pos {
+                                        if neckline_pos < bars.len() && neckline_pos > first_pos && neckline_pos < second_pos {
                         bars[neckline_pos].high = neckline_price;
                         bars[neckline_pos].low = neckline_price * 0.99;
                         bars[neckline_pos].open = neckline_price * 0.995;
                         bars[neckline_pos].close = neckline_price * 0.995;
                     }
 
-                    // Second bottom (similar to first)
-                    if second_pos < bars.len() {
-                        bars[second_pos].low = bottom_price * 1.001; // Slightly different
+                                        if second_pos < bars.len() {
+                        bars[second_pos].low = bottom_price * 1.001;
                         bars[second_pos].high = bottom_price * 1.011;
                         bars[second_pos].open = bottom_price * 1.006;
                         bars[second_pos].close = bottom_price * 1.006;
                     }
 
-                    // Ensure surrounding bars don't violate the local minimum property
-                    for i in first_pos.saturating_sub(3)..first_pos {
+                                        for i in first_pos.saturating_sub(3)..first_pos {
                         if i < bars.len() {
                             bars[i].low = bottom_price * 1.02;
                         }
@@ -2300,58 +2061,50 @@ mod property_tests {
     /// This creates bars with two distinct highs separated by a trough
     fn double_top_bars_strategy() -> impl Strategy<Value = Vec<Bar>> {
         (
-            50usize..200,           // total bars
-            5usize..20,             // position of first top
-            10usize..50,            // width between tops
-            100.0f64..1000.0f64,    // base price
-            0.05f64..0.3f64,        // depth factor (how deep the pattern is)
+            50usize..200,
+            5usize..20,
+            10usize..50,
+            100.0f64..1000.0f64,
+            0.05f64..0.3f64,
         )
             .prop_flat_map(|(total, first_pos, width, base_price, depth_factor)| {
                 let second_pos = (first_pos + width).min(total.saturating_sub(10));
                 let neckline_pos = first_pos + width / 2;
 
-                // Generate bars with the pattern structure
-                prop::collection::vec(bar_strategy(), total).prop_map(move |mut bars| {
-                    // Ensure we have enough bars
-                    if bars.len() < second_pos + 5 {
+                                prop::collection::vec(bar_strategy(), total).prop_map(move |mut bars| {
+                                        if bars.len() < second_pos + 5 {
                         return bars;
                     }
 
-                    // Set timestamps
-                    for (i, bar) in bars.iter_mut().enumerate() {
+                                        for (i, bar) in bars.iter_mut().enumerate() {
                         bar.timestamp_ns = i as i64;
                     }
 
-                    // Create the double-top pattern structure
-                    let top_price = base_price * (1.0 + depth_factor);
+                                        let top_price = base_price * (1.0 + depth_factor);
                     let neckline_price = base_price;
 
-                    // First top
-                    if first_pos < bars.len() {
+                                        if first_pos < bars.len() {
                         bars[first_pos].high = top_price;
                         bars[first_pos].low = top_price * 0.99;
                         bars[first_pos].open = top_price * 0.995;
                         bars[first_pos].close = top_price * 0.995;
                     }
 
-                    // Neckline (trough between tops)
-                    if neckline_pos < bars.len() && neckline_pos > first_pos && neckline_pos < second_pos {
+                                        if neckline_pos < bars.len() && neckline_pos > first_pos && neckline_pos < second_pos {
                         bars[neckline_pos].low = neckline_price;
                         bars[neckline_pos].high = neckline_price * 1.01;
                         bars[neckline_pos].open = neckline_price * 1.005;
                         bars[neckline_pos].close = neckline_price * 1.005;
                     }
 
-                    // Second top (similar to first)
-                    if second_pos < bars.len() {
-                        bars[second_pos].high = top_price * 0.999; // Slightly different
+                                        if second_pos < bars.len() {
+                        bars[second_pos].high = top_price * 0.999;
                         bars[second_pos].low = top_price * 0.989;
                         bars[second_pos].open = top_price * 0.994;
                         bars[second_pos].close = top_price * 0.994;
                     }
 
-                    // Ensure surrounding bars don't violate the local maximum property
-                    for i in first_pos.saturating_sub(3)..first_pos {
+                                        for i in first_pos.saturating_sub(3)..first_pos {
                         if i < bars.len() {
                             bars[i].high = top_price * 0.98;
                         }
@@ -2377,12 +2130,7 @@ mod property_tests {
             })
     }
 
-    // **Property 8: Pattern Depth Threshold**
-    //
-    // For any detected `DoubleBottom` or `DoubleTop` pattern, `depth_pct >= 0.1` SHALL hold.
-    //
-    // **Validates: Requirements 10.5, 11.5**
-    proptest! {
+                        proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
         #[test]
@@ -2392,20 +2140,17 @@ mod property_tests {
             tolerance_pct in 0.1f64..5.0f64,
             min_width in 3usize..15
         ) {
-            // Skip if not enough bars for the window
-            if bars.len() < 2 * window + 1 {
+                        if bars.len() < 2 * window + 1 {
                 return Ok(());
             }
 
             let result = detect_double_bottoms(&bars, window, tolerance_pct, min_width);
 
-            // Should return Ok for valid inputs
-            prop_assert!(result.is_ok(), "detect_double_bottoms returned error: {:?}", result);
+                        prop_assert!(result.is_ok(), "detect_double_bottoms returned error: {:?}", result);
 
             let detection = result.unwrap();
 
-            // Verify all detected patterns have depth_pct >= 0.1
-            for (i, pattern) in detection.patterns.iter().enumerate() {
+                        for (i, pattern) in detection.patterns.iter().enumerate() {
                 prop_assert!(
                     pattern.depth_pct >= MIN_DEPTH_PCT,
                     "DoubleBottom pattern {} has depth_pct {} which is < {}. \
@@ -2425,20 +2170,17 @@ mod property_tests {
             tolerance_pct in 0.1f64..5.0f64,
             min_width in 3usize..15
         ) {
-            // Skip if not enough bars for the window
-            if bars.len() < 2 * window + 1 {
+                        if bars.len() < 2 * window + 1 {
                 return Ok(());
             }
 
             let result = detect_double_tops(&bars, window, tolerance_pct, min_width);
 
-            // Should return Ok for valid inputs
-            prop_assert!(result.is_ok(), "detect_double_tops returned error: {:?}", result);
+                        prop_assert!(result.is_ok(), "detect_double_tops returned error: {:?}", result);
 
             let detection = result.unwrap();
 
-            // Verify all detected patterns have depth_pct >= 0.1
-            for (i, pattern) in detection.patterns.iter().enumerate() {
+                        for (i, pattern) in detection.patterns.iter().enumerate() {
                 prop_assert!(
                     pattern.depth_pct >= MIN_DEPTH_PCT,
                     "DoubleTop pattern {} has depth_pct {} which is < {}. \
@@ -2459,19 +2201,16 @@ mod property_tests {
             tolerance_pct in 0.1f64..10.0f64,
             min_width in 3usize..20
         ) {
-            // Set timestamps for the bars
-            let bars: Vec<Bar> = bars.into_iter().enumerate().map(|(i, mut bar)| {
+                        let bars: Vec<Bar> = bars.into_iter().enumerate().map(|(i, mut bar)| {
                 bar.timestamp_ns = i as i64;
                 bar
             }).collect();
 
-            // Skip if not enough bars for the window
-            if bars.len() < 2 * window + 1 {
+                        if bars.len() < 2 * window + 1 {
                 return Ok(());
             }
 
-            // Test double bottoms
-            let bottom_result = detect_double_bottoms(&bars, window, tolerance_pct, min_width);
+                        let bottom_result = detect_double_bottoms(&bars, window, tolerance_pct, min_width);
             prop_assert!(bottom_result.is_ok(), "detect_double_bottoms returned error: {:?}", bottom_result);
 
             for pattern in bottom_result.unwrap().patterns {
@@ -2482,8 +2221,7 @@ mod property_tests {
                 );
             }
 
-            // Test double tops
-            let top_result = detect_double_tops(&bars, window, tolerance_pct, min_width);
+                        let top_result = detect_double_tops(&bars, window, tolerance_pct, min_width);
             prop_assert!(top_result.is_ok(), "detect_double_tops returned error: {:?}", top_result);
 
             for pattern in top_result.unwrap().patterns {

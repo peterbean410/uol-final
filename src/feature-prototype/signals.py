@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-BPS = 10_000.0  # fractional return -> basis points (matches ForecasterBridge)
+BPS = 10_000.0
 
 
 @dataclass
@@ -61,7 +61,6 @@ def informative_signals(
     r = one_bar_returns(close)
     sigma = _ewma_vol(r, sigma_halflife) * BPS
     mu = _ewma(r, mu_halflife) * BPS
-    # A small floor avoids a degenerate sigma=0 at the very first bars.
     sigma = np.maximum(sigma, 1e-3)
     return Signals(mu_bps=mu, sigma_bps=sigma, regime="informative")
 

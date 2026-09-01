@@ -35,7 +35,7 @@ _ECR_IMAGE = (
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="create_eow_snapshot_2012",
     default_args=default_args,
     description=(

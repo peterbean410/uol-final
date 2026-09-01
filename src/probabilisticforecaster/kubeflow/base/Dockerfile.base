@@ -1,22 +1,14 @@
-# Shared base image for all Kubeflow pipeline components
-# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forecaster/base
-# Requirements: 2.1, 2.2
 
 FROM python:3.11-slim
 
 LABEL maintainer="ml-platform"
 LABEL description="Shared base image for probabilistic forecaster pipeline components"
 
-# Multi-arch: buildx populates TARGETARCH per --platform. The torch CPU wheel
-# spec is arch-specific (same pattern as Dockerfile.dqn-base): the `+cpu`
-# local-version wheels on download.pytorch.org/whl/cpu exist only for x86_64;
-# the aarch64 CPU wheel is the plain `torch==2.3.1`.
 ARG TARGETARCH=amd64
 ARG TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
 ARG TORCH_AMD64_SPEC=torch==2.3.1+cpu
 ARG TORCH_ARM64_SPEC=torch==2.3.1
 
-# Install system dependencies required for PyTorch and data processing
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
@@ -24,8 +16,6 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy and install pinned Python dependencies; torch first from the
-# arch-matching spec, then the remaining pins.
 COPY requirements-base.txt /app/requirements-base.txt
 RUN case "${TARGETARCH}" in \
         amd64) TORCH_SPEC="${TORCH_AMD64_SPEC}" ;; \
@@ -35,5 +25,4 @@ RUN case "${TARGETARCH}" in \
     && pip install --no-cache-dir --extra-index-url "${TORCH_CPU_INDEX}" "${TORCH_SPEC}" \
     && pip install --no-cache-dir -r /app/requirements-base.txt
 
-# Set Python to run unbuffered for proper log streaming
 ENV PYTHONUNBUFFERED=1

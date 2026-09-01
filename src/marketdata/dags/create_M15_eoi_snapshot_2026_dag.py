@@ -32,8 +32,6 @@ _ECR_IMAGE = (
 )
 
 _INTERVALS = ["M1", "M5", "M15"]
-# download_price_bars_hourly_2020 runs Mon–Fri (cron "0 * * * 1-5").
-# Python weekday(): Mon=0…Sun=6. Skip the wait on Sat and Sun.
 _NO_UPSTREAM_WEEKDAYS = {5, 6}
 
 
@@ -47,7 +45,7 @@ def _make_branch(wait_task_id: str, skip_task_id: str):
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="create_eoh_snapshot_2026",
     default_args=default_args,
     description="Create FX end-of-interval price snapshots (M1, M5, M15) for the 2026 backfill",
@@ -100,11 +98,6 @@ with DAG(
                 ),
             ],
             container_resources=k8s.V1ResourceRequirements(
-                # Since the eoh consolidation (T-5.1-06) this lane's previous
-                # snapshot is the full 2012->now history (M1 ~82MB parquet,
-                # ~5.3M rows): loading + concat in pandas needs well over the
-                # old 512Mi limit (create_M1 OOMKilled, exit 137). 2Gi gives
-                # ample head-room as the file keeps growing.
                 requests={"cpu": "100m", "memory": "512Mi"},
                 limits={"cpu": "500m", "memory": "2Gi"},
             ),

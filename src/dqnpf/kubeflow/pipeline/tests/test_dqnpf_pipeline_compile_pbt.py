@@ -26,9 +26,6 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-# Limit example count: each compile invocation involves the KFP Compiler, which
-# is not trivially cheap. 5 repetitions give strong enough evidence for the
-# deterministic-bytes property.
 @settings(max_examples=5, deadline=None)
 @given(suffix=st.integers(min_value=0, max_value=10_000))
 def test_compile_pipeline_is_deterministic(

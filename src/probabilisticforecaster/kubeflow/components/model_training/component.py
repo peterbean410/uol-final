@@ -24,7 +24,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
-# Add parent paths so we can import the probabilisticforecaster package
 sys.path.insert(0, "/app")
 
 from probabilisticforecaster.config import ForecasterConfig, S3_BUCKET
@@ -148,12 +147,10 @@ def train_model(
     if len(train_dataset) == 0:
         raise ValueError("Training dataset is empty")
 
-    # Set fixed random seed for reproducibility
     torch.manual_seed(config.random_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config.random_seed)
 
-    # Split off 10% for validation
     val_size = max(1, int(len(train_dataset) * 0.1))
     train_size = len(train_dataset) - val_size
     train_subset, val_subset = random_split(
@@ -162,7 +159,6 @@ def train_model(
         generator=torch.Generator().manual_seed(config.random_seed),
     )
 
-    # Create data loaders
     train_loader = DataLoader(
         train_subset,
         batch_size=config.batch_size,
@@ -176,10 +172,8 @@ def train_model(
         drop_last=False,
     )
 
-    # Set up optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
-    # Training state
     best_val_nll = float("inf")
     best_state_dict = None
     training_history: dict = {
@@ -200,45 +194,37 @@ def train_model(
         },
     )
 
-    # Training loop
     model.train()
     for epoch in range(config.epochs):
         epoch_losses: list[float] = []
 
         for batch_idx, (features, labels) in enumerate(train_loader):
-            features = features.to(device)  # (batch, lookback, 16)
-            labels = labels.to(device)  # (batch, 1)
+            features = features.to(device)
+            labels = labels.to(device)
 
             optimizer.zero_grad()
 
-            # Forward pass, model outputs (batch, seq_len, 1) for mu and sigma
             mu, sigma = model(features)
 
-            # Use only the last position prediction
-            mu_last = mu[:, -1, :]  # (batch, 1)
-            sigma_last = sigma[:, -1, :]  # (batch, 1)
+            mu_last = mu[:, -1, :]
+            sigma_last = sigma[:, -1, :]
 
-            # Compute Gaussian NLL loss
             loss = gaussian_nll_loss(mu_last, sigma_last, labels)
 
-            # Check for NaN loss
             if torch.isnan(loss):
                 raise RuntimeError(
                     f"NaN loss at epoch {epoch + 1}, batch {batch_idx + 1}. "
                     "Check learning rate or input data."
                 )
 
-            # Backward pass and optimize
             loss.backward()
             optimizer.step()
 
             epoch_losses.append(loss.item())
 
-        # Compute mean epoch loss
         mean_epoch_loss = sum(epoch_losses) / len(epoch_losses)
         training_history["epoch_loss"].append(mean_epoch_loss)
 
-        # Validation pass
         val_nll = _compute_validation_nll(model, val_loader, device)
         training_history["val_nll"].append(val_nll)
 
@@ -252,7 +238,6 @@ def train_model(
             },
         )
 
-        # Checkpoint best model by validation NLL
         if val_nll < best_val_nll:
             best_val_nll = val_nll
             best_state_dict = {k: v.clone() for k, v in model.state_dict().items()}
@@ -261,7 +246,6 @@ def train_model(
                 extra={"best_val_nll": round(best_val_nll, 6), "epoch": epoch + 1},
             )
 
-    # Restore best model weights
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
 
@@ -390,7 +374,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Main entry point for the model training component."""
     args = parse_args()
-    # Merge --config-json overrides into default argparse values
     import json as _json
     _cfg = _json.loads(args.config_json)
     for _key, _val in _cfg.items():
@@ -410,14 +393,11 @@ def main() -> None:
         },
     )
 
-    # Determine device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device selected", extra={"device": str(device)})
 
-    # Step 1: Load train dataset from S3
     train_dataset = load_dataset_from_s3(args.train_dataset_path, bucket=args.bucket)
 
-    # Step 2: Build ForecasterConfig from args
     config = ForecasterConfig(
         symbol=args.symbol,
         lookback_window=args.lookback_window,
@@ -432,9 +412,7 @@ def main() -> None:
         random_seed=args.random_seed,
     )
 
-    # Step 3: Apply training mode settings
     if args.training_mode == "finetune":
-        # Finetune mode: reduced LR (0.0001) and fewer epochs (2)
         config = ForecasterConfig(
             symbol=config.symbol,
             lookback_window=config.lookback_window,
@@ -453,17 +431,14 @@ def main() -> None:
             extra={"learning_rate": 0.0001, "epochs": 2},
         )
     else:
-        # Scratch mode: standard LR (0.001) and full epochs (5)
         logger.info(
             "Scratch mode: random initialisation with full training",
             extra={"learning_rate": config.learning_rate, "epochs": config.epochs},
         )
 
-    # Step 4: Instantiate model
     model = ProbabilisticTransformer(config)
     model = model.to(device)
 
-    # Step 5: For finetune mode, load production model weights
     if args.training_mode == "finetune":
         if not args.production_model_path:
             raise ValueError(
@@ -478,10 +453,8 @@ def main() -> None:
             extra={"production_model_path": args.production_model_path},
         )
 
-    # Step 6: Train the model
     training_history = train_model(model, train_dataset, config, device)
 
-    # Step 7: Build checkpoint artifact
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     checkpoint = {
         "model_state_dict": model.state_dict(),
@@ -499,7 +472,6 @@ def main() -> None:
         },
     }
 
-    # Step 8: Upload checkpoint to S3
     upload_checkpoint_to_s3(checkpoint, args.checkpoint_path, bucket=args.bucket)
 
     logger.info(

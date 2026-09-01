@@ -17,32 +17,27 @@ import yaml
 class DQNConfig:
     """Unified configuration for the DQN trading agent."""
 
-    # Environment
     grpc_address: str = "localhost:50051"
     symbol: str = "USDJPY"
     episode_start_ts: int = 0
     episode_end_ts: int = 0
     step_size_seconds: int = 5
 
-    # Date-range episode scheduling (replaces raw episode_start_ts/end_ts)
     date_start: str = ""
     date_end: str = ""
     hour_of_day_start: int = 0
     hour_of_day_end: int = 23
 
-    # Agent
-    # Horizon ~1000 steps to span the full 1440-step session (see config.yaml).
     gamma: float = 0.999
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 0  # 0 = auto: train() derives the horizon from the total step budget
+    epsilon_decay_steps: int = 0
     batch_size: int = 64
     replay_buffer_size: int = 300_000
     target_update_freq: int = 1000
     train_freq: int = 4
     tau: float = 1.0
 
-    # Network
     hidden_dims: list[int] = field(default_factory=lambda: [256, 256, 128])
     activation: str = "relu"
     dropout: float = 0.0
@@ -53,24 +48,18 @@ class DQNConfig:
     grad_clip_norm: float = 10.0
     loss_function: str = "huber"
 
-    # Training
-    # Episode-count knobs are mode-specific and mutually exclusive; both default
-    # to None so train() can hard-fail if the wrong one is set for the active
-    # mode (and apply the mode's effective default when its knob is unset).
-    num_episodes_per_range: int | None = None  # fixed-window mode only (effective default 3000)
-    repeats_per_date: int | None = None        # date-range mode only (effective default 3)
+    num_episodes_per_range: int | None = None
+    repeats_per_date: int | None = None
     max_steps_per_episode: int = 30_000
     checkpoint_interval: int = 50
     checkpoint_dir: str = "deepqnetwork/checkpoints/"
     log_interval: int = 10
-    progress_log_interval: int = 1000  # steps between intra-episode progress logs (0 disables)
+    progress_log_interval: int = 1000
 
-    # Mode
     mode: str = "train"
     checkpoint: str | None = None
     device: str = "auto"
 
-    # S3
     s3_checkpoint_prefix: str | None = None
     model_version: str | None = None
 
@@ -81,7 +70,6 @@ def _build_parser() -> argparse.ArgumentParser:
         description="DQN Trading Agent - Training and Inference"
     )
 
-    # Core CLI arguments
     parser.add_argument(
         "--config",
         type=str,
@@ -120,7 +108,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model version identifier for S3 path",
     )
 
-    # Additional hyperparameter overrides
     parser.add_argument("--grpc-address", type=str, default=None)
     parser.add_argument("--symbol", type=str, default=None)
     parser.add_argument("--episode-start-ts", type=int, default=None)
@@ -155,7 +142,6 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# Mapping from CLI arg names (with hyphens) to DQNConfig field names (with underscores)
 _CLI_TO_CONFIG = {
     "mode": "mode",
     "checkpoint": "checkpoint",
@@ -228,13 +214,10 @@ def load_config(args: list[str] | None = None) -> DQNConfig:
     parser = _build_parser()
     parsed = parser.parse_args(args)
 
-    # Load YAML config
     yaml_data = _load_yaml(parsed.config)
 
-    # Start with YAML values, then override with explicit CLI args
     config_kwargs: dict = {}
 
-    # Apply YAML values first
     for yaml_key, value in yaml_data.items():
         if yaml_key == "betas" and isinstance(value, list):
             config_kwargs["betas"] = tuple(value)
@@ -243,20 +226,16 @@ def load_config(args: list[str] | None = None) -> DQNConfig:
         else:
             config_kwargs[yaml_key] = value
 
-    # Override with CLI args that were explicitly provided (not None)
     parsed_dict = vars(parsed)
     for cli_key, config_key in _CLI_TO_CONFIG.items():
         value = parsed_dict.get(cli_key)
         if value is not None:
             config_kwargs[config_key] = value
 
-    # Remove 'config' key if it leaked in (it's not a DQNConfig field)
     config_kwargs.pop("config", None)
 
-    # Build the config
     config = DQNConfig(**config_kwargs)
 
-    # Validation: live mode requires a checkpoint
     if config.mode == "live" and config.checkpoint is None:
         raise ValueError(
             "Live mode requires a --checkpoint argument. "

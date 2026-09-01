@@ -32,14 +32,11 @@ class ForecasterInference:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model weights not found: {model_path}")
 
-        # Load checkpoint
         checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
 
-        # Validate config compatibility
         saved_config = checkpoint.get("config", {})
         self._validate_config_compatibility(saved_config, config)
 
-        # Build model and load weights
         self._model = ProbabilisticTransformer(config)
         self._model.load_state_dict(checkpoint["model_state_dict"])
         self._model.eval()
@@ -99,13 +96,11 @@ class ForecasterInference:
                 f"Input feature dimension {feature_dim} != expected {self._config.num_features}"
             )
 
-        # Add batch dimension: (36, 16) -> (1, 36, 16)
         x = features.unsqueeze(0)
 
         with torch.no_grad():
             mu, sigma = self._model(x)
 
-        # Extract last position prediction and convert to scalars
         mu_val = mu[0, -1, 0].item()
         sigma_val = sigma[0, -1, 0].item()
 
@@ -142,7 +137,6 @@ class ForecasterInference:
         with torch.no_grad():
             mu, sigma = self._model(features)
 
-        # Extract last position predictions: (batch, seq_len, 1) -> (batch,)
         mu_out = mu[:, -1, 0]
         sigma_out = sigma[:, -1, 0]
 

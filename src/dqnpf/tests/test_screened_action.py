@@ -44,7 +44,6 @@ def test_screened_true_when_reason_is_budget_exhausted() -> None:
     assert result.action_name == "HOLD"
 
 
-
 @pytest.mark.parametrize(
     "reason,expected_screened",
     [
@@ -54,8 +53,6 @@ def test_screened_true_when_reason_is_budget_exhausted() -> None:
     ],
 )
 def test_screened_flag_semantics_by_reason(reason: str, expected_screened: bool) -> None:
-    # Direct dataclass construction, confirms invariant of the field semantics
-    # even outside the live screen() path.
     action = ScreenedAction(
         action=0 if expected_screened else 1,
         action_name="HOLD" if expected_screened else "BUY_1",

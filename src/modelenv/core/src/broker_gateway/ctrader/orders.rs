@@ -33,7 +33,6 @@ use tokio::sync::mpsc;
 use super::connection::Connection;
 use super::wire::payload_type;
 
-// cTrader ProtoOAOrderType / ProtoOATradeSide / ProtoOAExecutionType values.
 const ORDER_TYPE_MARKET: i32 = 1;
 const TRADE_SIDE_BUY: i32 = 1;
 const TRADE_SIDE_SELL: i32 = 2;
@@ -178,8 +177,7 @@ enum Exec {
 
 /// Interpret one inbound frame in the context of an in-flight order.
 fn interpret(frame: &ProtoMessage, ctx: &str) -> Result<Exec> {
-    // A request-level error response is a hard rejection.
-    if frame.payload_type == payload_type::ERROR_RES
+        if frame.payload_type == payload_type::ERROR_RES
         || frame.payload_type == payload_type::OA_ERROR_RES
     {
         if let Ok(err) = ProtoOaErrorRes::decode(frame.payload.as_deref().unwrap_or_default()) {
@@ -192,9 +190,7 @@ fn interpret(frame: &ProtoMessage, ctx: &str) -> Result<Exec> {
         return Ok(Exec::Rejected("unknown broker error".into()));
     }
 
-    // cTrader reports a failed order via ProtoOAOrderErrorEvent (e.g. market
-    // closed, not enough money) rather than an ORDER_REJECTED execution event.
-    if frame.payload_type == payload_type::ORDER_ERROR_EVENT {
+            if frame.payload_type == payload_type::ORDER_ERROR_EVENT {
         if let Ok(err) =
             ProtoOaOrderErrorEvent::decode(frame.payload.as_deref().unwrap_or_default())
         {
@@ -208,7 +204,7 @@ fn interpret(frame: &ProtoMessage, ctx: &str) -> Result<Exec> {
     }
 
     if frame.payload_type != payload_type::EXECUTION_EVENT {
-        return Ok(Exec::Pending); // heartbeat / unrelated
+        return Ok(Exec::Pending);
     }
 
     let evt = ProtoOaExecutionEvent::decode(frame.payload.as_deref().unwrap_or_default())
@@ -223,13 +219,10 @@ fn interpret(frame: &ProtoMessage, ctx: &str) -> Result<Exec> {
             let position_id = deal.position_id;
             let fill = Fill {
                 order_id: deal.order_id.to_string(),
-                // cTrader timestamps are epoch milliseconds; modelenv uses ns.
-                timestamp_ns: deal.execution_timestamp.saturating_mul(1_000_000),
+                                timestamp_ns: deal.execution_timestamp.saturating_mul(1_000_000),
                 price: deal.execution_price.unwrap_or(0.0),
-                // modelenv carries volume in lots; convert from cTrader units.
-                size: volume_to_lots(deal.filled_volume),
-                // modelenv side: 0 = buy, 1 = sell (cTrader trade_side 1/2 - 1).
-                side: deal.trade_side - 1,
+                                size: volume_to_lots(deal.filled_volume),
+                                side: deal.trade_side - 1,
                 partial: deal.filled_volume < deal.volume,
             };
             Ok(Exec::Filled(OrderResult { fill, position_id }))
@@ -237,7 +230,7 @@ fn interpret(frame: &ProtoMessage, ctx: &str) -> Result<Exec> {
         EXEC_ORDER_REJECTED => Ok(Exec::Rejected(
             evt.error_code.unwrap_or_else(|| "ORDER_REJECTED".into()),
         )),
-        EXEC_ORDER_ACCEPTED => Ok(Exec::Pending), // wait for the subsequent FILLED
+        EXEC_ORDER_ACCEPTED => Ok(Exec::Pending),
         _ => Ok(Exec::Pending),
     }
 }
@@ -271,10 +264,10 @@ mod tests {
             deal_id: 9001,
             order_id: 7001,
             position_id: 5001,
-            volume: 100_000,        // 0.01 lot in cTrader units
-            filled_volume: 100_000, // fully filled
+            volume: 100_000,
+            filled_volume: 100_000,
             symbol_id: 4,
-            execution_timestamp: 1_700_000_000_000, // ms
+            execution_timestamp: 1_700_000_000_000,
             execution_price: Some(150.123),
             trade_side: TRADE_SIDE_BUY,
             ..Default::default()
@@ -326,8 +319,8 @@ mod tests {
         assert_eq!(res.position_id, 5001);
         assert_eq!(res.fill.order_id, "7001");
         assert_eq!(res.fill.price, 150.123);
-        assert_eq!(res.fill.size, 0.01); // 100_000 cTrader units -> 0.01 lot
-        assert_eq!(res.fill.side, 0); // buy -> 0
+        assert_eq!(res.fill.size, 0.01);
+        assert_eq!(res.fill.side, 0);
         assert!(!res.fill.partial);
         assert_eq!(res.fill.timestamp_ns, 1_700_000_000_000 * 1_000_000);
     }
@@ -351,8 +344,7 @@ mod tests {
 
     #[test]
     fn lots_to_volume_matches_demo_minimum() {
-        // Demo confirmed 0.01 lot = volume 100_000 (and rejected 1000).
-        assert_eq!(lots_to_volume(0.01), 100_000);
+                assert_eq!(lots_to_volume(0.01), 100_000);
         assert_eq!(lots_to_volume(1.0), 10_000_000);
     }
 
@@ -398,13 +390,12 @@ mod tests {
 
     #[tokio::test]
     async fn close_position_fills() {
-        // Closing also resolves via a FILLED execution event with a deal.
-        let (client_io, server_io) = tokio::io::duplex(8192);
+                let (client_io, server_io) = tokio::io::duplex(8192);
         tokio::spawn(async move {
             let mut s = server_io;
             if let Ok(req) = wire::read_frame(&mut s).await {
                 let mut deal = usdjpy_buy_deal();
-                deal.trade_side = TRADE_SIDE_SELL; // closing a long = a sell deal
+                deal.trade_side = TRADE_SIDE_SELL;
                 let filled = exec_event_frame(EXEC_ORDER_FILLED, req.client_msg_id.clone(), Some(deal), None);
                 let _ = wire::write_frame(&mut s, &filled).await;
             }
@@ -416,6 +407,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.position_id, 5001);
-        assert_eq!(res.fill.side, 1); // sell -> 1
+        assert_eq!(res.fill.side, 1);
     }
 }

@@ -13,9 +13,6 @@ from hypothesis import strategies as st
 from deepqnetwork.preprocessor import StatePreprocessor
 
 
-# --- Fake protobuf-like objects for testing ---
-
-
 @dataclass
 class FakeStateRow:
     """Mimics environment_pb2.StateRow."""
@@ -33,9 +30,6 @@ class FakeObservation:
     done: bool = False
 
 
-# --- Strategies ---
-
-# Generate finite floats (no NaN/Inf) that are representable in float32
 finite_float32 = st.floats(
     min_value=-1e30,
     max_value=1e30,
@@ -44,15 +38,11 @@ finite_float32 = st.floats(
     allow_subnormal=True,
 )
 
-# Generate lists of finite floats with varying length (1 to 100 features)
 float_value_lists = st.lists(
     finite_float32,
     min_size=1,
     max_size=100,
 )
-
-
-# --- Property Tests ---
 
 
 class TestStatePreprocessingPreservesValues:
@@ -76,7 +66,6 @@ class TestStatePreprocessingPreservesValues:
 
         # Feature: deepqnetwork, Property 1: State preprocessing preserves values
         """
-        # Arrange: create a fresh preprocessor and observation
         preprocessor = StatePreprocessor(device=torch.device("cpu"))
         columns = [f"col_{i}" for i in range(len(values))]
         obs = FakeObservation(
@@ -84,10 +73,8 @@ class TestStatePreprocessingPreservesValues:
             state_data=[FakeStateRow(values=values)],
         )
 
-        # Act: process the observation
         result = preprocessor.process(obs)
 
-        # Assert: output tensor values match input after float32 type conversion
         expected = np.array(values, dtype=np.float32)
         expected_tensor = torch.from_numpy(expected)
 

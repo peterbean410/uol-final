@@ -120,7 +120,7 @@ def narrate(recommendation: str, user_message: str | None = None,
     if not tools:
         return _chat(messages)
 
-    for _ in range(3):  # bounded tool-call loop
+    for _ in range(3):
         msg = _post(messages, tools=tools)
         if msg is None:
             return None
@@ -143,4 +143,4 @@ def narrate(recommendation: str, user_message: str | None = None,
                     logger.exception("tool %s failed", name)
                     result = f"tool {name} failed: {exc}"
             messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": str(result)})
-    return _chat(messages)  # final text summary after tool use
+    return _chat(messages)

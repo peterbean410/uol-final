@@ -1,12 +1,3 @@
-# Keeps the ECR imagePullSecret alive in the cm3070 namespace.
-#
-# ECR authorisation tokens expire after 12 hours. Without this the Deployment
-# keeps running, but the next pod start fails with 403 ErrImagePull because
-# imagePullPolicy is Always. Mirrors the modelenv refresher.
-#
-# Requires secret/ecr-aws-credentials holding AWS_ACCESS_KEY_ID,
-# AWS_SECRET_ACCESS_KEY and AWS_DEFAULT_REGION for a principal with pull
-# permission on the forex-cm3070-advisor repository.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -19,12 +10,10 @@ metadata:
   name: ecr-secret-refresher
   namespace: cm3070
 rules:
-  # Scoped to the one secret it maintains.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "patch"]
     resourceNames: ["ecr-registry-credentials"]
-  # create takes no resourceNames, needed only for the first run.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
@@ -60,8 +49,6 @@ spec:
       template:
         metadata:
           annotations:
-            # This namespace is Istio-injected. Without opting out, the sidecar
-            # keeps running after the script exits and the Job never completes.
             sidecar.istio.io/inject: "false"
         spec:
           serviceAccountName: ecr-secret-refresher
@@ -95,8 +82,6 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
-                  # Talks only to ECR (for the token) and the in-cluster API
-                  # server (to upsert the secret); no external downloads.
                   SA=/var/run/secrets/kubernetes.io/serviceaccount
                   NS=cm3070
                   NAME=ecr-registry-credentials

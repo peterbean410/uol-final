@@ -64,15 +64,11 @@ DAILY_MINUTES = 1440
 WEEK_MINUTES = 10080
 MONTH_MINUTES = 43200
 
-# Dedup key, MUST match create-eoi-price-snapshot.py so consolidated snapshots
-# stay drop-in compatible with what the scheduled lanes write.
 DEDUP_SUBSET = ["Timestamp", "Symbol"]
 
 DEFAULT_INTERVALS = ["M1", "M5", "M15"]
 DEFAULT_TARGET_DAG = "create_eoh_snapshot_2026"
 
-
-# --- S3 layout helpers: mirrors create-eoi-price-snapshot.py (EOH / 60-min) ---
 
 def _snapshot_root(time_window_minutes: int) -> str:
     """Return the snapshot tree root keyed by partition granularity."""
@@ -93,7 +89,7 @@ def _build_snapshot_key(fx_symbol: str, interval: str, dt: datetime, time_window
     base = f"{_snapshot_root(time_window_minutes)}/symbol={fx_symbol}/interval={interval}"
     key = f"{base}/year={dt.year}/month={dt.month:02d}"
     if time_window_minutes > DAILY_MINUTES:
-        return f"{key}/{ts}.parquet"  # eow/eom: year/month tier only
+        return f"{key}/{ts}.parquet"
     key += f"/day={dt.day:02d}"
     if time_window_minutes < DAILY_MINUTES:
         key += f"/hour={dt.hour:02d}"
@@ -120,8 +116,6 @@ def _upload_to_s3(df: pd.DataFrame, bucket: str, key: str, s3) -> None:
     s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue())
     print(f"  Uploaded {len(df)} rows -> s3://{bucket}/{key}")
 
-
-# --- combine ------------------------------------------------------------------
 
 def _parse_frontier(value: str) -> datetime:
     """Parse an ISO-8601 frontier timestamp; treat a naive value as UTC."""
@@ -183,7 +177,6 @@ def main() -> None:
         raise SystemExit("SOURCE_FRONTIERS env var is required (JSON dag_id -> ISO ts).")
     frontiers_raw = json.loads(raw)
 
-    # dag_id -> frontier datetime, dropping lanes with no successful run.
     frontiers = {dag: _parse_frontier(ts) for dag, ts in frontiers_raw.items() if ts}
     if target_dag not in frontiers:
         raise SystemExit(f"Target lane {target_dag} has no resolved frontier; cannot pick write partition.")
@@ -194,7 +187,6 @@ def main() -> None:
             frontiers[label] = _parse_frontier(ts)
 
     target_dt = frontiers[target_dag]
-    # Oldest frontier first so the newest lane wins ties under keep='last'.
     sources = sorted(frontiers.items(), key=lambda kv: kv[1])
 
     s3 = boto3.client("s3")

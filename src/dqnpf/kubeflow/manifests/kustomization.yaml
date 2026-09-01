@@ -1,17 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Kustomize entrypoint for the dqnpf-intraday combined predictor.
-# Referenced by FluxCD via app/base/DqnpfIntraday.yaml.
-# This is the canonical (and only) KServe InferenceService in the system.
-#
-# Deployed into the existing `peterbean` Kubeflow Profile namespace, which
-# already provides istio injection, the `peterbean-ecr-credentials` image
-# pull secret (via PodDefault), and the `mlpipeline-minio-artifact` secret
-# the predictor reads. resource-quota.yaml is intentionally NOT included: a
-# namespace-wide ResourceQuota would clamp the whole shared `peterbean`
-# namespace (which also runs other InferenceServices). The predictor sets
-# per-container requests/limits instead.
 
 namespace: peterbean
 

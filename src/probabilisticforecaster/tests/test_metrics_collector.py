@@ -31,11 +31,6 @@ from probabilisticforecaster.kubeflow.katib.metrics_collector import (
 )
 
 
-# ---------------------------------------------------------------------------
-# parse_log_line
-# ---------------------------------------------------------------------------
-
-
 class TestParseLogLine:
     """Tests for parse_log_line."""
 
@@ -62,11 +57,6 @@ class TestParseLogLine:
         line = '  {"key": "value"}  \n'
         result = parse_log_line(line)
         assert result == {"key": "value"}
-
-
-# ---------------------------------------------------------------------------
-# extract_validation_nll
-# ---------------------------------------------------------------------------
 
 
 class TestExtractValidationNll:
@@ -105,11 +95,6 @@ class TestExtractValidationNll:
         assert extract_validation_nll(entry) is None
 
 
-# ---------------------------------------------------------------------------
-# extract_epoch
-# ---------------------------------------------------------------------------
-
-
 class TestExtractEpoch:
     """Tests for extract_epoch."""
 
@@ -132,11 +117,6 @@ class TestExtractEpoch:
     def test_no_epoch(self):
         entry = {"message": "starting training"}
         assert extract_epoch(entry) is None
-
-
-# ---------------------------------------------------------------------------
-# collect_metrics_from_stream
-# ---------------------------------------------------------------------------
 
 
 class TestCollectMetricsFromStream:
@@ -189,11 +169,6 @@ class TestCollectMetricsFromStream:
         assert metrics == [(1, 2.3), (2, 1.9)]
 
 
-# ---------------------------------------------------------------------------
-# get_final_validation_nll
-# ---------------------------------------------------------------------------
-
-
 class TestGetFinalValidationNll:
     """Tests for get_final_validation_nll."""
 
@@ -209,11 +184,6 @@ class TestGetFinalValidationNll:
         assert get_final_validation_nll([]) is None
 
 
-# ---------------------------------------------------------------------------
-# format_katib_metric
-# ---------------------------------------------------------------------------
-
-
 class TestFormatKatibMetric:
     """Tests for format_katib_metric."""
 
@@ -227,11 +197,6 @@ class TestFormatKatibMetric:
         result = format_katib_metric("validation_nll", 1e-5)
         assert "validation_nll=" in result
         assert "1e-05" in result
-
-
-# ---------------------------------------------------------------------------
-# determine_best_configuration
-# ---------------------------------------------------------------------------
 
 
 class TestDetermineBestConfiguration:
@@ -257,11 +222,6 @@ class TestDetermineBestConfiguration:
 
     def test_empty_list(self):
         assert determine_best_configuration([]) is None
-
-
-# ---------------------------------------------------------------------------
-# output_best_configuration
-# ---------------------------------------------------------------------------
 
 
 class TestOutputBestConfiguration:

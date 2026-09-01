@@ -32,10 +32,6 @@ _ECR_IMAGE = (
     "/forex-marketdata-download-interval-price-data:latest"
 )
 
-# download_tick_data runs Mon–Fri (cron "0 * * * 1-5"). The sensor looks at
-# the hourly download covering 23:00→00:00 of the prior calendar day. For a
-# Sun-midnight run that's Sat 23:00 (no download); for Mon-midnight it's
-# Sun 23:00 (no download). Python weekday(): Mon=0…Sun=6.
 _NO_UPSTREAM_WEEKDAYS = {6, 0}
 
 

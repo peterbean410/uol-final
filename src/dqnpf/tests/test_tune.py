@@ -26,9 +26,6 @@ from dqnpf.tune import (
 )
 
 
-# --- Lightweight stand-ins (avoid importing backtest -> torch) -------------
-
-
 @dataclass
 class FakeComparison:
     """Minimal duck-typed stand-in for BacktestComparison."""
@@ -58,20 +55,13 @@ def _base_config(**overrides) -> IntegrationConfig:
     return IntegrationConfig(**defaults)
 
 
-# --- DEFAULT_GRID ----------------------------------------------------------
-
-
 def test_default_grid_is_full_cartesian_product() -> None:
     assert len(DEFAULT_GRID) == 5 * 4 * 2
-    # Every combination is unique.
     assert len({(p.variance_threshold, p.max_risk_long_units, p.max_risk_short_units)
                 for p in DEFAULT_GRID}) == 40
     assert {p.variance_threshold for p in DEFAULT_GRID} == {2.0, 3.0, 4.5, 6.0, 8.0}
     assert {p.max_risk_long_units for p in DEFAULT_GRID} == {1, 2, 3, 4}
     assert {p.max_risk_short_units for p in DEFAULT_GRID} == {1, 2}
-
-
-# --- grid_search -----------------------------------------------------------
 
 
 def test_grid_search_overrides_only_tunable_fields_and_holds_rest() -> None:
@@ -88,7 +78,6 @@ def test_grid_search_overrides_only_tunable_fields_and_holds_rest() -> None:
     assert [c.variance_threshold for c in seen] == [3.0, 8.0]
     assert [c.max_risk_long_units for c in seen] == [2, 4]
     assert [c.max_risk_short_units for c in seen] == [1, 2]
-    # Non-tunable fields are held fixed across the grid.
     for c in seen:
         assert c.symbol == "USDJPY"
         assert c.seed == 7
@@ -98,7 +87,6 @@ def test_grid_search_overrides_only_tunable_fields_and_holds_rest() -> None:
 
 def test_grid_search_captures_metrics_and_pass_state() -> None:
     def fake_run(cfg: IntegrationConfig) -> FakeComparison:
-        # Sharpe scales with the variance threshold for a deterministic order.
         return FakeComparison(
             combined_sharpe_pnl=cfg.variance_threshold,
             baseline_sharpe_pnl=1.0,
@@ -142,9 +130,6 @@ def test_grid_search_failures_are_copied_not_aliased() -> None:
     assert results[0].failures == ["14.2"]
 
 
-# --- select_best -----------------------------------------------------------
-
-
 def _result(vt: float, sharpe: float, passed: bool) -> GridResult:
     return GridResult(
         point=GridPoint(vt, 2, 1),
@@ -158,7 +143,7 @@ def _result(vt: float, sharpe: float, passed: bool) -> GridResult:
 
 def test_select_best_prefers_passing_even_with_lower_sharpe() -> None:
     results = [
-        _result(2.0, sharpe=9.0, passed=False),  # higher sharpe but fails gates
+        _result(2.0, sharpe=9.0, passed=False),
         _result(4.5, sharpe=3.0, passed=True),
     ]
     best = select_best(results)
@@ -188,9 +173,6 @@ def test_select_best_falls_back_to_best_failing_when_none_pass() -> None:
 def test_select_best_rejects_empty() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         select_best([])
-
-
-# --- serialization ---------------------------------------------------------
 
 
 def test_grid_result_to_row_is_json_shaped() -> None:
@@ -233,7 +215,6 @@ def test_frozen_config_applies_winning_thresholds_and_keeps_rest() -> None:
     assert data["variance_threshold"] == 8.0
     assert data["max_risk_long_units"] == 4
     assert data["max_risk_short_units"] == 2
-    # Untouched fields survive.
     assert data["symbol"] == "USDJPY"
     assert data["seed"] == 7
     assert data["episode_start_ts"] == base.episode_start_ts
@@ -254,7 +235,6 @@ def test_write_winning_config_yaml_loads_into_valid_config(tmp_path) -> None:
     path = tmp_path / "tuned.yaml"
     write_winning_config_yaml(base, best, str(path))
     data = yaml.safe_load(path.read_text())
-    # The emitted YAML is a complete, valid IntegrationConfig.
     cfg = IntegrationConfig(**data)
     assert cfg.variance_threshold == 6.0
     assert cfg.max_risk_long_units == 3

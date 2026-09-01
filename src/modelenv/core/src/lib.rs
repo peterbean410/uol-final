@@ -1,4 +1,3 @@
-// Core module for FX RL Model Environment
 pub mod broker_gateway;
 pub mod config;
 pub mod data_loader;

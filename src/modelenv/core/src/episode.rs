@@ -1,4 +1,3 @@
-// Episode management module
 use anyhow::{Context, Result};
 use log::{info, warn};
 use std::collections::HashMap;
@@ -100,9 +99,7 @@ pub fn has_session_end_crossed(
     }
     let nanos_per_hour = NANOS_PER_DAY / 24;
     let target = (session_end_hour as i64 % 24) * nanos_per_hour;
-    // The session-end instant recurs daily; a single step is far smaller than a
-    // day, so checking the from-day and the next covers the crossing.
-    let from_day = from_timestamp_ns.div_euclid(NANOS_PER_DAY);
+            let from_day = from_timestamp_ns.div_euclid(NANOS_PER_DAY);
     for day in [from_day, from_day + 1] {
         let boundary = day * NANOS_PER_DAY + target;
         if from_timestamp_ns < boundary && boundary <= to_timestamp_ns {
@@ -211,8 +208,7 @@ impl Episode {
     pub fn completed_bar(&self, interval: &str, current_timestamp: i64) -> Option<Bar> {
         let duration = interval_duration_ns(interval);
         let cutoff = current_timestamp.saturating_sub(duration);
-        // A negative cutoff means no bar can possibly have completed yet
-        if cutoff < 0 {
+                if cutoff < 0 {
             return None;
         }
         let idx = self.interval_cursor_at_or_before(interval, cutoff)?;
@@ -245,9 +241,7 @@ impl Episode {
                     }
 
                     let start_idx = interval_cursor.saturating_sub(RECENT_WINDOW);
-                    // Exclude the forming bar at interval_cursor; TA/patterns must only
-                    // see completed bars to avoid future-data leakage.
-                    let end_idx = interval_cursor;
+                                                            let end_idx = interval_cursor;
                     let recent: Vec<Bar> = bars
                         .get(start_idx..end_idx)
                         .map(|slice| slice.to_vec())
@@ -255,19 +249,8 @@ impl Episode {
 
                     interval_ta = compute_interval_indicators(&recent);
 
-                    // Collect detected patterns from the primary interval (M1 only to
-                    // avoid duplicates; M1 has the finest granularity).
-                    // Use all bars up to the cursor, patterns can span much wider
-                    // than the indicator lookback window.
-                    if *interval == "M15" {
-                        // Bounded recent window, NOT bars[0..end_idx]: scanning
-                        // the full multi-year history every step is O(history)
-                        // and grows without bound as the cursor advances across
-                        // years in date-range training (the per-step slowdown).
-                        // PATTERN_LOOKBACK_M15 covers far more than the 12
-                        // most-recent patterns we keep, so the output is
-                        // preserved while detection becomes O(1) per step.
-                        let pattern_start = end_idx.saturating_sub(PATTERN_LOOKBACK_M15);
+                                                                                                    if *interval == "M15" {
+                                                                                                                                                                                                let pattern_start = end_idx.saturating_sub(PATTERN_LOOKBACK_M15);
                         let all_bars: Vec<Bar> = bars
                             .get(pattern_start..end_idx)
                             .map(|slice| slice.to_vec())
@@ -437,13 +420,7 @@ fn resolve_training_tick_query(
     resolved_start_ts: i64,
     resolved_end_ts: i64,
 ) -> (Option<i64>, Option<i64>, Option<i64>) {
-    // Tick parquet files are per-hour, not cumulative-from-inception like the
-    // bar snapshots. We must always pass a range so the loader takes the
-    // range-list path rather than the exact-key speculative path; the latter
-    // would error on any range with no tick file at the snapshot hour (e.g.
-    // pre-2021 USDJPY where ticks don't exist) instead of triggering the M1
-    // fallback. Explicit episode_*_ts override the resolved range when set.
-    let start = if episode_start_ts > 0 {
+                            let start = if episode_start_ts > 0 {
         episode_start_ts
     } else {
         resolved_start_ts
@@ -463,11 +440,10 @@ mod tests {
 
     #[test]
     fn test_advance_5_seconds() {
-        // Create bars with 1-second intervals (for testing purposes)
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
         for i in 0..10 {
             bars.push(Bar {
-                timestamp_ns: i * 1_000_000_000, // 1 second intervals
+                timestamp_ns: i * 1_000_000_000,
                 open: 100.0 + i as f64,
                 high: 101.0 + i as f64,
                 low: 99.0 + i as f64,
@@ -483,17 +459,13 @@ mod tests {
             10_000_000_000,
         );
 
-        // Initial cursor sits at episode_start_ts.
-        assert_eq!(episode.get_cursor_timestamp(), 0);
+                assert_eq!(episode.get_cursor_timestamp(), 0);
 
-        // Advance by 5 seconds (5_000_000_000 ns)
-        let still_running = episode.advance(5_000_000_000);
+                let still_running = episode.advance(5_000_000_000);
 
-        // Should still be running
-        assert!(still_running);
+                assert!(still_running);
 
-        // Free-running cursor lands exactly at +5s.
-        assert_eq!(episode.get_cursor_timestamp(), 5_000_000_000);
+                assert_eq!(episode.get_cursor_timestamp(), 5_000_000_000);
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 5_000_000_000);
@@ -501,9 +473,7 @@ mod tests {
 
     #[test]
     fn test_advance_reaches_end() {
-        // Bars at 0, 3, 6, 9, 12 seconds. Episode ends at 15 seconds.
-        // Free-running cursor: 0 → 5 → 10 → 15 (ok) → 20 (> 15, done).
-        let mut bars = Vec::new();
+                        let mut bars = Vec::new();
         for i in 0..5 {
             bars.push(Bar {
                 timestamp_ns: i * 3_000_000_000,
@@ -531,15 +501,13 @@ mod tests {
         assert!(episode.advance(5_000_000_000));
         assert_eq!(episode.get_cursor_timestamp(), 15_000_000_000);
 
-        // Next step crosses episode_end_ts → done.
-        assert!(!episode.advance(5_000_000_000));
+                assert!(!episode.advance(5_000_000_000));
         assert!(episode.is_done());
     }
 
     #[test]
     fn test_advance_multiple_steps() {
-        // Bars at 0..19s (1s intervals). Episode ends at 20s.
-        let mut bars = Vec::new();
+                let mut bars = Vec::new();
         for i in 0..20 {
             bars.push(Bar {
                 timestamp_ns: i * 1_000_000_000,
@@ -570,15 +538,13 @@ mod tests {
         assert!(episode.advance(5_000_000_000));
         assert_eq!(episode.get_cursor_timestamp(), 20_000_000_000);
 
-        // Next step crosses episode_end_ts → done.
-        assert!(!episode.advance(5_000_000_000));
+                assert!(!episode.advance(5_000_000_000));
         assert!(episode.is_done());
     }
 
     #[test]
     fn test_get_observation_timestamp() {
-        // Create bars with specific timestamps
-        let bars = vec![
+                let bars = vec![
             Bar {
                 timestamp_ns: 100_000_000_000,
                 open: 100.0,
@@ -610,13 +576,12 @@ mod tests {
 
     #[test]
     fn test_episode_state_with_multiple_intervals() {
-        // Create bars for multiple time intervals
-        let mut m1_bars = Vec::new();
+                let mut m1_bars = Vec::new();
         let mut m5_bars = Vec::new();
 
         for i in 0..10 {
             m1_bars.push(Bar {
-                timestamp_ns: i * 60_000_000_000, // 1 minute intervals
+                timestamp_ns: i * 60_000_000_000,
                 open: 100.0 + i as f64,
                 high: 101.0 + i as f64,
                 low: 99.0 + i as f64,
@@ -624,9 +589,8 @@ mod tests {
                 volume: 1000.0,
             });
 
-            // M5 bars are every 5th M1 bar (at 0 and 5 minutes)
-            m5_bars.push(Bar {
-                timestamp_ns: i * 5 * 60_000_000_000, // 5 minute intervals
+                        m5_bars.push(Bar {
+                timestamp_ns: i * 5 * 60_000_000_000,
                 open: 100.0 + (i * 5) as f64,
                 high: 101.0 + (i * 5) as f64,
                 low: 99.0 + (i * 5) as f64,
@@ -641,26 +605,19 @@ mod tests {
 
         let mut episode = Episode::new("USDJPY".to_string(), bars_map, 0, 600_000_000_000);
 
-        // Initial cursor sits at episode_start_ts.
-        assert_eq!(episode.get_cursor_timestamp(), 0);
+                assert_eq!(episode.get_cursor_timestamp(), 0);
         assert!(!episode.is_done());
 
-        // Advance by 5 minutes (300 seconds = 300_000_000_000 ns)
-        let still_running = episode.advance(300_000_000_000);
+                let still_running = episode.advance(300_000_000_000);
 
-        // Should still be running
-        assert!(still_running);
+                assert!(still_running);
 
-        // Free-running cursor lands exactly at +300s.
-        assert_eq!(episode.get_cursor_timestamp(), 300_000_000_000);
+                assert_eq!(episode.get_cursor_timestamp(), 300_000_000_000);
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 300_000_000_000);
-        // At cursor=300s the M1 bar starting at 300s is still forming;
-        // the last completed M1 bar closed at 240s (240+60=300).
-        assert_eq!(obs.live_bars["M1"].timestamp_ns, 240_000_000_000);
-        // M5 bar starting at 0s completed at 300s; the bar at 300s is forming.
-        assert_eq!(obs.live_bars["M5"].timestamp_ns, 0);
+                        assert_eq!(obs.live_bars["M1"].timestamp_ns, 240_000_000_000);
+                assert_eq!(obs.live_bars["M5"].timestamp_ns, 0);
     }
 
     #[test]
@@ -707,10 +664,8 @@ mod tests {
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 360_000_000_000);
-        // At cursor=360s, M1 bar at 300s completed at 360s; bar at 360s is forming.
-        assert_eq!(obs.live_bars["M1"].timestamp_ns, 300_000_000_000);
-        // M5 bar at 0s completed at 300s; bar at 300s is forming until 600s.
-        assert_eq!(obs.live_bars["M5"].timestamp_ns, 0);
+                assert_eq!(obs.live_bars["M1"].timestamp_ns, 300_000_000_000);
+                assert_eq!(obs.live_bars["M5"].timestamp_ns, 0);
     }
 
     #[test]
@@ -769,10 +724,7 @@ mod tests {
 
     #[test]
     fn test_first_step_observation_includes_ticks_after_bar_open() {
-        // Mirrors the real-world S3 case: the first bar timestamp lands on a
-        // session-open boundary and the very first tick is a few ms later.
-        // After advancing one 5s step the live tick window must capture it.
-        let bars = vec![
+                                let bars = vec![
             Bar {
                 timestamp_ns: 0,
                 open: 100.0,
@@ -811,8 +763,7 @@ mod tests {
         )
         .with_ticks(ticks);
 
-        // Simulate environment.reset() pushing the cursor one step in.
-        assert!(episode.advance(5_000_000_000));
+                assert!(episode.advance(5_000_000_000));
 
         let obs = episode.get_observation(&[], 0.0, None);
         assert_eq!(obs.timestamp_ns, 5_000_000_000);
@@ -827,9 +778,9 @@ mod tests {
             Bar {
                 timestamp_ns: 0,
                 open: 100.00,
-                high: 999.0, // historical full-period high, must NOT leak
-                low: 1.0,    // historical full-period low, must NOT leak
-                close: 50.0, // historical close, must NOT leak
+                high: 999.0,
+                low: 1.0,
+                close: 50.0,
                 volume: 1000.0,
             },
             Bar {
@@ -846,27 +797,27 @@ mod tests {
                 timestamp_ns: 1_000_000_000,
                 bid: 100.10,
                 ask: 100.20,
-            }, // mid 100.15
+            },
             Tick {
                 timestamp_ns: 2_000_000_000,
                 bid: 100.30,
                 ask: 100.40,
-            }, // mid 100.35, high
+            },
             Tick {
                 timestamp_ns: 3_000_000_000,
                 bid: 99.90,
                 ask: 100.00,
-            }, // mid 99.95, low
+            },
             Tick {
                 timestamp_ns: 4_000_000_000,
                 bid: 100.20,
                 ask: 100.22,
-            }, // mid 100.21, close
+            },
             Tick {
                 timestamp_ns: 6_000_000_000,
                 bid: 105.0,
                 ask: 105.0,
-            }, // outside window
+            },
         ];
 
         let episode = Episode::new(
@@ -988,14 +939,12 @@ mod tests {
 
     #[test]
     fn test_recent_ticks_returns_all_ticks_in_60s_window_before_live() {
-        // Cursor at 120s; live_lower = 120s - 5s = 115s; recent window = [55s, 115s).
-        let bars = vec![
+                let bars = vec![
             Bar { timestamp_ns: 0, open: 0.0, high: 0.0, low: 0.0, close: 0.0, volume: 0.0 },
             Bar { timestamp_ns: 60_000_000_000, open: 0.0, high: 0.0, low: 0.0, close: 0.0, volume: 0.0 },
             Bar { timestamp_ns: 120_000_000_000, open: 0.0, high: 0.0, low: 0.0, close: 0.0, volume: 0.0 },
         ];
-        // 70 ticks at 1s intervals starting at 50s: 50, 51, …, 119.
-        let tick_count = 70i64;
+                let tick_count = 70i64;
         let ticks: Vec<Tick> = (0..tick_count)
             .map(|i| Tick {
                 timestamp_ns: 50_000_000_000 + i * 1_000_000_000,
@@ -1012,19 +961,15 @@ mod tests {
         )
         .with_ticks(ticks);
 
-        // Advance to bar at 120s.
-        assert!(episode.advance(120_000_000_000));
+                assert!(episode.advance(120_000_000_000));
 
-        // previous=60s, so live_lower = max(60s, 120s-5s) = 115s.
-        // recent window = [115s-60s, 115s) = [55s, 115s) → ticks at 55s–114s = 60 ticks.
-        let recent = episode.ticks_in_range(55_000_000_000, 115_000_000_000);
+                        let recent = episode.ticks_in_range(55_000_000_000, 115_000_000_000);
         assert_eq!(recent.len(), 60);
         assert_eq!(recent[0].timestamp_ns, 55_000_000_000);
         assert_eq!(recent[59].timestamp_ns, 114_000_000_000);
         assert!(recent[0].timestamp_ns < recent[1].timestamp_ns);
 
-        // live_ticks = [115s, 120s) → ticks at 115s–119s = 5 ticks.
-        let live = episode.ticks_in_range(115_000_000_000, 120_000_000_000);
+                let live = episode.ticks_in_range(115_000_000_000, 120_000_000_000);
         assert_eq!(live.len(), 5);
         assert_eq!(live[0].timestamp_ns, 115_000_000_000);
         assert_eq!(live[4].timestamp_ns, 119_000_000_000);
@@ -1032,8 +977,7 @@ mod tests {
 
     #[test]
     fn test_episode_done_at_end() {
-        // Create bars with specific end timestamp
-        let bars = vec![
+                let bars = vec![
             Bar {
                 timestamp_ns: 0,
                 open: 100.0,
@@ -1056,18 +1000,15 @@ mod tests {
             "USDJPY".to_string(),
             [("M1".to_string(), bars)].into_iter().collect(),
             0,
-            60_000_000_000, // episode ends at 60 seconds
+            60_000_000_000,
         );
 
-        // Initial state
+                assert!(!episode.is_done());
+
+                assert!(episode.advance(60_000_000_000));
         assert!(!episode.is_done());
 
-        // Advance to end
-        assert!(episode.advance(60_000_000_000));
-        assert!(!episode.is_done());
-
-        // Next advance should be done
-        assert!(!episode.advance(60_000_000_000));
+                assert!(!episode.advance(60_000_000_000));
         assert!(episode.is_done());
     }
 
@@ -1128,9 +1069,7 @@ mod tests {
 
     #[test]
     fn test_resolve_training_tick_query_uses_resolved_range_when_episode_bounds_unset() {
-        // Ticks always need a range so the loader takes the range-list path.
-        // With episode_*_ts=0 we fall back to the resolved range.
-        let (snapshot_ts, start, end) = resolve_training_tick_query(Some(123), 0, 0, 10, 20);
+                        let (snapshot_ts, start, end) = resolve_training_tick_query(Some(123), 0, 0, 10, 20);
 
         assert_eq!(snapshot_ts, Some(123));
         assert_eq!(start, Some(10));
@@ -1248,10 +1187,7 @@ mod tests {
 
     #[test]
     fn test_is_archive_gap_error_ignores_untyped_errors() {
-        // A bare anyhow!() that happens to contain similar wording must NOT
-        // satisfy the predicate, that's the whole point of the typed-error
-        // refactor.
-        let err = anyhow::anyhow!("No parquet sources matched the requested time range manually");
+                                let err = anyhow::anyhow!("No parquet sources matched the requested time range manually");
         assert!(!is_archive_gap_error(&err));
 
         let err = anyhow::anyhow!("AccessDenied calling s3:ListObjectsV2");
@@ -1266,7 +1202,6 @@ mod tests {
         assert!(is_archive_gap_error(&wrapped));
     }
 
-    // --- has_session_end_crossed (end-of-session liquidation trigger) ---------
 
     /// Build a UTC timestamp (ns) at `day`/`hour`/`min` relative to the epoch.
     fn at(day: i64, hour: i64, min: i64) -> i64 {
@@ -1276,14 +1211,12 @@ mod tests {
 
     #[test]
     fn test_most_recent_session_start_same_day_when_past_start_hour() {
-        // 16:45 with a 7h session start -> today 07:00.
-        assert_eq!(most_recent_session_start(at(5, 16, 45), 7), at(5, 7, 0));
+                assert_eq!(most_recent_session_start(at(5, 16, 45), 7), at(5, 7, 0));
     }
 
     #[test]
     fn test_most_recent_session_start_previous_day_when_before_start_hour() {
-        // 03:00 with a 7h session start -> yesterday 07:00.
-        assert_eq!(most_recent_session_start(at(5, 3, 0), 7), at(4, 7, 0));
+                assert_eq!(most_recent_session_start(at(5, 3, 0), 7), at(4, 7, 0));
     }
 
     #[test]
@@ -1293,31 +1226,24 @@ mod tests {
 
     #[test]
     fn test_most_recent_session_start_hour_taken_mod_24() {
-        // 39 ≡ 15h: at 16:00 the latest 15:00 start is today.
-        assert_eq!(most_recent_session_start(at(5, 16, 0), 39), at(5, 15, 0));
+                assert_eq!(most_recent_session_start(at(5, 16, 0), 39), at(5, 15, 0));
     }
 
     #[test]
     fn test_session_end_crossed_true_when_boundary_inside_step() {
-        // Step 14:30 -> 15:30 crosses the 15:00 session end.
-        assert!(has_session_end_crossed(at(0, 14, 30), at(0, 15, 30), 15));
+                assert!(has_session_end_crossed(at(0, 14, 30), at(0, 15, 30), 15));
     }
 
     #[test]
     fn test_session_end_not_crossed_before_or_after_boundary() {
-        // Entirely before the 15:00 boundary.
-        assert!(!has_session_end_crossed(at(0, 14, 0), at(0, 14, 30), 15));
-        // Entirely after the 15:00 boundary.
-        assert!(!has_session_end_crossed(at(0, 15, 30), at(0, 16, 0), 15));
+                assert!(!has_session_end_crossed(at(0, 14, 0), at(0, 14, 30), 15));
+                assert!(!has_session_end_crossed(at(0, 15, 30), at(0, 16, 0), 15));
     }
 
     #[test]
     fn test_session_end_boundary_is_half_open_interval() {
-        // Boundary == `to` is INCLUDED (the step just reached the close).
-        assert!(has_session_end_crossed(at(0, 14, 0), at(0, 15, 0), 15));
-        // Boundary == `from` is EXCLUDED (already past it last step), and the
-        // next day's boundary is far beyond `to`, so no crossing.
-        assert!(!has_session_end_crossed(at(0, 15, 0), at(0, 16, 0), 15));
+                assert!(has_session_end_crossed(at(0, 14, 0), at(0, 15, 0), 15));
+                        assert!(!has_session_end_crossed(at(0, 15, 0), at(0, 16, 0), 15));
     }
 
     #[test]
@@ -1328,15 +1254,12 @@ mod tests {
 
     #[test]
     fn test_session_end_hour_taken_modulo_24() {
-        // hour_end 39 == 15:00 (next-day notation); same crossing as 15.
-        assert!(has_session_end_crossed(at(0, 14, 30), at(0, 15, 30), 39));
+                assert!(has_session_end_crossed(at(0, 14, 30), at(0, 15, 30), 39));
     }
 
     #[test]
     fn test_session_end_crossed_across_calendar_day_for_midnight_close() {
-        // Session ends at 00:00; step 23:30 day0 -> 00:30 day1 crosses the
-        // day1 midnight boundary (exercises the from_day + 1 branch).
-        assert!(has_session_end_crossed(at(0, 23, 30), at(1, 0, 30), 0));
+                        assert!(has_session_end_crossed(at(0, 23, 30), at(1, 0, 30), 0));
     }
 }
 
@@ -1396,13 +1319,7 @@ pub async fn initialize_episode(
     let start_timestamp_ns = (episode_start_ts > 0).then_some(episode_start_ts);
     let end_timestamp_ns = (episode_end_ts > 0).then_some(episode_end_ts);
 
-    // EOH-snapshot parquet files contain cumulative history *up to* their
-    // partition timestamp. When the caller pinned a snapshot via
-    // `price_snapshot_ts`, honour it. Otherwise fall back to `episode_end_ts`
-    // so a 2012-01-31 episode picks the 2012-01-31 snapshot, not "latest",
-    // which would load a file whose bars are all after the episode window
-    // and get filtered to empty downstream.
-    let bar_snapshot_ts = price_snapshot_ts.or(end_timestamp_ns);
+                            let bar_snapshot_ts = price_snapshot_ts.or(end_timestamp_ns);
 
     for interval in TIME_INTERVALS {
         let interval_source = build_interval_data_source(s3_prefix, symbol, interval);
@@ -1414,7 +1331,7 @@ pub async fn initialize_episode(
             symbol,
             interval,
             bar_snapshot_ts,
-            None, // load full history, episode_start_ts only constrains ticks
+            None,
             end_timestamp_ns,
         )
         .await
@@ -1482,10 +1399,7 @@ pub async fn initialize_episode(
     .await
     {
         Ok(news) => news,
-        // News archive starts well after the price archive (no pre-2021 news
-        // sources). Treat archive gaps as "no news for this episode", log
-        // and proceed with an empty Vec rather than failing the Reset.
-        Err(err) if is_archive_gap_error(&err) => {
+                                Err(err) if is_archive_gap_error(&err) => {
             warn!(
                 "No news parquet sources for {} in episode range, proceeding with empty news. Underlying: {:#}",
                 symbol, err
@@ -1647,23 +1561,14 @@ pub async fn preload_training_market_data(
             TIME_INTERVALS[0]
         )
     })?;
-    // If the caller supplied an explicit tick window (--training-date-start
-    // / --training-date-end / --training-hour-start / --training-hour-end),
-    // use it. Otherwise default to the full M1 reference span.
-    let (resolved_start_ts, resolved_end_ts) = match tick_window {
+                let (resolved_start_ts, resolved_end_ts) = match tick_window {
         Some((start_ns, end_ns)) => (start_ns, end_ns),
         None => resolve_episode_bounds(&reference_bars, symbol, 0, 0)?,
     };
     let (tick_snapshot_ts, tick_start_ts, tick_end_ts) =
         resolve_training_tick_query(price_snapshot_ts, 0, 0, resolved_start_ts, resolved_end_ts);
 
-    // Scope the news preload to the training tick window when supplied so
-    // that pre-2021 training runs don't pull the latest (2026+) news
-    // snapshot file pointlessly; the per-episode loader requests news
-    // partitions inside the episode bounds, which won't intersect the
-    // latest file anyway. With no window (full M1 reference span) we still
-    // skip the preload of news; per-episode init will fetch what it needs.
-    let news_source = build_news_data_source(s3_prefix, symbol);
+                            let news_source = build_news_data_source(s3_prefix, symbol);
     let (news_preload_start, news_preload_end) = match tick_window {
         Some((s, e)) => (Some(s), Some(e)),
         None => (None, None),
@@ -1719,11 +1624,7 @@ pub async fn preload_training_market_data(
         Ok(_) => {
             info!("Finished preloading training ticks for {}", symbol);
         }
-        // Tick archive doesn't cover this range, log and continue. Per-episode
-        // ``initialize_episode`` will either fall back to M1-derived ticks (when
-        // step_size_seconds is a whole-minute multiple) or surface the failure
-        // there with the actual step_size in context.
-        Err(err) if is_archive_gap_error(&err) => {
+                                        Err(err) if is_archive_gap_error(&err) => {
             warn!(
                 "No tick parquet sources for {} in preload range, deferring to per-episode M1 fallback. Underlying: {:#}",
                 symbol, err

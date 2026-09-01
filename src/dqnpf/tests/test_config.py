@@ -11,11 +11,6 @@ import yaml
 from dqnpf.config import IntegrationConfig, load_config
 
 
-# ---------------------------------------------------------------------------
-# Default values (Req 11.1)
-# ---------------------------------------------------------------------------
-
-
 def test_defaults_match_spec() -> None:
     cfg = IntegrationConfig()
     assert cfg.symbol == "USDJPY"
@@ -25,11 +20,6 @@ def test_defaults_match_spec() -> None:
     assert cfg.forecast_horizon == 1
     assert cfg.min_bars_warmup == 1440
     assert cfg.step_size_seconds == 60
-
-
-# ---------------------------------------------------------------------------
-# Explicit validation (Req 5.3, 5.4, 11.2)
-# ---------------------------------------------------------------------------
 
 
 def test_negative_variance_threshold_raises() -> None:
@@ -47,7 +37,6 @@ def test_negative_max_risk_short_raises() -> None:
         IntegrationConfig(max_risk_short_units=-1)
 
 
-
 @pytest.mark.parametrize("invalid_horizon", [0, 2, 4, 5, 7, 13, -1])
 def test_invalid_forecast_horizon_raises(invalid_horizon: int) -> None:
     with pytest.raises(ValueError, match="forecast_horizon"):
@@ -58,11 +47,6 @@ def test_invalid_forecast_horizon_raises(invalid_horizon: int) -> None:
 def test_valid_forecast_horizons_accepted(valid_horizon: int) -> None:
     cfg = IntegrationConfig(forecast_horizon=valid_horizon)
     assert cfg.forecast_horizon == valid_horizon
-
-
-# ---------------------------------------------------------------------------
-# YAML round-trip
-# ---------------------------------------------------------------------------
 
 
 def test_yaml_round_trip_preserves_fields(tmp_path: Path) -> None:
@@ -102,11 +86,6 @@ def test_yaml_round_trip_with_default_config_file() -> None:
     cfg = load_config(["--config", str(default_path)])
     assert cfg.symbol == "USDJPY"
     assert cfg.variance_threshold == 4.5
-
-
-# ---------------------------------------------------------------------------
-# CLI overrides
-# ---------------------------------------------------------------------------
 
 
 def test_cli_overrides_yaml(tmp_path: Path) -> None:

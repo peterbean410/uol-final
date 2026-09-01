@@ -24,11 +24,6 @@ from pathlib import Path
 from typing import TextIO
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class DQNTrialResult:
     """Result of a single DQN Katib trial.
@@ -59,11 +54,6 @@ class DQNBestConfiguration:
     hyperparameters: dict[str, float | int | str]
     avg_episode_reward: float
     trial_name: str
-
-
-# ---------------------------------------------------------------------------
-# Log parsing
-# ---------------------------------------------------------------------------
 
 
 def parse_log_line(line: str) -> dict | None:
@@ -101,14 +91,12 @@ def extract_avg_episode_reward(log_entry: dict) -> float | None:
     Returns:
         The avg_episode_reward float value if found, None otherwise.
     """
-    # Pattern 1: Direct field in the log entry (extra fields from logger)
     if "avg_episode_reward" in log_entry:
         try:
             return float(log_entry["avg_episode_reward"])
         except (TypeError, ValueError):
             pass
 
-    # Pattern 2: Nested in an "extras" or "metrics" dict
     for container_key in ("extras", "metrics", "extra"):
         container = log_entry.get(container_key)
         if isinstance(container, dict) and "avg_episode_reward" in container:
@@ -117,22 +105,18 @@ def extract_avg_episode_reward(log_entry: dict) -> float | None:
             except (TypeError, ValueError):
                 pass
 
-    # Pattern 3: Parse from the message string
     message = log_entry.get("message", "")
     if "avg_episode_reward" in message:
-        # Try pattern: "avg_episode_reward=<float>"
         for part in message.split():
             if part.startswith("avg_episode_reward="):
                 try:
                     return float(part.split("=", 1)[1])
                 except (ValueError, IndexError):
                     pass
-        # Try pattern: "avg_episode_reward: <float>"
         if "avg_episode_reward:" in message:
             try:
                 idx = message.index("avg_episode_reward:")
                 remainder = message[idx + len("avg_episode_reward:"):].strip()
-                # Take the first token as the value
                 value_str = remainder.split()[0].rstrip(",;")
                 return float(value_str)
             except (ValueError, IndexError):
@@ -150,14 +134,12 @@ def extract_episode(log_entry: dict) -> int | None:
     Returns:
         The episode number if found, None otherwise.
     """
-    # Direct field
     if "episode" in log_entry:
         try:
             return int(log_entry["episode"])
         except (TypeError, ValueError):
             pass
 
-    # Nested in extras/metrics
     for container_key in ("extras", "metrics", "extra"):
         container = log_entry.get(container_key)
         if isinstance(container, dict) and "episode" in container:
@@ -166,7 +148,6 @@ def extract_episode(log_entry: dict) -> int | None:
             except (TypeError, ValueError):
                 pass
 
-    # Parse from message
     message = log_entry.get("message", "")
     if "episode" in message.lower():
         for part in message.split():
@@ -208,12 +189,10 @@ def collect_metrics_from_stream(
         if entry is None:
             continue
 
-        # Update current episode if present
         episode = extract_episode(entry)
         if episode is not None:
             current_episode = episode
 
-        # Extract average episode reward
         reward = extract_avg_episode_reward(entry)
         if reward is not None:
             results.append((current_episode, reward))
@@ -240,11 +219,6 @@ def get_final_avg_episode_reward(
     return metrics[-1]
 
 
-# ---------------------------------------------------------------------------
-# Katib-compatible metric output
-# ---------------------------------------------------------------------------
-
-
 def format_katib_metric(metric_name: str, value: float) -> str:
     """Format a metric value in Katib's expected stdout format.
 
@@ -259,11 +233,6 @@ def format_katib_metric(metric_name: str, value: float) -> str:
         Formatted metric string for Katib collection.
     """
     return f"{metric_name}={value}"
-
-
-# ---------------------------------------------------------------------------
-# Model Registry integration
-# ---------------------------------------------------------------------------
 
 
 def record_trial_in_registry(
@@ -301,11 +270,11 @@ def record_trial_in_registry(
             step_size_seconds=int(
                 trial_result.hyperparameters.get("step_size_seconds", 5)
             ),
-            training_timestamp="",  # Will be set by registry client
-            cumulative_pnl=0.0,  # Not available at trial level
-            sharpe_ratio=0.0,  # Not available at trial level
-            max_drawdown=0.0,  # Not available at trial level
-            win_rate=0.0,  # Not available at trial level
+            training_timestamp="",
+            cumulative_pnl=0.0,
+            sharpe_ratio=0.0,
+            max_drawdown=0.0,
+            win_rate=0.0,
             avg_episode_reward=trial_result.avg_episode_reward,
             hyperparameters=trial_result.hyperparameters,
             pipeline_run_id=trial_result.trial_name,
@@ -319,7 +288,6 @@ def record_trial_in_registry(
         return version_id
 
     except ImportError:
-        # Registry client not yet implemented; log and continue
         print(
             json.dumps(
                 {
@@ -347,11 +315,6 @@ def record_trial_in_registry(
             file=sys.stderr,
         )
         return None
-
-
-# ---------------------------------------------------------------------------
-# Best configuration output
-# ---------------------------------------------------------------------------
 
 
 def determine_best_configuration(
@@ -416,11 +379,6 @@ def output_best_configuration(
         path.write_text(json_str)
 
     return json_str
-
-
-# ---------------------------------------------------------------------------
-# Main entry point (standalone / Katib sidecar)
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -493,7 +451,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Mode: Output best configuration from trials
     if args.best_config:
         if not args.trials_file:
             print("Error: --trials-file required with --best-config", file=sys.stderr)
@@ -524,7 +481,6 @@ def main() -> None:
         print(json_output)
         return
 
-    # Mode: Collect metrics from training logs
     if args.log_file:
         log_path = Path(args.log_file)
         if not log_path.exists():
@@ -540,7 +496,6 @@ def main() -> None:
         if stream is not sys.stdin:
             stream.close()
 
-    # Get the final average episode reward (last recorded)
     final = get_final_avg_episode_reward(metrics)
     if final is None:
         print(
@@ -551,10 +506,8 @@ def main() -> None:
 
     episode, reward = final
 
-    # Output in Katib-compatible format
     print(format_katib_metric("avg_episode_reward", reward))
 
-    # Record in Model Registry if trial info provided
     if args.trial_name:
         hyperparams: dict[str, float | int | str] = {}
         if args.hyperparameters:

@@ -1,8 +1,3 @@
-# PyTorchJob manifest for distributed model training
-# Orchestrates distributed PyTorch training using the Training Operator
-# with configurable Master + Worker replicas (1-4 total pods)
-#
-# Requirements: 4.1, 4.8, 10.1, 10.2
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:

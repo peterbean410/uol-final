@@ -32,12 +32,8 @@ _ECR_IMAGE = (
 )
 
 _INTERVALS = ["M1", "M5", "M15"]
-# download_price_bars_hourly_2020 runs Mon–Fri (cron "0 * * * 1-5").
-# Python weekday(): Mon=0…Sun=6. Skip the wait on Sat and Sun.
 _NO_UPSTREAM_WEEKDAYS = {5, 6}
 
-# Per-interval pod memory limit. M1 processes the most bars per window and needs
-# more headroom than M5/M15, so it gets a larger limit.
 _DEFAULT_MEM_LIMIT = "512Mi"
 _MEM_LIMIT_OVERRIDE = {"M1": "8Gi"}
 
@@ -51,7 +47,7 @@ def _make_branch(wait_task_id: str, skip_task_id: str):
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="create_eoh_snapshot_2020",
     default_args=default_args,
     description="Create FX end-of-interval price snapshots (M1, M5, M15) using the marketdata Helm chart image",

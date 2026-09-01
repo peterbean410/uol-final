@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 import boto3
 
 MINIO_ENDPOINT = "http://minio-service.kubeflow:9000"
-MINIO_REGION = "us-east-1"  # boto3 still requires a region; MinIO ignores it
+MINIO_REGION = "us-east-1"
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ class _Location:
     client: object
     bucket: str
     key: str
-    scheme: str  # "minio" | "s3" | "bare"
+    scheme: str
 
 
 def _build_minio_client():

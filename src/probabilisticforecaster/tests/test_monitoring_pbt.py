@@ -21,11 +21,6 @@ from probabilisticforecaster.kubeflow.monitoring.metrics import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
-# Strategy for arbitrary log messages including special chars and unicode
 log_messages = st.text(
     alphabet=st.characters(
         categories=("L", "M", "N", "P", "S", "Z", "C"),
@@ -34,34 +29,25 @@ log_messages = st.text(
     max_size=500,
 )
 
-# Strategy for component names
 component_names = st.text(
     alphabet=st.characters(categories=("L", "N"), whitelist_characters="_-"),
     min_size=1,
     max_size=50,
 )
 
-# Strategy for logger names
 logger_names = st.text(
     alphabet=st.characters(categories=("L", "N"), whitelist_characters="._"),
     min_size=1,
     max_size=100,
 )
 
-# Strategy for log levels
 log_levels = st.sampled_from(
     [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL]
 )
 
-# Strategy for exception types to simulate tracebacks
 exception_types = st.sampled_from(
     [ValueError, TypeError, RuntimeError, KeyError, IOError, ZeroDivisionError]
 )
-
-
-# ---------------------------------------------------------------------------
-# Property 3: Structured JSON logging validity
-# ---------------------------------------------------------------------------
 
 
 class TestStructuredJsonLoggingValidity:
@@ -102,16 +88,13 @@ class TestStructuredJsonLoggingValidity:
 
         output = formatter.format(record)
 
-        # Must be valid JSON
         parsed = json.loads(output)
 
-        # Must contain all required fields
         required_fields = {"timestamp", "level", "logger", "message", "component"}
         assert required_fields.issubset(
             parsed.keys()
         ), f"Missing fields: {required_fields - set(parsed.keys())}"
 
-        # Field values must match expectations
         assert parsed["level"] == logging.getLevelName(level)
         assert parsed["logger"] == logger_name
         assert parsed["message"] == message
@@ -133,7 +116,6 @@ class TestStructuredJsonLoggingValidity:
         """
         formatter = StructuredJsonFormatter(component=component)
 
-        # Generate a real exception with traceback
         try:
             raise exc_type(exc_message)
         except Exception:
@@ -153,28 +135,19 @@ class TestStructuredJsonLoggingValidity:
 
         output = formatter.format(record)
 
-        # Must be valid JSON even with exception info
         parsed = json.loads(output)
 
-        # Must contain all required fields
         required_fields = {"timestamp", "level", "logger", "message", "component"}
         assert required_fields.issubset(
             parsed.keys()
         ), f"Missing fields: {required_fields - set(parsed.keys())}"
 
-        # Must also contain the exception field
         assert "exception" in parsed, "Exception field missing when exc_info is set"
         assert isinstance(parsed["exception"], str)
         assert len(parsed["exception"]) > 0
 
-        # Field values must match expectations
         assert parsed["message"] == message
         assert parsed["component"] == component
-
-
-# ---------------------------------------------------------------------------
-# Property 19: Alert webhook invocation on pipeline failure
-# ---------------------------------------------------------------------------
 
 
 class TestAlertWebhookInvocation:
@@ -234,14 +207,12 @@ class TestAlertWebhookInvocation:
 
             assert status == 200
 
-            # Verify the request was sent to the correct URL
             call_args = mock_urlopen.call_args
             request = call_args[0][0]
             assert request.full_url == webhook_url
             assert request.method == "POST"
             assert request.get_header("Content-type") == "application/json"
 
-            # Verify payload contains required fields
             payload = json.loads(request.data)
             assert payload["run_id"] == run_id
             assert payload["failed_component"] == failed_component
@@ -281,12 +252,10 @@ class TestAlertWebhookInvocation:
                 webhook_url=webhook_url,
             )
 
-            # Extract and validate the payload
             call_args = mock_urlopen.call_args
             request = call_args[0][0]
             payload = json.loads(request.data)
 
-            # Timestamp must be a valid ISO 8601 string
             from datetime import datetime
 
             ts = datetime.fromisoformat(payload["timestamp"])
@@ -305,7 +274,6 @@ class TestAlertWebhookInvocation:
 
         **Validates: Requirements 9.3**
         """
-        # Test with None URL and no env var
         with mock.patch.dict("os.environ", {}, clear=True):
             from probabilisticforecaster.kubeflow.monitoring.metrics import alert_webhook as aw
 

@@ -11,9 +11,6 @@ from hypothesis import strategies as st
 from deepqnetwork.replay_buffer import ReplayBuffer
 
 
-# Feature: deepqnetwork, Property 8: Replay buffer capacity invariant
-
-
 @settings(max_examples=100)
 @given(
     capacity=st.integers(min_value=1, max_value=500),
@@ -56,7 +53,7 @@ def test_replay_buffer_fifo_order_when_over_capacity(
 
     **Validates: Requirements 5.1, 5.2, 5.5**
     """
-    num_pushes = capacity + extra_pushes  # Guarantee N > C
+    num_pushes = capacity + extra_pushes
     buf = ReplayBuffer(capacity=capacity)
 
     for i in range(num_pushes):
@@ -64,8 +61,6 @@ def test_replay_buffer_fifo_order_when_over_capacity(
         next_state = np.full(state_dim, float(i + 1), dtype=np.float32)
         buf.push(state, i % 5, float(i) * 0.1, next_state, i % 2 == 0)
 
-    # Buffer should contain the most recent `capacity` transitions
-    # The oldest remaining transition should be at index (num_pushes - capacity)
     start_index = num_pushes - capacity
 
     ordered_states = buf._ordered_states()
@@ -102,14 +97,10 @@ def test_replay_buffer_never_exceeds_capacity(
         next_state = np.full(state_dim, float(i + 1), dtype=np.float32)
         buf.push(state, i % 5, float(i) * 0.1, next_state, i % 2 == 0)
 
-        # Check invariant after every push
         assert len(buf) <= capacity, (
             f"Buffer exceeded capacity after push {i + 1}: "
             f"size={len(buf)}, capacity={capacity}"
         )
-
-
-# Feature: deepqnetwork, Property 9: Replay buffer sample correctness
 
 
 @settings(max_examples=100)

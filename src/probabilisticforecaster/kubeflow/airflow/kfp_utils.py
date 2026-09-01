@@ -16,13 +16,11 @@ from kfp.client import Client
 
 logger = logging.getLogger(__name__)
 
-# KFP run statuses considered terminal
 _TERMINAL_SUCCEEDED = {"Succeeded", "Completed"}
 _TERMINAL_FAILED = {"Failed", "Error"}
 _TERMINAL_SKIPPED = {"Skipped"}
 _TERMINAL_STATUSES = _TERMINAL_SUCCEEDED | _TERMINAL_FAILED | _TERMINAL_SKIPPED
 
-# Status mapping: KFP status → Airflow task state
 _STATUS_MAP: dict[str, str] = {
     "Succeeded": "success",
     "Completed": "success",
@@ -31,10 +29,8 @@ _STATUS_MAP: dict[str, str] = {
     "Skipped": "skipped",
 }
 
-# Default KFP host (in-cluster service address)
 DEFAULT_KFP_HOST = "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
-# Polling interval in seconds
 _POLL_INTERVAL_SECONDS = 60
 
 
@@ -214,15 +210,12 @@ class KFPTrigger:
                 for p in (run.pipeline_spec.parameters or [])
             }
 
-            # Only interested in scratch retrain runs
             if params.get("training_mode") != "scratch":
                 continue
 
-            # Must match the current symbol
             if params.get("symbol") != self._current_symbol:
                 continue
 
-            # Block if run is still active (regardless of creation date)
             if run.run.status in ("Running", "Pending"):
                 logger.info(
                     "Active scratch retrain found for %s (run_id=%s, status=%s)",
@@ -232,7 +225,6 @@ class KFPTrigger:
                 )
                 return True
 
-            # Block if a scratch run was created today (completed or failed)
             created = run.created_at.strftime("%Y-%m-%d")
             if created == date_str:
                 logger.info(

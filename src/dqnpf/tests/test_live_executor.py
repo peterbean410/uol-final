@@ -116,7 +116,6 @@ def test_error_counter_resets_on_success():
         max_steps=4,
     )
 
-    # 2 failed iterations then 4 successful ones; no abort.
     assert steps == 4
     assert len(env.step_calls) == 4
 

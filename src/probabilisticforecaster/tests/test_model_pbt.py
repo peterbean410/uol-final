@@ -13,10 +13,6 @@ from probabilisticforecaster.config import ForecasterConfig
 from probabilisticforecaster.model import ProbabilisticTransformer
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 SEQ_LEN = 36
 NUM_FEATURES = 16
 
@@ -29,11 +25,9 @@ def valid_input_tensors(draw):
     """
     batch_size = draw(st.integers(min_value=1, max_value=4))
 
-    # Choose a value range strategy to cover diverse inputs
     range_type = draw(st.sampled_from(["normal", "zeros", "negatives", "large", "mixed"]))
 
     if range_type == "normal":
-        # Typical z-score-like values
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -45,10 +39,8 @@ def valid_input_tensors(draw):
             )
         )
     elif range_type == "zeros":
-        # All zeros
         arr = np.zeros((batch_size, SEQ_LEN, NUM_FEATURES), dtype=np.float32)
     elif range_type == "negatives":
-        # All negative values (use float32-representable boundary)
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -60,7 +52,6 @@ def valid_input_tensors(draw):
             )
         )
     elif range_type == "large":
-        # Large magnitude values
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -71,8 +62,7 @@ def valid_input_tensors(draw):
                 ),
             )
         )
-    else:  # mixed
-        # Mix of different ranges
+    else:
         arr = draw(
             arrays(
                 dtype=np.float32,
@@ -107,11 +97,6 @@ def causal_mask_input_tensors(draw):
         )
     )
     return torch.from_numpy(arr)
-
-
-# ---------------------------------------------------------------------------
-# Property 5: Causal Mask Prevents Future Information Leakage
-# ---------------------------------------------------------------------------
 
 
 class TestCausalMaskPreventsFutureLeakage:
@@ -149,19 +134,15 @@ class TestCausalMaskPreventsFutureLeakage:
         5. Assert that mu1[:, :t+1, :] == mu2[:, :t+1, :] and
            sigma1[:, :t+1, :] == sigma2[:, :t+1, :]
         """
-        # Create model in eval mode (no dropout randomness)
         torch.manual_seed(seed)
         config = ForecasterConfig()
         model = ProbabilisticTransformer(config)
         model.eval()
 
         with torch.no_grad():
-            # Run model on original input
             mu1, sigma1 = model(data)
 
-            # Create a modified copy with different values at positions > t
             modified_data = data.clone()
-            # Fill future positions with completely different random values
             rng = torch.Generator()
             rng.manual_seed(seed + 1)
             future_noise = torch.randn(
@@ -169,10 +150,8 @@ class TestCausalMaskPreventsFutureLeakage:
             ) * 10.0
             modified_data[:, t + 1 :, :] = future_noise
 
-            # Run model on modified input
             mu2, sigma2 = model(modified_data)
 
-        # Outputs at positions <= t should be identical
         assert torch.allclose(
             mu1[:, : t + 1, :], mu2[:, : t + 1, :], atol=1e-6, rtol=1e-5
         ), (
@@ -185,11 +164,6 @@ class TestCausalMaskPreventsFutureLeakage:
             f"sigma output at positions 0..{t} changed when future positions were modified. "
             f"Max diff: {(sigma1[:, :t+1, :] - sigma2[:, :t+1, :]).abs().max().item()}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Property 6: Model Output Shape Invariant
-# ---------------------------------------------------------------------------
 
 
 class TestModelOutputShapeInvariant:
@@ -212,7 +186,6 @@ class TestModelOutputShapeInvariant:
         model = ProbabilisticTransformer(config)
         model.eval()
 
-        # Generate random input tensor of shape (B, 36, 16)
         x = torch.randn(batch_size, SEQ_LEN, NUM_FEATURES)
 
         with torch.no_grad():
@@ -224,11 +197,6 @@ class TestModelOutputShapeInvariant:
         assert sigma.shape == (batch_size, SEQ_LEN, 1), (
             f"Expected sigma shape ({batch_size}, 36, 1), got {sigma.shape}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Property 7: Sigma Strictly Positive
-# ---------------------------------------------------------------------------
 
 
 class TestSigmaStrictlyPositive:
@@ -254,7 +222,6 @@ class TestSigmaStrictlyPositive:
         with torch.no_grad():
             mu, sigma = model(x)
 
-        # All sigma values must be strictly positive
         assert torch.all(sigma > 0), (
             f"Sigma contains non-positive values. "
             f"Min sigma: {sigma.min().item()}, "

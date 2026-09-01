@@ -112,10 +112,7 @@ impl TradeLogger {
             .lock()
             .map_err(|_| anyhow::anyhow!("trade-log writer mutex poisoned"))?;
         writer.write_all(&line).context("writing trade-log record")?;
-        // Flush every line so the file stays current for tailing/debugging even
-        // if the server is killed; trade events are far too infrequent for the
-        // syscall overhead to matter.
-        writer.flush().context("flushing trade log")?;
+                                writer.flush().context("flushing trade log")?;
         Ok(())
     }
 }
@@ -208,8 +205,7 @@ mod tests {
     #[test]
     fn fill_and_close_round_trip_into_jsonl() {
         let dir = tempfile::tempdir().unwrap();
-        // Nested path also exercises parent-directory creation.
-        let path = dir
+                let path = dir
             .path()
             .join("logs/trades.jsonl")
             .to_str()
@@ -237,7 +233,7 @@ mod tests {
             realised_pnl: 0.4,
             swap: -0.01,
             open_timestamp_ns: 1_700_000_000_000_000_000,
-            close_timestamp_ns: 1_700_000_060_000_000_000, // +60s
+            close_timestamp_ns: 1_700_000_060_000_000_000,
         };
         logger.log_close("USDJPY", &closed);
 
@@ -254,8 +250,7 @@ mod tests {
         let lines = read_lines(&path);
         assert_eq!(lines.len(), 3, "expected one line per event");
 
-        // Line 0: opening fill.
-        assert_eq!(lines[0]["type"], "fill");
+                assert_eq!(lines[0]["type"], "fill");
         assert_eq!(lines[0]["event"], "open");
         assert_eq!(lines[0]["symbol"], "USDJPY");
         assert_eq!(lines[0]["order_id"], "USDJPY-1");
@@ -265,8 +260,7 @@ mod tests {
         assert_eq!(lines[0]["timestamp_ns"], 1_700_000_000_000_000_000_i64);
         assert!(lines[0]["iso_time"].as_str().unwrap().starts_with("2023-11-14T"));
 
-        // Line 1: close record with realised PnL and derived fields.
-        assert_eq!(lines[1]["type"], "close");
+                assert_eq!(lines[1]["type"], "close");
         assert_eq!(lines[1]["position_id"], "pos-1");
         assert_eq!(lines[1]["side"], "buy");
         assert_eq!(lines[1]["entry_price"], 150.123);
@@ -279,8 +273,7 @@ mod tests {
         );
         assert_eq!(lines[1]["hold_seconds"], 60.0);
 
-        // Line 2: closing fill on the opposite side.
-        assert_eq!(lines[2]["type"], "fill");
+                assert_eq!(lines[2]["type"], "fill");
         assert_eq!(lines[2]["event"], "close");
         assert_eq!(lines[2]["side"], "sell");
     }
@@ -299,8 +292,7 @@ mod tests {
             partial: false,
         };
 
-        // Two separate logger lifetimes (e.g. server restart) must not truncate.
-        TradeLogger::open(&path).unwrap().log_fill("USDJPY", FillEvent::Open, &fill);
+                TradeLogger::open(&path).unwrap().log_fill("USDJPY", FillEvent::Open, &fill);
         TradeLogger::open(&path).unwrap().log_fill("USDJPY", FillEvent::Open, &fill);
 
         assert_eq!(read_lines(&path).len(), 2, "second open must append, not truncate");

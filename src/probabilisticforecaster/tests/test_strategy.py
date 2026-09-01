@@ -56,24 +56,18 @@ class TestMeanVarianceStrategy:
 
     def test_basic_computation(self, config: ForecasterConfig):
         """π* = μ / (σ² × γ) with known values."""
-        # μ=0.001, σ=0.01, γ=0.05
-        # π* = 0.001 / (0.0001 × 0.05) = 0.001 / 0.000005 = 200 → clipped to 1
         strategy = MeanVarianceStrategy()
         position = strategy.compute_position(0.001, 0.01, config)
-        assert position == 10_000_000  # clipped to max
+        assert position == 10_000_000
 
     def test_negative_mu_gives_short(self, config: ForecasterConfig):
         """Negative μ̂ should produce negative position."""
-        # μ=-0.001, σ=0.01, γ=0.05
-        # π* = -0.001 / (0.0001 × 0.05) = -200 → clipped to -1
         strategy = MeanVarianceStrategy()
         position = strategy.compute_position(-0.001, 0.01, config)
         assert position == -10_000_000
 
     def test_partial_position(self, config: ForecasterConfig):
         """When π* is between -1 and 1, position should be fractional."""
-        # μ=0.0001, σ=0.1, γ=0.05
-        # π* = 0.0001 / (0.01 × 0.05) = 0.0001 / 0.0005 = 0.2
         strategy = MeanVarianceStrategy()
         position = strategy.compute_position(0.0001, 0.1, config)
         assert position == pytest.approx(0.2 * 10_000_000)
@@ -98,16 +92,12 @@ class TestMeanVarianceStrategy:
 
     def test_custom_risk_aversion(self, config: ForecasterConfig):
         """Custom γ should override config.risk_aversion."""
-        # μ=0.0001, σ=0.1, γ=0.01
-        # π* = 0.0001 / (0.01 × 0.01) = 0.0001 / 0.0001 = 1.0
         strategy = MeanVarianceStrategy(risk_aversion=0.01)
         position = strategy.compute_position(0.0001, 0.1, config)
         assert position == pytest.approx(1.0 * 10_000_000)
 
     def test_risk_aversion_0_1(self, config: ForecasterConfig):
         """γ=0.1 should produce smaller positions than γ=0.05."""
-        # μ=0.0001, σ=0.1, γ=0.1
-        # π* = 0.0001 / (0.01 × 0.1) = 0.0001 / 0.001 = 0.1
         strategy = MeanVarianceStrategy(risk_aversion=0.1)
         position = strategy.compute_position(0.0001, 0.1, config)
         assert position == pytest.approx(0.1 * 10_000_000)
@@ -115,14 +105,12 @@ class TestMeanVarianceStrategy:
     def test_clipping_upper_bound(self, config: ForecasterConfig):
         """Position should never exceed +position_size."""
         strategy = MeanVarianceStrategy()
-        # Very large mu relative to sigma should clip to +1
         position = strategy.compute_position(1.0, 0.001, config)
         assert position == 10_000_000
 
     def test_clipping_lower_bound(self, config: ForecasterConfig):
         """Position should never be below -position_size."""
         strategy = MeanVarianceStrategy()
-        # Very negative mu relative to sigma should clip to -1
         position = strategy.compute_position(-1.0, 0.001, config)
         assert position == -10_000_000
 

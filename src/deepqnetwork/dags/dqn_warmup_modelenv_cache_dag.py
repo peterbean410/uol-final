@@ -35,10 +35,6 @@ _IMAGE_PULL_SECRET = "peterbean-ecr-credentials"
 _SERVICE_ACCOUNT = "default-editor"
 _S3_SECRET_NAME = "s3-secrets"
 
-# Wrapper script: launch modelenv-server in the background, tail its log
-# for the preload-complete marker, then SIGTERM it. Returning 0 here is
-# what marks the warmup as a success; if modelenv dies before printing the
-# marker we dump its log and exit non-zero so the DAG run fails loudly.
 _WARMUP_SCRIPT = r"""
 set -eu
 
@@ -102,17 +98,14 @@ def _normalise_snapshot_ts(value: str) -> str:
     if not value:
         return ""
 
-    # Plain digits, second-precision or nanosecond-precision epoch.
     if value.lstrip("-").isdigit():
         as_int = int(value)
-        # Treat 10-digit values as seconds, 13-digit as ms, ≥16-digit as ns.
         if len(str(abs(as_int))) <= 10:
             as_int *= 1_000_000_000
         elif len(str(abs(as_int))) <= 13:
             as_int *= 1_000_000
         return str(as_int)
 
-    # ISO-ish date or datetime.
     from datetime import datetime, timezone
 
     iso = value
@@ -152,10 +145,6 @@ def _warmup_modelenv_cache(**context):
     batch = client.BatchV1Api()
     core = client.CoreV1Api()
 
-    # Unique Job name per Airflow task attempt. Hashing the run_id (full
-    # ISO timestamp) plus the try_number guarantees we don't collide with
-    # a prior failed Job that hasn't been GC'd yet, Airflow run_ids alone
-    # are stable across retries of the same task instance.
     ti = context.get("ti") or context.get("task_instance")
     try_number = getattr(ti, "try_number", 1) if ti is not None else 1
     key = f"{context['run_id']}|{try_number}"
@@ -224,8 +213,6 @@ def _warmup_modelenv_cache(**context):
                         "symbol": symbol.lower(),
                     },
                     annotations={
-                        # Skip Istio sidecar; this pod doesn't need mesh
-                        # routing and the sidecar adds startup latency.
                         "sidecar.istio.io/inject": "false",
                     },
                 ),
@@ -297,29 +284,16 @@ default_args = {
 with DAG(
     dag_id="dqn_warmup_modelenv_cache",
     start_date=datetime(2026, 5, 21),
-    schedule=None,  # Manual trigger only, runs on demand.
+    schedule=None,
     default_args=default_args,
     catchup=False,
     tags=["dqn", "kubernetes", "warmup", "cache"],
     params={
-        # Trading symbol to preload. modelenv-server's --symbol arg.
         "symbol": "USDJPY",
-        # S3 bucket / prefix backing the market data.
         "s3_prefix": "s3://prod-fintech-forex-sg-731833471586",
-        # Optional: pin a specific price snapshot timestamp. Accepts ISO
-        # 8601 ("2012-12-31" or "2012-12-31T00:00:00+00:00"), seconds
-        # epoch (10-digit), milliseconds epoch (13-digit), or nanoseconds
-        # epoch (≥16-digit). Empty string = latest available.
         "price_snapshot_ts": "",
-        # Override the image if you need to warm against a non-:latest tag.
         "image": _DEFAULT_IMAGE,
-        # Modelenv preload deadline inside the pod (seconds). The pod
-        # itself watches the log for the completion marker; this is a
-        # safety cap to avoid runaway runs.
         "warmup_timeout_seconds": 3600,
-        # Airflow-side poll timeout (seconds). Should be greater than
-        # warmup_timeout_seconds so the pod gets to surface its own
-        # failure before the DAG declares it stuck.
         "poll_timeout_seconds": 4200,
     },
 ) as dag:

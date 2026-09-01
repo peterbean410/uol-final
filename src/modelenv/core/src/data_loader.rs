@@ -1,5 +1,3 @@
-// Data loader module for loading price bars from S3 parquet files.
-// Build marker: 3e00af0-retrigger-modelenv-build
 use anyhow::{anyhow, Result};
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
@@ -89,10 +87,6 @@ const EOD_NEWS_SNAPSHOT_BRANCH: &str = "marketdata/eod-news-snapshot";
 const SOURCE_SELECTION_LOOKBACK_NS: i64 = 31 * 24 * 60 * 60 * 1_000_000_000;
 const CACHE_DOWNLOAD_LOCK_STALE_SECS: u64 = 5 * 60;
 const CACHE_DOWNLOAD_LOCK_POLL_MS: u64 = 250;
-// Wall-clock ceiling for a single `aws s3 cp` of one parquet partition. Without
-// it a stalled S3 connection makes the download hang forever, which blocks the
-// Reset RPC and (with no client deadline) the whole backtest, see T-14.1-07.
-// Partitions are small (MBs); 5 min is a generous ceiling that still fails fast.
 const CACHE_DOWNLOAD_TIMEOUT_SECS: u64 = 5 * 60;
 /// Retry `aws s3 cp` on transient failures (urllib3 `IncompleteRead` /
 /// "Connection broken" mid-transfer, invoke error, or timeout). A 404/HeadObject
@@ -445,12 +439,7 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
 ) -> Result<Vec<Tick>> {
     let schedule = tick_source_schedule(source_uri);
     let sources = if let Some(snapshot_ts) = snapshot_selection_timestamp_ns {
-        // When a time range is given, list real S3 keys under the prefix and
-        // filter to the range. Avoids the per-missing-hour ``aws s3 cp``
-        // round-trip that the previous speculative URI generator incurred,
-        // critical for ticks where ~48 hours every weekend are guaranteed
-        // missing and were each costing a slow point lookup.
-        if let (Some(start_ns), Some(end_ns)) = (start_timestamp_ns, end_timestamp_ns) {
+                                                if let (Some(start_ns), Some(end_ns)) = (start_timestamp_ns, end_timestamp_ns) {
             list_existing_s3_parquet_sources_in_range(
                 source_uri,
                 schedule,
@@ -496,8 +485,7 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
             } else {
                 None
             };
-        // Try local cache; if no sources match the time range, fall back to S3
-        let selected_from_cache = if let Some(local_sources) = local_cached_sources {
+                let selected_from_cache = if let Some(local_sources) = local_cached_sources {
             let selected = if let Some(start_timestamp_ns) = start_timestamp_ns {
                 let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
                 if effective_end_ns < start_timestamp_ns {
@@ -545,7 +533,7 @@ pub(crate) async fn load_ticks_from_parquet_with_range_cached_from_local_cache_d
                 .await;
                 Some(selected)
             } else {
-                None // fall through to S3
+                None
             }
         } else {
             None
@@ -769,7 +757,7 @@ async fn try_select_from_local_cache(
                 .await;
             Ok(Some(selected))
         }
-        Err(_) => Ok(None), // local cache doesn't cover this range, fall back to S3
+        Err(_) => Ok(None),
     }
 }
 
@@ -916,8 +904,7 @@ async fn collect_ticks_from_sources(
 
     let mut ticks = Vec::new();
 
-    // First drain the in-memory cache hits (cheap, sequential).
-    let mut pending: Vec<String> = Vec::with_capacity(sources.len());
+        let mut pending: Vec<String> = Vec::with_capacity(sources.len());
     for source in sources {
         if let Some(cached_ticks) = cache.tick_items(&source).await {
             ticks.extend(cached_ticks);
@@ -926,8 +913,7 @@ async fn collect_ticks_from_sources(
         }
     }
 
-    // Download + parse the cache-miss sources in parallel.
-    let mut stream = futures::stream::iter(pending.into_iter().map(|source| async move {
+        let mut stream = futures::stream::iter(pending.into_iter().map(|source| async move {
         let bytes = try_read_bytes_from_source(local_cache_dir, &source).await?;
         let parsed = match bytes {
             Some(b) => Some(parse_ticks_from_bytes(b, symbol, i64::MAX)?),
@@ -1062,8 +1048,7 @@ fn parse_bars_from_bytes(
         for i in 0..batch.num_rows() {
             let bar = parse_bar_from_batch(&batch, i)?;
 
-            // Stop loading if we've passed the end timestamp
-            if bar.timestamp_ns > end_timestamp_ns {
+                        if bar.timestamp_ns > end_timestamp_ns {
                 return Ok(bars);
             }
 
@@ -1272,16 +1257,7 @@ fn speculative_price_snapshot_source_uri(
     snapshot_selection_timestamp_ns: i64,
 ) -> String {
     let dt = Utc.timestamp_nanos(snapshot_selection_timestamp_ns);
-    // EOM monthly snapshots are named at the START of the month AFTER the one
-    // they cover; the producer writes the "end of month M" snapshot at start
-    // of M+1, with the contained bar timestamped at start of M (verified
-    // against year=2012/month=02/20120201T000000Z.parquet which holds the
-    // bar timestamped 2012-01-01). For a mid-month cursor we therefore align
-    // UP to the next month boundary so we hit the file that actually contains
-    // month M's completed bar. Hourly / daily / weekly producers are
-    // forward-looking (file at T contains bar opening at T), so align_down
-    // stays correct for those cadences.
-    let aligned = match schedule.cadence {
+                                        let aligned = match schedule.cadence {
         ExecutionCadence::Monthly => align_up_execution_dt(dt, schedule.cadence),
         _ => align_down_execution_dt(dt, schedule.cadence),
     };
@@ -1333,8 +1309,7 @@ async fn determine_s3_sources_cached(
                 return Ok(selected);
             }
         }
-        // local cache doesn't cover this time range, fall through to S3 listing
-    }
+            }
 
     if let Some(start_timestamp_ns) = start_timestamp_ns {
         let effective_end_ns = end_timestamp_ns.unwrap_or_else(now_ns);
@@ -1347,10 +1322,7 @@ async fn determine_s3_sources_cached(
             ));
         }
 
-        // List existing parquet keys once and filter to the range, rather
-        // than fabricating an exhaustive hour-by-hour speculative URI list
-        // that would trigger an ``aws s3 cp`` per missing partition.
-        return list_existing_s3_parquet_sources_in_range(
+                                return list_existing_s3_parquet_sources_in_range(
             source_uri,
             schedule,
             start_timestamp_ns,
@@ -2082,21 +2054,13 @@ async fn ensure_local_cached_s3_source(
             .await
         {
             Ok(mut lock_file) => {
-                // Write our PID into the lock file so other waiters can
-                // detect a dead owner (server crash / OOM) instantly via
-                // kill(0) instead of waiting for the mtime-based timeout.
-                let pid = std::process::id();
+                                                                let pid = std::process::id();
                 let _ = lock_file
                     .write_all(format!("{}\n", pid).as_bytes())
                     .await;
                 let _ = lock_file.flush().await;
                 drop(lock_file);
-                // Spawn the download into a detached task so the lock is
-                // cleaned up even if the caller's future is cancelled (e.g.
-                // gRPC client timeout).  Dropping a tokio JoinHandle does
-                // NOT abort the spawned task; it keeps running to
-                // completion, so the lock file is always removed.
-                let local = local_path.clone();
+                                                                                                let local = local_path.clone();
                 let src = source_uri.to_string();
                 let lock = lock_path.clone();
                 let handle = tokio::spawn(async move {
@@ -2176,11 +2140,7 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
         partition,
         local_path.display()
     );
-    // Download with retry on transient failures (see CACHE_DOWNLOAD_MAX_ATTEMPTS).
-    // kill_on_drop ensures a child that exceeds the timeout is reaped (the
-    // timed-out `output()` future drops the Child, which kills the process)
-    // rather than leaking an orphaned `aws` process.
-    let mut attempt: u32 = 1;
+                    let mut attempt: u32 = 1;
     loop {
         let mut cmd = Command::new("aws");
         cmd.arg("s3")
@@ -2198,8 +2158,7 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
             Ok(Ok(output)) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 remove_file_if_exists(&temp_path).await?;
-                // A genuinely missing source is terminal, do not retry.
-                if stderr.contains("404")
+                                if stderr.contains("404")
                     || stderr.contains("Not Found")
                     || stderr.contains("HeadObject")
                 {
@@ -2272,21 +2231,16 @@ async fn download_s3_source_to_local_cache(source_uri: &str, local_path: &Path) 
 
 #[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
-    // kill(pid, 0) does not send a signal; it only checks whether the
-    // process exists and the caller has permission to signal it.
-    // Returns 0 if alive, -1 with ESRCH if the PID is gone.
-    unsafe { libc::kill(pid, 0) == 0 }
+                unsafe { libc::kill(pid, 0) == 0 }
 }
 
 #[cfg(not(unix))]
 fn pid_alive(_pid: i32) -> bool {
-    true // can't check on non-unix; fall through to mtime
+    true
 }
 
 async fn cache_download_lock_is_stale(lock_path: &Path) -> Result<bool> {
-    // If the lock file contains a PID and that process is no longer
-    // alive (server crash / OOM), the lock is immediately stale.
-    if let Ok(content) = tokio::fs::read_to_string(lock_path).await {
+            if let Ok(content) = tokio::fs::read_to_string(lock_path).await {
         if let Ok(pid) = content.trim().parse::<i32>() {
             if !pid_alive(pid) {
                 info!(
@@ -2352,19 +2306,14 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
 /// Parse timestamp from parquet data (handles both nanosecond and millisecond formats)
 pub fn parse_timestamp(value: &arrow::array::Int64Array, index: usize) -> i64 {
     let ts = value.value(index);
-    // Normalise to nanoseconds.  Timestamps from 2020–2026 are roughly:
-    //   seconds:      ~1.6e9      (< 1e10)
-    //   milliseconds: ~1.6e12     (1e10 .. 1e14)
-    //   microseconds: ~1.6e15     (1e14 .. 1e17)
-    //   nanoseconds:  ~1.6e18     (>= 1e17)
-    if ts < 10_000_000_000 {
-        ts * 1_000_000_000 // seconds → ns
+                        if ts < 10_000_000_000 {
+        ts * 1_000_000_000
     } else if ts < 100_000_000_000_000 {
-        ts * 1_000_000 // milliseconds → ns
+        ts * 1_000_000
     } else if ts < 1_000_000_000_000_000_000 {
-        ts * 1_000 // microseconds → ns
+        ts * 1_000
     } else {
-        ts // already nanoseconds
+        ts
     }
 }
 
@@ -2401,8 +2350,7 @@ pub fn parse_bar_from_batch(batch: &RecordBatch, index: usize) -> Result<Bar> {
     let close = column_by_name_case_insensitive(batch, "close")
         .ok_or_else(|| anyhow!("Missing close column"))?;
 
-    // Volume is optional - default to 0.0 if missing
-    let volume = column_by_name_case_insensitive(batch, "volume")
+        let volume = column_by_name_case_insensitive(batch, "volume")
         .map(|value| {
             if let Some(value) = value.as_any().downcast_ref::<arrow::array::Float64Array>() {
                 value.value(index)
@@ -2425,9 +2373,7 @@ pub fn parse_bar_from_batch(batch: &RecordBatch, index: usize) -> Result<Bar> {
         .as_any()
         .downcast_ref::<arrow::array::TimestampNanosecondArray>()
     {
-        // The column name says nanoseconds but the actual values may be
-        // micro- or milliseconds.  Normalise via the same heuristic.
-        let raw = arr.value(index);
+                        let raw = arr.value(index);
         if raw < 10_000_000_000 {
             raw * 1_000_000_000
         } else if raw < 100_000_000_000_000 {
@@ -3066,9 +3012,7 @@ mod tests {
 
     #[test]
     fn monthly_speculative_snapshot_key_aligns_up_to_next_month() {
-        // 2012-01-05T23:00 UTC mid-month; the EOM file holding January's
-        // completed bar is named at start-of-February (the producer convention).
-        let mid_january_ns = 1_325_804_400_000_000_000_i64;
+                        let mid_january_ns = 1_325_804_400_000_000_000_i64;
         let key = speculative_price_snapshot_source_uri(
             "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1",
             interval_schedule("MN").unwrap(),
@@ -3082,9 +3026,7 @@ mod tests {
 
     #[test]
     fn monthly_speculative_snapshot_key_at_month_boundary_is_idempotent() {
-        // Cursor exactly at start-of-month February, already aligned, so the
-        // URI stays at year=2012/month=02 (holds January's bar). No skip to March.
-        let feb_first_ns = 1_328_054_400_000_000_000_i64; // 2012-02-01T00:00 UTC
+                        let feb_first_ns = 1_328_054_400_000_000_000_i64;
         let key = speculative_price_snapshot_source_uri(
             "s3://bucket/marketdata/eom-snapshot/symbol=USDJPY/interval=MN1",
             interval_schedule("MN").unwrap(),

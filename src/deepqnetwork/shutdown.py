@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Map signal numbers to human-readable names
 _SIGNAL_NAMES = {
     signal.SIGINT: "SIGINT",
     signal.SIGTERM: "SIGTERM",
@@ -90,7 +89,6 @@ class GracefulShutdown:
             signum: The signal number received (SIGINT or SIGTERM).
             frame: The current stack frame (unused).
         """
-        # Non-reentrant guard: ignore if already shutting down
         if self._shutting_down:
             return
 
@@ -100,18 +98,14 @@ class GracefulShutdown:
         signal_name = _SIGNAL_NAMES.get(signum, f"signal {signum}")
         logger.info("Received %s, initiating graceful shutdown...", signal_name)
 
-        # Save final checkpoint
         self._save_final_checkpoint()
 
-        # Close gRPC channel
         self._close_grpc_channel()
 
-        # Flush all log handlers
         self._flush_logs()
 
         logger.info("Shutdown complete (reason: %s)", signal_name)
 
-        # Flush again after the final log message
         self._flush_logs()
 
     def check_shutdown(self) -> bool:

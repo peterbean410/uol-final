@@ -92,9 +92,6 @@ with DAG(
         get_logs=True,
     )
 
-    # Demo account token (ctrader-secrets-demo), used by the modelenv-demo
-    # deployment. Same refresh flow as the live secret, pointed at the demo
-    # credentials; the demo token was previously not refreshed and expired.
     refresh_ctrader_demo_secret = KubernetesPodOperator(
         task_id="refresh_ctrader_demo_secret",
         name="refresh-ctrader-demo-secret",

@@ -35,7 +35,6 @@ import grpc
 import numpy as np
 import torch
 
-# Add parent paths so we can import the deepqnetwork package
 sys.path.insert(0, "/app")
 
 from deepqnetwork.advisor import DQNAdvisor
@@ -44,63 +43,35 @@ from deepqnetwork.kubeflow.pipeline.config_schema import DQNPipelineConfig
 from deepqnetwork.swap_rates import resolve_swap_rates
 from probabilisticforecaster.kubeflow.monitoring.metrics import get_logger
 
-# Import gRPC stubs (available via PYTHONPATH from base image)
 import environment_pb2
 import environment_pb2_grpc
 
 logger = get_logger(__name__, component="dqn_backtest")
 
-# S3 bucket for artifacts
 S3_BUCKET = os.environ.get("S3_BUCKET", "prod-fintech-forex-sg-731833471586")
 
-# Modelenv sidecar configuration
 MODELENV_BINARY = "/usr/local/bin/modelenv-server"
 MODELENV_HOST = "localhost"
 MODELENV_PORT = 50051
-# Seconds to wait for modelenv's startup preload. Must cover a cold tick
-# download for the whole eval window (~1 file/s): a one-quarter eval window is
-# ~1,500 hourly files, and 60s killed a healthy sidecar mid-preload right after
-# the adhoc20260720 15h training run finished (run efacd8c9). Mirrors the
-# training component's fix; env-overridable.
 MODELENV_HEALTH_CHECK_TIMEOUT = int(
     os.environ.get("MODELENV_HEALTH_CHECK_TIMEOUT", "3600")
 )
-MODELENV_HEALTH_CHECK_INTERVAL = 1  # seconds
-MODELENV_SHUTDOWN_TIMEOUT = 10  # seconds
+MODELENV_HEALTH_CHECK_INTERVAL = 1
+MODELENV_SHUTDOWN_TIMEOUT = 10
 
-# Emit the per-step progress/diagnostic logs only every Nth step to bound log
-# volume. A hang is still localised to the [k*N, (k+1)*N) step window, and the
-# in-flight operation is named by whichever marker (advisor vs Step) fired last.
-STEP_LOG_INTERVAL = 500  # steps
+STEP_LOG_INTERVAL = 500
 
-# Per-RPC deadlines (seconds) on the modelenv gRPC calls. Defense-in-depth: a
-# call with no deadline blocks forever if the server stalls (this is what turned
-# a transient modelenv hiccup into a 29h hang, see T-14.1-07). With a deadline
-# the call fails fast with DeadlineExceeded, which fails the component and lets
-# KFP retry it. Reset is generous because the first episode does an S3/parquet
-# load that can be slow on a cold cache; Step/ReferenceData are sub-second in
-# practice so their ceilings are loose.
 GRPC_RESET_TIMEOUT_S = 600
 GRPC_STEP_TIMEOUT_S = 120
 GRPC_REFERENCE_TIMEOUT_S = 120
 
-# ReferenceData carries session_realised_pnl; the real money figure the
-# degradation gate promotes on. On a transient RpcError, retry a few times with
-# linear backoff; if it still fails, FAIL the episode (raise) rather than fall
-# back to a reward-derived proxy. total_reward is a clipped, penalty-laden,
-# reward_scale'd function of PnL that can differ from realised P&L in magnitude
-# AND sign, so substituting it would silently feed the gate a wrong number (the
-# same class of hazard as the gate bug that auto-promoted a degenerate model).
 GRPC_REFERENCE_MAX_ATTEMPTS = 3
 GRPC_REFERENCE_RETRY_BACKOFF_S = 2
 
-# Degradation gate thresholds (from DQNPipelineConfig / thesis)
 DEFAULT_SHARPE_DEGRADATION_THRESHOLD = 0.1
-DEFAULT_SHARPE_ABSOLUTE_THRESHOLD = 1.0  # Must beat buy & hold baseline
-DEFAULT_PNL_ABSOLUTE_THRESHOLD = 0.0  # Must be profitable
+DEFAULT_SHARPE_ABSOLUTE_THRESHOLD = 1.0
+DEFAULT_PNL_ABSOLUTE_THRESHOLD = 0.0
 
-# Annualisation factor for Sharpe ratio (assuming 5-second steps, ~252 trading days)
-# Episodes per year approximation for annualised Sharpe
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -127,14 +98,6 @@ class ModelenvSidecar:
         )
 
         try:
-            # Inherit the parent's stdout/stderr (do NOT use subprocess.PIPE).
-            # modelenv logs continuously to stderr; the parent does not drain
-            # those pipes during the run (it only read them on stop), so once
-            # ~64 KB accumulated the kernel pipe buffer filled and modelenv's
-            # next log write blocked forever, deadlocking the server mid-Reset
-            # and hanging the whole backtest at 0 CPU. Inheriting the parent fds
-            # streams modelenv's logs straight to the pod console (visible in
-            # `kubectl logs`) and removes the deadlock entirely.
             self._process = subprocess.Popen(
                 [MODELENV_BINARY],
                 stdout=None,
@@ -176,14 +139,12 @@ class ModelenvSidecar:
         deadline = time.time() + MODELENV_HEALTH_CHECK_TIMEOUT
 
         while time.time() < deadline:
-            # Check if process has exited prematurely
             if self._process is not None and self._process.poll() is not None:
                 raise RuntimeError(
                     f"modelenv sidecar exited prematurely with code "
                     f"{self._process.returncode}. See pod logs for modelenv output."
                 )
 
-            # Try TCP connection to the gRPC port
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(1.0)
@@ -201,7 +162,6 @@ class ModelenvSidecar:
 
             time.sleep(MODELENV_HEALTH_CHECK_INTERVAL)
 
-        # Timeout reached
         raise RuntimeError(
             f"modelenv sidecar did not become ready within "
             f"{MODELENV_HEALTH_CHECK_TIMEOUT}s. See pod logs for modelenv output."
@@ -220,7 +180,6 @@ class ModelenvSidecar:
         pid = self._process.pid
         logger.info("Stopping modelenv sidecar", extra={"pid": pid})
 
-        # Send SIGTERM for graceful shutdown
         try:
             self._process.send_signal(signal.SIGTERM)
         except OSError as e:
@@ -230,7 +189,6 @@ class ModelenvSidecar:
             )
             return
 
-        # Wait for graceful shutdown
         try:
             self._process.wait(timeout=MODELENV_SHUTDOWN_TIMEOUT)
             logger.info(
@@ -238,7 +196,6 @@ class ModelenvSidecar:
                 extra={"pid": pid, "returncode": self._process.returncode},
             )
         except subprocess.TimeoutExpired:
-            # Force kill if graceful shutdown fails
             logger.warning(
                 "modelenv sidecar did not stop gracefully, sending SIGKILL",
                 extra={"pid": pid},
@@ -248,9 +205,6 @@ class ModelenvSidecar:
                 self._process.wait(timeout=5)
             except (OSError, subprocess.TimeoutExpired):
                 pass
-
-        # modelenv's own stdout/stderr stream directly to the pod console
-        # (it inherits the parent fds), so there is nothing to capture here.
 
 
 @dataclass
@@ -346,7 +300,6 @@ def run_evaluation_episode(
     Returns:
         EpisodeResult with reward, P&L, steps, and trade statistics.
     """
-    # Reset the environment
     reset_request = environment_pb2.ResetRequest(
         symbol=symbol,
         episode_start_ts=episode_start_ts,
@@ -354,9 +307,6 @@ def run_evaluation_episode(
         seed=episode_seed,
         step_size_seconds=step_size_seconds,
     )
-    # Log before/after every blocking gRPC call so that, if the component
-    # hangs, the last emitted log line deterministically identifies which
-    # operation is stuck (Reset vs Step vs ReferenceData) and at which step.
     logger.info(
         "Reset: calling env_stub.Reset",
         extra={
@@ -384,29 +334,22 @@ def run_evaluation_episode(
     winning_trades = 0
     cumulative_pnl = 0.0
 
-    # Extract initial state vector from observation
     state = np.array(observation.state_data[0].values, dtype=np.float32)
 
     while not observation.done and num_steps < max_steps:
-        # Throttle the per-step diagnostic logs to every Nth step.
         log_step = num_steps % STEP_LOG_INTERVAL == 0
-        # Marker before advisor inference: a hang here points at the model,
-        # a hang at the next marker points at the Step RPC / modelenv.
         if log_step:
             logger.info(
                 "Step: advisor.recommend_action",
                 extra={"seed": episode_seed, "step": num_steps},
             )
-        # Get greedy action from advisor
         result = advisor.recommend_action(state)
         action_idx = result.action
 
-        # Map action index to protobuf ActionType
         action_type = environment_pb2.ActionType.Value(
             ["ACTION_HOLD", "ACTION_BUY_1", "ACTION_BUY_2", "ACTION_SELL_1", "ACTION_SELL_2"][action_idx]
         )
 
-        # Step the environment
         action_msg = environment_pb2.Action(
             action=action_type,
             client_order_id=f"backtest_{episode_seed}_{num_steps}",
@@ -429,33 +372,22 @@ def run_evaluation_episode(
             )
         observation_data = step_response.data
 
-        # Accumulate reward
         reward = observation_data.reward
         total_reward += reward
 
-        # Track trades (any non-HOLD action)
         if action_idx != 0:
             num_trades += 1
-            # A positive reward on a trade step indicates a winning trade
             if reward > 0:
                 winning_trades += 1
 
-        # Update state for next step
         if observation_data.state_data:
             state = np.array(observation_data.state_data[0].values, dtype=np.float32)
 
         num_steps += 1
 
-        # Check if episode is done
         if observation_data.done:
             break
 
-    # Get final reference data for realised P&L. This is the money figure the
-    # degradation gate promotes on, so it MUST be the real session_realised_pnl
-    # from modelenv, never a reward-derived proxy. Retry on transient RpcError;
-    # if it still cannot be read, raise so the component fails and KFP's retry(3)
-    # re-runs the backtest, rather than registering a bogus (reward-as-P&L)
-    # number. (See GRPC_REFERENCE_MAX_ATTEMPTS note above.)
     ref_request = environment_pb2.ObserveRequest(symbol=symbol)
     reference = None
     last_exc: grpc.RpcError | None = None
@@ -529,44 +461,23 @@ def compute_backtest_metrics(episode_results: list[EpisodeResult]) -> BacktestMe
             avg_episode_length=0.0,
         )
 
-    # Cumulative P&L: sum of all episode P&Ls
     pnl_values = [ep.cumulative_pnl for ep in episode_results]
     cumulative_pnl = sum(pnl_values)
 
-    # Sharpe ratio across episodes, using per-episode MONEY P&L
-    # (`cumulative_pnl`) as the return series, NOT the shaped reward. The
-    # gate's job is to reject models that lose money out-of-sample, so the
-    # ratio it floors on must be denominated in money. Using `total_reward`
-    # here made the Sharpe penalty-dominated (the reward is ΔV minus loss-
-    # aversion and trade penalties), so a model that was money-profitable
-    # could still show a deeply negative reward-Sharpe (observed: money-Sharpe
-    # +0.76 vs reward-Sharpe −8.41 on the 2012-2015 / OOS-2016 run). The mean/
-    # std are over per-session P&L, which is only meaningful when episodes are
-    # DISTINCT sessions (date-range mode): then std() reflects real session-to-
-    # session variation. In the legacy single-window-repeated mode the rollouts
-    # are near-identical (deterministic greedy policy, one window), std()->~0 and
-    # this ratio blows up, which is why that mode is deprecated (see
-    # resolve_eval_windows).
     pnl_series = np.array(pnl_values)
     mean_pnl = float(np.mean(pnl_series))
     std_pnl = float(np.std(pnl_series, ddof=1)) if len(pnl_series) > 1 else 0.0
 
     if std_pnl > 0:
-        # Scale by sqrt(num sessions) as a proxy for annualisation. (Caveat: a
-        # true daily annualisation would use sqrt(252); kept as-is to preserve
-        # the existing gate-threshold calibration.)
         sharpe_ratio = (mean_pnl / std_pnl) * math.sqrt(len(episode_results))
     else:
         sharpe_ratio = 0.0 if mean_pnl == 0 else math.copysign(float("inf"), mean_pnl)
 
-    # avg_episode_reward remains the mean shaped reward (a separate diagnostic).
     mean_reward = float(np.mean([ep.total_reward for ep in episode_results]))
 
-    # Ensure Sharpe is finite (requirement DQN-R10: Sharpe ratio is finite)
     if not math.isfinite(sharpe_ratio):
         sharpe_ratio = math.copysign(100.0, sharpe_ratio)
 
-    # Max drawdown: computed from cumulative P&L curve across episodes
     cumulative_curve = np.cumsum(pnl_values)
     running_max = np.maximum.accumulate(cumulative_curve)
     drawdowns = running_max - cumulative_curve
@@ -575,21 +486,16 @@ def compute_backtest_metrics(episode_results: list[EpisodeResult]) -> BacktestMe
     else:
         max_drawdown = 0.0
 
-    # Clamp max_drawdown to [0, 1] (requirement DQN-R10)
     max_drawdown = max(0.0, min(1.0, max_drawdown))
 
-    # Win rate: proportion of trades that were profitable
     total_trades = sum(ep.num_trades for ep in episode_results)
     total_winning = sum(ep.winning_trades for ep in episode_results)
     win_rate = total_winning / total_trades if total_trades > 0 else 0.0
 
-    # Clamp win_rate to [0, 1] (requirement DQN-R10)
     win_rate = max(0.0, min(1.0, win_rate))
 
-    # Average episode reward
     avg_episode_reward = mean_reward
 
-    # Average episode length
     avg_episode_length = float(np.mean([ep.num_steps for ep in episode_results]))
 
     return BacktestMetrics(
@@ -633,7 +539,6 @@ def degradation_gate(
 
     reasons = []
 
-    # (a) Relative Sharpe degradation check
     sharpe_delta = prod_sharpe - current_metrics.sharpe_ratio
     if sharpe_delta > sharpe_degradation_threshold:
         reasons.append(
@@ -642,14 +547,12 @@ def degradation_gate(
             f"threshold={sharpe_degradation_threshold}"
         )
 
-    # (b) P&L sign flip check: new model loses money while production is profitable
     if current_metrics.cumulative_pnl < 0 and prod_pnl > 0:
         reasons.append(
             f"P&L sign flip: current={current_metrics.cumulative_pnl:.6f} < 0 "
             f"while production={prod_pnl:.6f} > 0"
         )
 
-    # (c)+(d) Absolute floors, candidate-only, ALSO enforced at bootstrap.
     reasons.extend(
         absolute_floor_reasons(
             current_metrics,
@@ -676,13 +579,11 @@ def absolute_floor_reasons(
     :func:`absolute_floor_gate` (bootstrap path). Empty list = both floors cleared.
     """
     reasons = []
-    # Sharpe floor (must beat buy & hold baseline from thesis)
     if metrics.sharpe_ratio < sharpe_absolute_threshold:
         reasons.append(
             f"Sharpe below absolute floor: current={metrics.sharpe_ratio:.4f} < "
             f"absolute_threshold={sharpe_absolute_threshold}"
         )
-    # P&L floor (must be profitable)
     if metrics.cumulative_pnl <= pnl_absolute_threshold:
         reasons.append(
             f"P&L below absolute floor: current={metrics.cumulative_pnl:.6f} <= "
@@ -970,12 +871,10 @@ def main() -> None:
         },
     )
 
-    # Step 1: Download checkpoint from its KFP-advertised store (MinIO/S3/bare key)
     local_checkpoint_path = download_checkpoint_from_s3(
         checkpoint_uri=args.checkpoint_path, bucket=args.bucket
     )
 
-    # Step 2: Load checkpoint into DQNAdvisor
     device = "cuda" if torch.cuda.is_available() else "cpu"
     advisor = DQNAdvisor.from_checkpoint(local_checkpoint_path, device=device)
 
@@ -988,17 +887,14 @@ def main() -> None:
         },
     )
 
-    # Step 3: Start modelenv sidecar
     sidecar = ModelenvSidecar()
     try:
         sidecar.start()
         sidecar.wait_for_ready()
 
-        # Step 4: Create gRPC channel and stub
         channel = grpc.insecure_channel(f"{MODELENV_HOST}:{MODELENV_PORT}")
         env_stub = environment_pb2_grpc.EnvironmentStub(channel)
 
-        # Step 5: Run evaluation episodes
         logger.info(
             "Starting evaluation episodes",
             extra={
@@ -1009,9 +905,6 @@ def main() -> None:
             },
         )
 
-        # Resolve evaluation windows: one episode per calendar date when a date
-        # range is supplied (distinct sessions → true cumulative P&L + finite
-        # cross-session Sharpe), else the legacy single-window-repeated mode.
         eval_windows = resolve_eval_windows(
             date_start=args.date_start,
             date_end=args.date_end,
@@ -1040,7 +933,7 @@ def main() -> None:
         episode_results: list[EpisodeResult] = []
 
         for episode_idx, (win_start, win_end) in enumerate(eval_windows):
-            episode_seed = 42 + episode_idx  # Deterministic seeds for reproducibility
+            episode_seed = 42 + episode_idx
 
             logger.info(
                 f"Episode {episode_idx + 1}/{len(eval_windows)} starting",
@@ -1077,7 +970,6 @@ def main() -> None:
                 },
             )
 
-        # Close gRPC channel
         channel.close()
 
     except Exception as e:
@@ -1087,10 +979,8 @@ def main() -> None:
         )
         raise
     finally:
-        # Always stop the sidecar on exit
         sidecar.stop()
 
-    # Step 6: Compute aggregated backtest metrics
     metrics = compute_backtest_metrics(episode_results)
 
     logger.info(
@@ -1105,15 +995,6 @@ def main() -> None:
         },
     )
 
-    # Step 7: Degradation gate
-    #
-    # The absolute floors (Sharpe >= threshold, P&L > 0) ALWAYS apply; a model
-    # with sub-floor metrics must never be promoted, production baseline or not.
-    # "Bootstrap" only means "no production baseline to compare against", so it
-    # skips the RELATIVE checks; it does NOT skip the absolute floors. (Before
-    # this, bootstrap skipped the whole gate, so a degenerate model, e.g.
-    # Sharpe ~ -2e16, P&L 0, auto-promoted.) gate_skipped now means "relative
-    # checks skipped", and is only meaningful when the floors passed.
     def _bootstrap_gate(note: str) -> tuple[bool, bool, str]:
         passed, reason = absolute_floor_gate(
             metrics,
@@ -1133,7 +1014,7 @@ def main() -> None:
             "Bootstrap: no production model"
         )
         logger.info(
-            "Degradation gate (bootstrap (absolute floors only)",
+            "Degradation gate (bootstrap, absolute floors only)",
             extra={
                 "gate_passed": gate_passed,
                 "gate_skipped": gate_skipped,
@@ -1141,7 +1022,6 @@ def main() -> None:
             },
         )
     else:
-        # Load production metrics and compare
         try:
             production_metrics = load_production_metrics_from_s3(
                 args.production_metrics_path, bucket=args.bucket
@@ -1161,8 +1041,6 @@ def main() -> None:
                 },
             )
         except FileNotFoundError:
-            # Production metrics file doesn't exist) treat as bootstrap, but
-            # still enforce the absolute floors.
             gate_passed, gate_skipped, gate_reason = _bootstrap_gate(
                 "Production metrics file not found"
             )
@@ -1176,7 +1054,6 @@ def main() -> None:
                 },
             )
 
-    # Step 8: Assemble output artifact
     timestamp = datetime.now(timezone.utc).isoformat()
 
     output = {
@@ -1188,10 +1065,6 @@ def main() -> None:
         "num_eval_episodes": args.num_eval_episodes,
         "max_steps_per_episode": args.max_steps_per_episode,
         "checkpoint_path": args.checkpoint_path,
-        # Overnight financing the modelenv sidecar applied this backtest. The
-        # sidecar runs in Training mode without swap CLI flags, so these are the
-        # built-in default-table rates unless overridden via MODELENV_SWAP_* /
-        # MODELENV_NO_SWAP env. See deepqnetwork/swap_rates.py.
         "swap_rates": resolve_swap_rates(args.symbol),
         "backtest_metrics": {
             "cumulative_pnl": metrics.cumulative_pnl,
@@ -1222,10 +1095,8 @@ def main() -> None:
         },
     }
 
-    # Step 9: Upload metrics to S3
     upload_metrics_to_s3(output, output_uri=args.output_path, bucket=args.bucket)
 
-    # Log final summary
     if not gate_passed:
         logger.warning(
             "DQN backtest completed, GATE FAILED (blocked from promotion)",

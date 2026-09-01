@@ -17,10 +17,6 @@ from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
-
 VALID_WORKER_COUNTS = (1, 2, 3, 4)
 
 
@@ -53,11 +49,6 @@ def _create_dummy_dataset(size: int) -> TensorDataset:
     return TensorDataset(data)
 
 
-# ---------------------------------------------------------------------------
-# Property 4: Distributed training data partitioning
-# ---------------------------------------------------------------------------
-
-
 class TestDistributedDataPartitioning:
     """Property 4: Distributed training data partitioning.
 
@@ -85,7 +76,6 @@ class TestDistributedDataPartitioning:
 
         dataset = _create_dummy_dataset(dataset_size)
 
-        # Collect indices from all workers
         all_indices: list[int] = []
         for rank in range(num_workers):
             sampler = DistributedSampler(
@@ -98,7 +88,6 @@ class TestDistributedDataPartitioning:
             worker_indices = list(sampler)
             all_indices.extend(worker_indices)
 
-        # The union of all partitions must cover the full dataset
         all_indices_set = set(all_indices)
         expected_indices = set(range(dataset_size))
 
@@ -130,8 +119,6 @@ class TestDistributedDataPartitioning:
 
         dataset = _create_dummy_dataset(dataset_size)
 
-        # With drop_last=True, partitions are strictly non-overlapping
-        # (some indices may be dropped if dataset not evenly divisible)
         worker_partitions: list[list[int]] = []
         for rank in range(num_workers):
             sampler = DistributedSampler(
@@ -144,8 +131,7 @@ class TestDistributedDataPartitioning:
             worker_indices = list(sampler)
             worker_partitions.append(worker_indices)
 
-        # Strict no-overlap: no index appears in more than one partition
-        seen: dict[int, int] = {}  # index -> first worker that has it
+        seen: dict[int, int] = {}
         for worker_rank, indices in enumerate(worker_partitions):
             for idx in indices:
                 if idx in seen:
@@ -190,13 +176,11 @@ class TestDistributedDataPartitioning:
             worker_indices = list(sampler)
             partition_sizes.append(len(worker_indices))
 
-        # All partitions must be the same size (DistributedSampler guarantee)
         assert len(set(partition_sizes)) == 1, (
             f"Partition sizes are not equal: {partition_sizes}. "
             f"dataset_size={dataset_size}, num_workers={num_workers}"
         )
 
-        # Each partition size should be ceil(dataset_size / num_workers)
         import math
         expected_size = math.ceil(dataset_size / num_workers)
         assert partition_sizes[0] == expected_size, (

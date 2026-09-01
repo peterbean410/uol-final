@@ -157,14 +157,13 @@ def _collect_predictions(
 
     with torch.no_grad():
         for features, labels in loader:
-            features = features.to(device)  # (batch, 36, 16)
+            features = features.to(device)
 
             mu, sigma = model(features)
 
-            # Use only the last position for evaluation
-            mu_last = mu[:, -1, 0]  # (batch,)
-            sigma_last = sigma[:, -1, 0]  # (batch,)
-            actual = labels[:, 0]  # (batch,)
+            mu_last = mu[:, -1, 0]
+            sigma_last = sigma[:, -1, 0]
+            actual = labels[:, 0]
 
             all_mu.append(mu_last.cpu().numpy())
             all_sigma.append(sigma_last.cpu().numpy())
@@ -228,10 +227,8 @@ def evaluate_by_hour(
         model, test_dataset, config
     )
 
-    # Extract hour from timestamps
     hours = pd.to_datetime(timestamps).dt.hour.values[: len(mu_array)]
 
-    # Build results for each hour
     results: list[dict] = []
     for hour in range(24):
         mask = hours == hour

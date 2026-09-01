@@ -135,8 +135,7 @@ fn expect_payload_type(resp: &ProtoMessage, want: u32, ctx: &str) -> Result<()> 
 pub fn spawn_heartbeat(conn: Connection, interval: Duration) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(interval);
-        // Skip the immediate first tick; we only need periodic keep-alive.
-        tick.tick().await;
+                tick.tick().await;
         loop {
             tick.tick().await;
             if conn
@@ -173,7 +172,7 @@ mod tests {
         loop {
             match wire::read_frame(&mut s).await {
                 Ok(req) => {
-                    let res_type = req.payload_type + 1; // REQ -> RES (2100->2101, 2102->2103)
+                    let res_type = req.payload_type + 1;
                     let res = wire::envelope(res_type, vec![], req.client_msg_id.clone());
                     if wire::write_frame(&mut s, &res).await.is_err() {
                         break;
@@ -237,13 +236,11 @@ mod tests {
         let (conn, _events) = Connection::start(cr, cw);
         let handle = spawn_heartbeat(conn, Duration::from_millis(20));
 
-        // Read two heartbeats off the server end.
-        for _ in 0..2 {
+                for _ in 0..2 {
             let hb = wire::read_frame(&mut server_io).await.unwrap();
             assert_eq!(hb.payload_type, payload_type::HEARTBEAT_EVENT);
         }
-        // Closing the socket ends the heartbeat task.
-        drop(server_io);
+                drop(server_io);
         let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
     }
 }

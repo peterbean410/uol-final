@@ -107,7 +107,6 @@ class TestGracefulShutdown:
         mgr = self._make_mock_checkpoint_mgr()
         client = self._make_mock_env_client()
 
-        # Add a mock handler to the root logger
         mock_handler = MagicMock()
         root_logger = logging.getLogger()
         root_logger.addHandler(mock_handler)
@@ -116,7 +115,6 @@ class TestGracefulShutdown:
             shutdown.register(agent, mgr, client)
             shutdown.request_shutdown(signal.SIGINT, None)
 
-            # Handler flush should have been called (at least twice: before and after final log)
             assert mock_handler.flush.call_count >= 1
         finally:
             root_logger.removeHandler(mock_handler)
@@ -130,15 +128,13 @@ class TestGracefulShutdown:
 
         shutdown.register(agent, mgr, client)
 
-        # First signal triggers full shutdown
         shutdown.request_shutdown(signal.SIGINT, None)
         assert mgr.save.call_count == 1
         assert client.close.call_count == 1
 
-        # Second signal is ignored
         shutdown.request_shutdown(signal.SIGTERM, None)
-        assert mgr.save.call_count == 1  # Still 1
-        assert client.close.call_count == 1  # Still 1
+        assert mgr.save.call_count == 1
+        assert client.close.call_count == 1
 
     def test_set_episode_updates_episode_number(self):
         """set_episode updates the episode used for checkpoint naming."""
@@ -151,7 +147,6 @@ class TestGracefulShutdown:
         shutdown.set_episode(100)
         shutdown.request_shutdown(signal.SIGINT, None)
 
-        # Verify the episode number passed to save
         call_kwargs = mgr.save.call_args[1]
         assert call_kwargs["episode"] == 100
 
@@ -164,10 +159,8 @@ class TestGracefulShutdown:
         client = self._make_mock_env_client()
 
         shutdown.register(agent, mgr, client)
-        # Should not raise
         shutdown.request_shutdown(signal.SIGINT, None)
 
-        # gRPC channel should still be closed despite checkpoint failure
         client.close.assert_called_once()
 
     def test_grpc_close_failure_does_not_crash(self):
@@ -179,10 +172,8 @@ class TestGracefulShutdown:
         client.close.side_effect = RuntimeError("Channel error")
 
         shutdown.register(agent, mgr, client)
-        # Should not raise
         shutdown.request_shutdown(signal.SIGTERM, None)
 
-        # Checkpoint should still have been saved
         mgr.save.assert_called_once()
 
     def test_shutdown_with_sigint_logs_signal_name(self, caplog):

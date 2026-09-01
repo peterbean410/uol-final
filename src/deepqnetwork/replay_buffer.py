@@ -35,12 +35,9 @@ class ReplayBuffer:
         self._capacity = capacity
         self._device = device if device is not None else torch.device("cpu")
 
-        # Ring-buffer bookkeeping.
-        self._size = 0  # number of valid transitions, == min(pushes, capacity)
-        self._pos = 0  # next write index (and, when full, the oldest entry)
+        self._size = 0
+        self._pos = 0
 
-        # State arrays are allocated lazily on first push (state dim unknown
-        # until then). Scalar columns can be allocated up front.
         self._states: np.ndarray | None = None
         self._next_states: np.ndarray | None = None
         self._actions = np.empty(capacity, dtype=np.int64)
@@ -118,14 +115,12 @@ class ReplayBuffer:
                 f"with only {self._size} transitions."
             )
 
-        # O(batch_size) selection of distinct indices into the valid region.
         idx = np.fromiter(
             random.sample(range(self._size), batch_size),
             dtype=np.int64,
             count=batch_size,
         )
 
-        # Fancy indexing produces fresh, contiguous copies the tensors can own.
         states = torch.from_numpy(self._states[idx]).to(self._device)
         actions = torch.from_numpy(self._actions[idx]).to(self._device)
         rewards = torch.from_numpy(self._rewards[idx]).to(self._device)
@@ -145,7 +140,6 @@ class ReplayBuffer:
             return np.empty((0, 0), dtype=np.float32)
         if self._size < self._capacity:
             return self._states[: self._size].copy()
-        # Full buffer: the oldest entry sits at the next write position.
         return np.concatenate(
             [self._states[self._pos :], self._states[: self._pos]]
         )

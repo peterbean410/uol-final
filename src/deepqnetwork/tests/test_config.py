@@ -87,7 +87,6 @@ class TestLoadConfig:
         assert config.symbol == "EURUSD"
         assert config.gamma == 0.95
         assert config.batch_size == 32
-        # Defaults still apply for unset fields
         assert config.mode == "train"
         assert config.learning_rate == 1e-4
 
@@ -106,10 +105,8 @@ class TestLoadConfig:
                 "--batch-size", "128",
             ])
 
-        # CLI overrides
         assert config.device == "cpu"
         assert config.batch_size == 128
-        # YAML value preserved when no CLI override
         assert config.symbol == "EURUSD"
 
     def test_missing_yaml_uses_defaults(self):
@@ -164,15 +161,10 @@ class TestLoadConfig:
         assert config.checkpoint is None
 
 
-# ---------------------------------------------------------------------------
-# Feature: deepqnetwork, Property 17: CLI overrides YAML configuration
-# ---------------------------------------------------------------------------
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 
-# Strategies for CLI-overridable configuration values
-# Exclude leading '-' to avoid argparse interpreting values as flags
 _str_values = st.text(
     alphabet=st.characters(whitelist_categories=("L", "N"), whitelist_characters="_./"),
     min_size=1,
@@ -182,8 +174,6 @@ _positive_int = st.integers(min_value=1, max_value=1_000_000)
 _positive_float = st.floats(min_value=1e-8, max_value=10.0, allow_nan=False, allow_infinity=False)
 _unit_float = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 
-# Each entry: (cli_flag, config_attr, yaml_strategy, cli_strategy)
-# We use two independent strategies so YAML and CLI values differ with high probability.
 _OVERRIDABLE_PARAMS = [
     ("--device", "device", _str_values, _str_values),
     ("--symbol", "symbol", _str_values, _str_values),
@@ -226,7 +216,6 @@ def test_cli_overrides_yaml_property(param_index, data):
     yaml_value = data.draw(yaml_strat, label="yaml_value")
     cli_value = data.draw(cli_strat.filter(lambda v, y=yaml_value: v != y), label="cli_value")
 
-    # Build YAML content using the config attribute name (underscore form)
     yaml_content = {config_attr: yaml_value}
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -239,7 +228,6 @@ def test_cli_overrides_yaml_property(param_index, data):
 
     resolved = getattr(config, config_attr)
 
-    # For numeric types, compare with appropriate tolerance
     if isinstance(cli_value, float):
         assert abs(resolved - cli_value) < 1e-9, (
             f"{config_attr}: expected CLI value {cli_value}, got {resolved} "

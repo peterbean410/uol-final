@@ -174,7 +174,6 @@ class DQNLifecycleManager:
 
         Requirements: DQN-R20
         """
-        # Check if a production model already exists
         production_models = self.registry_client.query_models(
             symbol=symbol, stage="production"
         )
@@ -187,7 +186,6 @@ class DQNLifecycleManager:
             )
             return None
 
-        # Find staging models for this symbol
         staging_models = self.registry_client.query_models(
             symbol=symbol, stage="staging"
         )
@@ -200,7 +198,6 @@ class DQNLifecycleManager:
             )
             return None
 
-        # Find the version_id of the first staging model
         first_model = staging_models[0]
         version_id = self._find_version_id(first_model, symbol)
 

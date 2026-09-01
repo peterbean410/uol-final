@@ -25,11 +25,7 @@ use super::orders::volume_to_lots;
 use super::wire::payload_type;
 use crate::position::{ClosedPosition, Side};
 
-// cTrader money fields (swap, commission) are integers in `money_digits`
-// precision; the default for most accounts is 2 (i.e. hundredths).
 const MONEY_SCALE: f64 = 100.0;
-// cTrader trendbar prices are integers scaled by 10^5 (fixed, regardless of the
-// symbol's display digits), delta-encoded off the bar `low`.
 const TRENDBAR_PRICE_SCALE: f64 = 100_000.0;
 /// cTrader trendbar period discriminants (`ProtoOATrendbarPeriod`).
 pub const TRENDBAR_M1: i32 = 1;
@@ -200,8 +196,7 @@ fn to_modelenv_bar(tb: &ProtoOaTrendbar) -> Bar {
     let low = tb.low.unwrap_or(0);
     let price = |delta: u64| (low as f64 + delta as f64) / TRENDBAR_PRICE_SCALE;
     Bar {
-        // utc_timestamp_in_minutes (minutes since epoch) → ns.
-        timestamp_ns: tb.utc_timestamp_in_minutes.unwrap_or(0) as i64 * 60_000_000_000,
+                timestamp_ns: tb.utc_timestamp_in_minutes.unwrap_or(0) as i64 * 60_000_000_000,
         open: price(tb.delta_open.unwrap_or(0)),
         high: price(tb.delta_high.unwrap_or(0)),
         low: low as f64 / TRENDBAR_PRICE_SCALE,
@@ -229,8 +224,7 @@ pub async fn get_trendbars(
         TRENDBAR_M15 => 900_000,
         _ => 60_000,
     };
-    // Generous window so cTrader returns at least `count` completed bars.
-    let from = now_ms - (count as i64 + 2) * period_ms;
+        let from = now_ms - (count as i64 + 2) * period_ms;
     let req = ProtoOaGetTrendbarsReq {
         payload_type: Some(payload_type::GET_TRENDBARS_REQ as i32),
         ctid_trader_account_id: account_id,
@@ -290,8 +284,7 @@ pub async fn subscribe_spots(
         .send_request(payload_type::SUBSCRIBE_SPOTS_REQ, req.encode_to_vec(), timeout)
         .await?;
     if resp.payload_type == payload_type::SUBSCRIBE_SPOTS_RES {
-        // Validate the account echo (defensive; the RES only carries the account).
-        let _ = ProtoOaSubscribeSpotsRes::decode(resp.payload.as_deref().unwrap_or_default());
+                let _ = ProtoOaSubscribeSpotsRes::decode(resp.payload.as_deref().unwrap_or_default());
         return Ok(());
     }
     if resp.payload_type == payload_type::ERROR_RES
@@ -354,7 +347,7 @@ fn deal_to_closed_position(d: &ProtoOaDeal) -> Option<ClosedPosition> {
         side,
         realised_pnl: detail.gross_profit as f64 / money_scale,
         swap: detail.swap as f64 / money_scale,
-        open_timestamp_ns: 0, // not carried on the close deal
+        open_timestamp_ns: 0,
         close_timestamp_ns: d.execution_timestamp.saturating_mul(1_000_000),
     })
 }
@@ -555,13 +548,13 @@ mod tests {
                     position_id: 5001,
                     trade_data: ProtoOaTradeData {
                         symbol_id: 4,
-                        volume: 100_000, // 0.01 lot
-                        trade_side: 1,   // BUY
+                        volume: 100_000,
+                        trade_side: 1,
                         open_timestamp: Some(1_700_000_000_000),
                         ..Default::default()
                     },
                     price: Some(150.5),
-                    swap: 25, // 0.25 in money units
+                    swap: 25,
                     ..Default::default()
                 }],
                 order: vec![],
@@ -577,9 +570,7 @@ mod tests {
 
     #[test]
     fn closing_deal_maps_to_closed_position_with_realised_pnl() {
-        // A SELL deal (trade_side=2) that closes a LONG position, with a close
-        // detail: entry 150.00, +1234 gross (money_digits=2 -> 12.34), swap -25.
-        let deal = ProtoOaDeal {
+                        let deal = ProtoOaDeal {
             deal_id: 1,
             order_id: 7001,
             position_id: 5001,
@@ -588,7 +579,7 @@ mod tests {
             symbol_id: 4,
             execution_timestamp: 1_700_000_100_000,
             execution_price: Some(150.50),
-            trade_side: 2, // SELL closes a long
+            trade_side: 2,
             close_position_detail: Some(ProtoOaClosePositionDetail {
                 entry_price: 150.00,
                 gross_profit: 1234,
@@ -603,7 +594,7 @@ mod tests {
         };
         let cp = deal_to_closed_position(&deal).unwrap();
         assert_eq!(cp.position_id, "5001");
-        assert_eq!(cp.side, Side::Buy); // SELL deal closed a BUY (long)
+        assert_eq!(cp.side, Side::Buy);
         assert!((cp.entry_price - 150.00).abs() < 1e-9);
         assert!((cp.close_price - 150.50).abs() < 1e-9);
         assert!((cp.realised_pnl - 12.34).abs() < 1e-9);
@@ -676,10 +667,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fills.len(), 2);
-        assert_eq!(fills[0].order_id, "7002"); // newest first
+        assert_eq!(fills[0].order_id, "7002");
 
-        // closed_positions filters to the one closing deal (fresh connection).
-        let (client_io2, server_io2) = tokio::io::duplex(8192);
+                let (client_io2, server_io2) = tokio::io::duplex(8192);
         tokio::spawn(deal_list_server(server_io2));
         let (cr3, cw3) = tokio::io::split(client_io2);
         let (conn2, _e2) = Connection::start(cr3, cw3);
@@ -693,13 +683,12 @@ mod tests {
 
     #[test]
     fn trendbar_delta_decoding_reconstructs_ohlc() {
-        // low=15010000 (=150.10 at x10^5); deltas give O=150.105 H=150.123 C=150.118.
-        let tb = ProtoOaTrendbar {
+                let tb = ProtoOaTrendbar {
             volume: 42,
             low: Some(15_010_000),
-            delta_open: Some(500),   // 150.105
-            delta_high: Some(2_300), // 150.123
-            delta_close: Some(1_800),// 150.118
+            delta_open: Some(500),
+            delta_high: Some(2_300),
+            delta_close: Some(1_800),
             utc_timestamp_in_minutes: Some(28_350_000),
             ..Default::default()
         };
@@ -726,9 +715,9 @@ mod tests {
         let p = &positions[0];
         assert_eq!(p.position_id, "5001");
         assert_eq!(p.entry_price, 150.5);
-        assert_eq!(p.volume, 0.01); // 100_000 units -> 0.01 lot
-        assert_eq!(p.side, 0); // buy -> 0
-        assert_eq!(p.swap, 0.25); // 25 / 100
+        assert_eq!(p.volume, 0.01);
+        assert_eq!(p.side, 0);
+        assert_eq!(p.swap, 0.25);
         assert_eq!(p.open_timestamp_ns, 1_700_000_000_000 * 1_000_000);
     }
 }

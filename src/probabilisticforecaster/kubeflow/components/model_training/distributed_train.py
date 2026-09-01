@@ -81,7 +81,6 @@ def setup_distributed() -> bool:
     master_addr = os.environ.get("MASTER_ADDR", "")
     master_port = os.environ.get("MASTER_PORT", "29500")
 
-    # If world_size is 1 or MASTER_ADDR is not set, skip DDP
     if world_size <= 1 or not master_addr:
         logger.info(
             "Skipping DDP setup: single worker or MASTER_ADDR not set",
@@ -274,13 +273,11 @@ def train_distributed(
     if len(dataset) == 0:
         raise ValueError("Training dataset is empty")
 
-    # Attempt distributed setup
     is_distributed = setup_distributed()
 
     rank = int(os.environ.get("RANK", "0")) if is_distributed else 0
     world_size = int(os.environ.get("WORLD_SIZE", "1")) if is_distributed else 1
 
-    # Determine device
     if torch.cuda.is_available():
         if is_distributed:
             local_rank = int(os.environ.get("LOCAL_RANK", str(rank)))
@@ -301,10 +298,8 @@ def train_distributed(
         },
     )
 
-    # Move model to device
     model = model.to(device)
 
-    # Wrap model in DDP if distributed
     if is_distributed:
         model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
         logger.info(
@@ -312,7 +307,6 @@ def train_distributed(
             extra={"rank": rank, "device_ids": [device.index] if device.type == "cuda" else None},
         )
 
-    # Create data loader with DistributedSampler or standard shuffle
     if is_distributed:
         sampler = DistributedSampler(
             dataset,
@@ -336,15 +330,12 @@ def train_distributed(
             drop_last=False,
         )
 
-    # Set up optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
-    # Set random seed for reproducibility
     torch.manual_seed(config.random_seed + rank)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config.random_seed + rank)
 
-    # Training state
     training_history: dict = {
         "epoch_losses": [],
         "distributed": is_distributed,
@@ -366,45 +357,37 @@ def train_distributed(
         },
     )
 
-    # Training loop
     model.train()
     for epoch in range(config.epochs):
-        # Set epoch on sampler for proper shuffling across epochs
         if sampler is not None:
             sampler.set_epoch(epoch)
 
         epoch_losses: list[float] = []
 
         for batch_idx, (features, labels) in enumerate(loader):
-            features = features.to(device)  # (batch, lookback, 16)
-            labels = labels.to(device)  # (batch, 1)
+            features = features.to(device)
+            labels = labels.to(device)
 
             optimizer.zero_grad()
 
-            # Forward pass, model outputs (batch, seq_len, 1) for mu and sigma
             mu, sigma = model(features)
 
-            # Use only the last position prediction
-            mu_last = mu[:, -1, :]  # (batch, 1)
-            sigma_last = sigma[:, -1, :]  # (batch, 1)
+            mu_last = mu[:, -1, :]
+            sigma_last = sigma[:, -1, :]
 
-            # Compute Gaussian NLL loss
             loss = gaussian_nll_loss(mu_last, sigma_last, labels)
 
-            # Check for NaN loss
             if torch.isnan(loss):
                 raise RuntimeError(
                     f"NaN loss at epoch {epoch + 1}, batch {batch_idx + 1} "
                     f"on rank {rank}. Check learning rate or input data."
                 )
 
-            # Backward pass, DDP handles gradient synchronization automatically
             loss.backward()
             optimizer.step()
 
             epoch_losses.append(loss.item())
 
-        # Compute mean epoch loss for this worker
         mean_epoch_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0.0
         training_history["epoch_losses"].append(mean_epoch_loss)
 
@@ -419,9 +402,7 @@ def train_distributed(
             },
         )
 
-        # Save checkpoint at end of each epoch (rank 0 only)
         if rank == 0:
-            # Get the unwrapped model for checkpointing
             unwrapped_model = model.module if is_distributed else model
             _save_checkpoint_to_s3(
                 model=unwrapped_model,
@@ -432,11 +413,9 @@ def train_distributed(
                 bucket=bucket,
             )
 
-        # Synchronize all workers before next epoch
         if is_distributed:
             dist.barrier()
 
-    # Save consolidated final checkpoint on rank 0
     if rank == 0:
         unwrapped_model = model.module if is_distributed else model
         final_key = _save_final_checkpoint_to_s3(
@@ -448,7 +427,6 @@ def train_distributed(
         )
         training_history["final_checkpoint_key"] = final_key
 
-    # Clean up distributed process group
     if is_distributed:
         dist.barrier()
         dist.destroy_process_group()

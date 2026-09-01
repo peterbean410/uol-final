@@ -40,10 +40,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = logging.getLogger(__name__)
 
-# Validation window for threshold tuning: the last 12 months of the training
-# range (Req 12.3). Unix seconds, UTC. 2022-01-01 .. 2023-01-01.
-VALIDATION_START_TS = 1640995200  # 2022-01-01 00:00:00 UTC
-VALIDATION_END_TS = 1672531200  # 2023-01-01 00:00:00 UTC
+VALIDATION_START_TS = 1640995200
+VALIDATION_END_TS = 1672531200
 
 
 @dataclass(frozen=True)
@@ -67,7 +65,6 @@ class GridResult:
     comparison: "BacktestComparison"
 
 
-# Grid from Task 9.4: 5 x 4 x 2 = 40 configs.
 DEFAULT_GRID: list[GridPoint] = [
     GridPoint(v, long_cap, short_cap)
     for v in (2.0, 3.0, 4.5, 6.0, 8.0)
@@ -75,7 +72,6 @@ DEFAULT_GRID: list[GridPoint] = [
     for short_cap in (1, 2)
 ]
 
-# Injectable callable signatures.
 RunBacktest = Callable[[IntegrationConfig], "BacktestComparison"]
 ValidateThresholds = Callable[["BacktestComparison"], "ThresholdReport"]
 
@@ -99,7 +95,6 @@ def grid_search(
         raise ValueError("grid must contain at least one GridPoint")
 
     if run_fn is None or validate_fn is None:
-        # Lazy import: pulls torch via forecaster_bridge, so only at runtime.
         from dqnpf.backtest import (
             run_backtest,
             validate_thresholds,
@@ -163,7 +158,6 @@ def select_best(results: Sequence[GridResult]) -> GridResult:
             "money-PnL Sharpe among %d failing configs",
             len(results),
         )
-    # max() keeps the first element on ties, preserving grid order.
     return max(pool, key=lambda r: r.combined_sharpe_pnl)
 
 
@@ -231,8 +225,6 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
     base_config = load_config(argv)
 
-    # Default the episode window to the 2022 validation range (Req 12.3) unless
-    # the caller pinned an explicit window via config/CLI.
     if base_config.episode_start_ts == 0 and base_config.episode_end_ts == 0:
         base_config = replace(
             base_config,

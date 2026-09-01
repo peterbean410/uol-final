@@ -133,21 +133,19 @@ async fn read_loop<R>(
                 };
                 match matched {
                     Some(tx) => {
-                        // Ignore send error: the caller may have timed out and gone.
-                        let _ = tx.send(msg);
+                                                let _ = tx.send(msg);
                     }
                     None => {
                         if events_tx.send(msg).is_err() {
-                            break; // no one listening for events; shut the loop
+                            break;
                         }
                     }
                 }
             }
-            Err(_) => break, // socket closed / decode error: end the loop
+            Err(_) => break,
         }
     }
-    // Drop all pending senders so waiters unblock with a "connection closed" error.
-    pending.lock().await.clear();
+        pending.lock().await.clear();
 }
 
 #[cfg(test)]
@@ -202,9 +200,7 @@ mod tests {
         let (cr, cw) = tokio::io::split(client_io);
         let (conn, _events) = Connection::start(cr, cw);
 
-        // Fire many requests concurrently; each payload is unique so a
-        // mis-routed response would corrupt the assertion.
-        let mut handles = Vec::new();
+                        let mut handles = Vec::new();
         for i in 0u8..16 {
             let c = conn.clone();
             handles.push(tokio::spawn(async move {
@@ -222,8 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsolicited_messages_go_to_the_events_channel() {
-        // Server end that pushes an unsolicited ExecutionEvent (no client_msg_id).
-        let (client_io, mut server_io) = tokio::io::duplex(4096);
+                let (client_io, mut server_io) = tokio::io::duplex(4096);
         let (cr, cw) = tokio::io::split(client_io);
         let (_conn, mut events) = Connection::start(cr, cw);
 
@@ -237,11 +232,9 @@ mod tests {
 
     #[tokio::test]
     async fn request_times_out_when_no_response() {
-        // Server reads but never replies → the request must time out, not hang.
-        let (client_io, mut server_io) = tokio::io::duplex(4096);
+                let (client_io, mut server_io) = tokio::io::duplex(4096);
         tokio::spawn(async move {
-            // drain forever without responding
-            let mut buf = [0u8; 64];
+                        let mut buf = [0u8; 64];
             use tokio::io::AsyncReadExt;
             while server_io.read(&mut buf).await.unwrap_or(0) > 0 {}
         });
@@ -260,22 +253,19 @@ mod tests {
         let (client_io, server_io) = tokio::io::duplex(4096);
         let (cr, cw) = tokio::io::split(client_io);
         let (conn, _events) = Connection::start(cr, cw);
-        // Close the server end so the read loop ends and pending waiters fail.
-        drop(server_io);
+                drop(server_io);
         let res = conn.send_request(2100, vec![1], DEFAULT_REQUEST_TIMEOUT).await;
         assert!(res.is_err());
     }
 
     #[test]
     fn ids_are_unique_and_monotonic() {
-        // Build a connection without spawning IO just to exercise id allocation.
-        let next = Arc::new(AtomicU64::new(1));
+                let next = Arc::new(AtomicU64::new(1));
         let a = format!("m{}", next.fetch_add(1, Ordering::Relaxed));
         let b = format!("m{}", next.fetch_add(1, Ordering::Relaxed));
         assert_ne!(a, b);
         assert_eq!((a, b), ("m1".to_string(), "m2".to_string()));
-        // Sanity: a real proto payload still encodes/decodes through the codec.
-        let env = wire::envelope(2100, ProtoMessage::default().encode_to_vec(), Some("m1".into()));
+                let env = wire::envelope(2100, ProtoMessage::default().encode_to_vec(), Some("m1".into()));
         assert!(wire::decode_body(&wire::encode_frame(&env)[4..]).is_ok());
     }
 }

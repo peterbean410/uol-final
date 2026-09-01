@@ -16,11 +16,6 @@ import torch
 from probabilisticforecaster.dataset import ForexDataset
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_synthetic_data(
     start: str = "2023-01-01",
     n_bars: int = 100,
@@ -36,7 +31,6 @@ def _make_synthetic_data(
     rng = np.random.default_rng(seed)
     timestamps = pd.date_range(start, periods=n_bars, freq=freq)
 
-    # 16 feature columns
     feature_data = rng.uniform(-3.0, 3.0, size=(n_bars, 16)).astype(np.float32)
     features_df = pd.DataFrame(
         feature_data,
@@ -44,16 +38,10 @@ def _make_synthetic_data(
         columns=[f"feat_{i}" for i in range(16)],
     )
 
-    # Close prices (positive, random walk)
     close_values = base_price + np.cumsum(rng.normal(0, 0.01, n_bars))
     close_prices = pd.Series(close_values, index=timestamps)
 
     return features_df, close_prices
-
-
-# ---------------------------------------------------------------------------
-# Test: Train/Test Date Split (Requirement 4.3)
-# ---------------------------------------------------------------------------
 
 
 class TestTrainTestDateSplit:
@@ -65,12 +53,10 @@ class TestTrainTestDateSplit:
 
     def test_train_split_contains_only_pre_2023_data(self):
         """Training dataset should only contain data from 2012-2022."""
-        # Create data spanning 2021-2024 to test the boundary
         train_data, train_close = _make_synthetic_data(
             start="2022-12-30", n_bars=200, freq="5min"
         )
 
-        # Filter for training period: up to 2022-12-31
         train_mask = train_data.index < pd.Timestamp("2023-01-01")
         train_features = train_data[train_mask]
         train_prices = train_close[train_mask]
@@ -82,7 +68,6 @@ class TestTrainTestDateSplit:
             horizon=1,
         )
 
-        # All samples should have timestamps before 2023
         for idx in range(len(dataset)):
             start_bar = dataset.valid_indices[idx]
             end_bar = start_bar + dataset.lookback - 1 + dataset.horizon
@@ -90,7 +75,6 @@ class TestTrainTestDateSplit:
 
     def test_test_split_contains_only_post_2023_data(self):
         """Test dataset should only contain data from 2023 onwards."""
-        # Create data starting in 2023 (test period)
         test_data, test_close = _make_synthetic_data(
             start="2023-01-01", n_bars=100, freq="5min"
         )
@@ -102,19 +86,16 @@ class TestTrainTestDateSplit:
             horizon=1,
         )
 
-        # All samples should have timestamps from 2023 onwards
         for idx in range(len(dataset)):
             start_bar = dataset.valid_indices[idx]
             assert test_data.index[start_bar] >= pd.Timestamp("2023-01-01")
 
     def test_train_test_split_boundary_no_overlap(self):
         """Train and test datasets should not overlap at the boundary."""
-        # Create continuous data across the boundary
         all_data, all_close = _make_synthetic_data(
             start="2022-12-31 23:00", n_bars=100, freq="5min"
         )
 
-        # Split at 2023-01-01
         train_mask = all_data.index < pd.Timestamp("2023-01-01")
         test_mask = all_data.index >= pd.Timestamp("2023-01-01")
 
@@ -123,15 +104,9 @@ class TestTrainTestDateSplit:
         test_features = all_data[test_mask]
         test_close = all_close[test_mask]
 
-        # Train timestamps and test timestamps should not overlap
         train_timestamps = set(train_features.index)
         test_timestamps = set(test_features.index)
         assert train_timestamps.isdisjoint(test_timestamps)
-
-
-# ---------------------------------------------------------------------------
-# Test: Sample Shape (Requirement 4.1)
-# ---------------------------------------------------------------------------
 
 
 class TestSampleShape:
@@ -193,11 +168,6 @@ class TestSampleShape:
         assert label.shape == (1,)
 
 
-# ---------------------------------------------------------------------------
-# Test: Label Computation (Requirement 4.2)
-# ---------------------------------------------------------------------------
-
-
 class TestLabelComputation:
     """Test forward return label computation correctness.
 
@@ -207,7 +177,6 @@ class TestLabelComputation:
 
     def test_label_horizon_1_correctness(self):
         """Label with horizon=1 should be (close_{t+1} - close_t) / close_t."""
-        # Use deterministic close prices for exact verification
         n_bars = 50
         timestamps = pd.date_range("2023-01-01", periods=n_bars, freq="5min")
         features_df = pd.DataFrame(
@@ -215,7 +184,6 @@ class TestLabelComputation:
             index=timestamps,
             columns=[f"feat_{i}" for i in range(16)],
         )
-        # Set specific close prices
         close_values = np.linspace(100.0, 110.0, n_bars)
         close_prices = pd.Series(close_values, index=timestamps)
 
@@ -226,7 +194,6 @@ class TestLabelComputation:
             horizon=1,
         )
 
-        # For the first sample: t = 35 (last bar in lookback), t+h = 36
         _, label = dataset[0]
         expected = (close_values[36] - close_values[35]) / close_values[35]
         assert pytest.approx(label.item(), rel=1e-5) == expected
@@ -250,7 +217,6 @@ class TestLabelComputation:
             horizon=3,
         )
 
-        # For the first sample: t = 35, t+h = 38
         _, label = dataset[0]
         expected = (close_values[38] - close_values[35]) / close_values[35]
         assert pytest.approx(label.item(), rel=1e-5) == expected
@@ -274,7 +240,6 @@ class TestLabelComputation:
             horizon=6,
         )
 
-        # For the first sample: t = 35, t+h = 41
         _, label = dataset[0]
         expected = (close_values[41] - close_values[35]) / close_values[35]
         assert pytest.approx(label.item(), rel=1e-5) == expected
@@ -298,7 +263,6 @@ class TestLabelComputation:
             horizon=12,
         )
 
-        # For the first sample: t = 35, t+h = 47
         _, label = dataset[0]
         expected = (close_values[47] - close_values[35]) / close_values[35]
         assert pytest.approx(label.item(), rel=1e-5) == expected
@@ -312,7 +276,6 @@ class TestLabelComputation:
             index=timestamps,
             columns=[f"feat_{i}" for i in range(16)],
         )
-        # Price goes up monotonically
         close_values = np.linspace(100.0, 200.0, n_bars)
         close_prices = pd.Series(close_values, index=timestamps)
 
@@ -335,7 +298,6 @@ class TestLabelComputation:
             index=timestamps,
             columns=[f"feat_{i}" for i in range(16)],
         )
-        # Price goes down monotonically
         close_values = np.linspace(200.0, 100.0, n_bars)
         close_prices = pd.Series(close_values, index=timestamps)
 
@@ -358,7 +320,6 @@ class TestLabelComputation:
             index=timestamps,
             columns=[f"feat_{i}" for i in range(16)],
         )
-        # Constant price
         close_values = np.full(n_bars, 150.0)
         close_prices = pd.Series(close_values, index=timestamps)
 
@@ -371,11 +332,6 @@ class TestLabelComputation:
 
         _, label = dataset[0]
         assert label.item() == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Test: Dataset Length and Stride
-# ---------------------------------------------------------------------------
 
 
 class TestDatasetLength:
@@ -392,7 +348,7 @@ class TestDatasetLength:
             horizon=1,
             stride=1,
         )
-        expected_len = n_bars - 36 - 1 + 1  # 14
+        expected_len = n_bars - 36 - 1 + 1
         assert len(dataset) == expected_len
 
     def test_length_with_stride(self):
@@ -406,16 +362,8 @@ class TestDatasetLength:
             horizon=1,
             stride=2,
         )
-        # With stride=2, we take every other valid starting index
-        # Total valid range: 0 to n - lookback - horizon = 63
-        # Indices: 0, 2, 4, ..., 62 → 32 samples
         expected_len = len(range(0, n_bars - 36 - 1 + 1, 2))
         assert len(dataset) == expected_len
-
-
-# ---------------------------------------------------------------------------
-# Test: Validation Errors
-# ---------------------------------------------------------------------------
 
 
 class TestDatasetValidation:
@@ -425,7 +373,6 @@ class TestDatasetValidation:
         """Should raise ValueError if features don't have 16 columns."""
         n_bars = 50
         timestamps = pd.date_range("2023-01-01", periods=n_bars, freq="5min")
-        # Only 10 features instead of 16
         features_df = pd.DataFrame(
             np.ones((n_bars, 10), dtype=np.float32),
             index=timestamps,
@@ -448,7 +395,6 @@ class TestDatasetValidation:
         current = pd.Timestamp("2023-01-01")
         for i in range(n_bars):
             timestamps.append(current)
-            # Every bar has a gap after it (>10 min)
             current += pd.Timedelta(minutes=15)
 
         index = pd.DatetimeIndex(timestamps)

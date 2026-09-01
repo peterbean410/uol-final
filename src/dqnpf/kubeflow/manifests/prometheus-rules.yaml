@@ -1,15 +1,3 @@
-# dqnpf-intraday Prometheus alerting rules.
-#
-# Alerts for the combined DQN + Forecaster integration layer:
-#   - Pipeline run failure (dqnpf-intraday pipeline)
-#   - Backtest threshold validation failure
-#   - InferenceService p99 latency > 100ms (5-min window)
-#   - Error rate > 1% (5-min window)
-#   - Suppression rate > 60% for 10 consecutive minutes
-#
-# Webhook payload includes run_id (or pod id), failed check, metric snapshot.
-#
-# Requirements: 24.1, 24.2, 24.3
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -24,7 +12,6 @@ metadata:
     role: alert-rules
 spec:
   groups:
-    # --- Pipeline Run Failure Alerts (Requirement 24.1, 24.2) ---
     - name: dqnpf.pipeline.failures
       rules:
         - alert: DqnpfIntradayPipelineRunFailed
@@ -44,7 +31,6 @@ spec:
               {"run_id":"{{ $labels.run_id }}","failed_check":"pipeline_run_failure","metric_snapshot":{"status":"failed","value":"{{ $value }}"}}
             runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-pipeline-failure"
 
-    # --- Backtest Threshold Validation Failure (Requirement 24.1, 24.2) ---
     - name: dqnpf.backtest.threshold
       rules:
         - alert: DqnpfIntradayBacktestThresholdFailed
@@ -65,7 +51,6 @@ spec:
               {"run_id":"{{ $labels.run_id }}","failed_check":"backtest_threshold_{{ $labels.check_name }}","metric_snapshot":{"check":"{{ $labels.check_name }}","value":"{{ $value }}"}}
             runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-backtest-threshold"
 
-    # --- InferenceService Latency and Error Rate Alerts (Requirement 24.1, 24.3) ---
     - name: dqnpf.serving.latency
       rules:
         - alert: DqnpfIntradayP99LatencyHigh
@@ -108,7 +93,6 @@ spec:
               {"pod_id":"{{ $labels.pod }}","failed_check":"error_rate_exceeded","metric_snapshot":{"error_rate":"{{ $value }}","threshold":"0.01"}}
             runbook_url: "https://wiki.internal/runbooks/dqnpf-intraday-error-rate"
 
-    # --- Suppression Rate Anomaly Alert (Requirement 24.1) ---
     - name: dqnpf.serving.suppression
       rules:
         - alert: DqnpfIntradaySuppressionRateAnomaly

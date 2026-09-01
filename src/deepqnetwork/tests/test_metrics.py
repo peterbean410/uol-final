@@ -79,7 +79,6 @@ class TestLogEpisode:
                 reader = csv.reader(f)
                 rows = list(reader)
 
-            # Data row
             assert rows[1] == ["5", "-2.3", "50", "0.123", "0.5", "3.7"]
             logger.close()
 
@@ -97,7 +96,6 @@ class TestLogEpisode:
                 reader = csv.reader(f)
                 rows = list(reader)
 
-            # Header + 3 data rows
             assert len(rows) == 4
             logger.close()
 
@@ -120,21 +118,18 @@ class TestLogEpisode:
                     avg_loss=0.0, epsilon=1.0, duration=1.0
                 )
 
-            # Average of 0..9 = 4.5
             assert abs(logger.avg_reward_100 - 4.5) < 1e-6
             logger.close()
 
     def test_rolling_average_caps_at_100(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(checkpoint_dir=tmpdir)
-            # Log 150 episodes with reward = episode number
             for i in range(150):
                 logger.log_episode(
                     episode=i, reward=float(i), length=10,
                     avg_loss=0.0, epsilon=1.0, duration=1.0
                 )
 
-            # Should only track last 100 (episodes 50-149), avg = 99.5
             assert abs(logger.avg_reward_100 - 99.5) < 1e-6
             logger.close()
 
@@ -161,7 +156,6 @@ class TestLogStep:
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
                 checkpoint_dir=tmpdir, log_interval=10)
-            # Step 10 should be logged
             logger.log_step(step=10, action=1, reward=0.5, q_value=1.2, epsilon=0.8, loss=0.01)
 
             csv_path = os.path.join(tmpdir, "step_metrics.csv")
@@ -179,7 +173,6 @@ class TestLogStep:
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
                 checkpoint_dir=tmpdir, log_interval=10)
-            # Steps 1-9 should not be logged
             for step in range(1, 10):
                 logger.log_step(step=step, action=0, reward=0.0, q_value=0.0, epsilon=1.0, loss=None)
 
@@ -212,7 +205,6 @@ class TestLogStep:
                 reader = csv.reader(f)
                 rows = list(reader)
 
-            # Loss should be 0.0 when None
             assert rows[1][5] == "0.0"
             logger.close()
 
@@ -236,7 +228,6 @@ class TestLogCheckpointSummary:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(checkpoint_dir=tmpdir)
-            # Add some episodes
             for i in range(10):
                 logger.log_episode(
                     episode=i, reward=float(i), length=10,
@@ -256,9 +247,8 @@ class TestLogCheckpointSummary:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(checkpoint_dir=tmpdir)
-            # Provide external history
             rewards = [1.0, 2.0, 3.0, 4.0, 5.0]
-            logger._best_reward = 5.0  # Set manually since we didn't use log_episode
+            logger._best_reward = 5.0
 
             with caplog.at_level(logging.INFO):
                 logger.log_checkpoint_summary(episode=5, rewards_history=rewards)
@@ -294,7 +284,6 @@ class TestTensorBoardIntegration:
     def test_tensorboard_episode_scalars(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(checkpoint_dir=tmpdir)
-            # Should not raise
             logger.log_episode(
                 episode=1, reward=5.0, length=100,
                 avg_loss=0.01, epsilon=0.9, duration=2.5
@@ -306,7 +295,6 @@ class TestTensorBoardIntegration:
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = MetricsLogger(
                 checkpoint_dir=tmpdir, log_interval=1)
-            # Should not raise
             logger.log_step(step=1, action=0, reward=0.5, q_value=1.0, epsilon=0.8, loss=0.01)
             logger.close()
 

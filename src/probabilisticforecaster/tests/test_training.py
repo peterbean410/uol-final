@@ -25,7 +25,7 @@ def _make_synthetic_dataset(n_samples: int = 200, lookback: int = 36) -> ForexDa
     Generates contiguous 5-minute timestamps so no gaps are detected,
     and random features/close prices.
     """
-    total_bars = n_samples + lookback  # enough bars for n_samples with lookback
+    total_bars = n_samples + lookback
     timestamps = pd.date_range(
         start="2023-01-02 00:00", periods=total_bars, freq="5min"
     )
@@ -34,7 +34,6 @@ def _make_synthetic_dataset(n_samples: int = 200, lookback: int = 36) -> ForexDa
         index=timestamps,
         columns=[f"feat_{i}" for i in range(16)],
     )
-    # Use realistic close prices (around 150 for USDJPY-like)
     close_prices = pd.Series(
         150.0 + np.cumsum(np.random.randn(total_bars) * 0.01),
         index=timestamps,
@@ -80,7 +79,6 @@ class TestHyperparameters:
             model = ProbabilisticTransformer(config)
             dataset = _make_synthetic_dataset(n_samples=200)
 
-            # Patch Adam to capture the lr argument
             with patch(
                 "torch.optim.Adam", wraps=torch.optim.Adam
             ) as mock_adam:
@@ -91,12 +89,10 @@ class TestHyperparameters:
                     upload_to_s3=False,
                 )
 
-                # Verify Adam was called with the correct learning rate
                 mock_adam.assert_called_once()
                 call_kwargs = mock_adam.call_args
                 assert call_kwargs[1]["lr"] == 0.001 or call_kwargs.kwargs["lr"] == 0.001
 
-            # Verify epochs: epoch_loss should have exactly 5 entries
             assert len(history["epoch_loss"]) == 5
 
     @patch("probabilisticforecaster.training._upload_model_to_s3")
@@ -139,13 +135,11 @@ class TestModelPersistenceRoundTrip:
             upload_to_s3=False,
         )
 
-        # Get predictions from the trained model
         model.eval()
         test_input = torch.randn(1, 36, 16)
         with torch.no_grad():
             mu_original, sigma_original = model(test_input)
 
-        # Load the checkpoint and create a new model
         checkpoint = torch.load(config.model_path, weights_only=False)
         new_model = ProbabilisticTransformer(config)
         new_model.load_state_dict(checkpoint["model_state_dict"])
@@ -154,7 +148,6 @@ class TestModelPersistenceRoundTrip:
         with torch.no_grad():
             mu_loaded, sigma_loaded = new_model(test_input)
 
-        # Predictions should be identical
         assert torch.allclose(mu_original, mu_loaded, atol=1e-6)
         assert torch.allclose(sigma_original, sigma_loaded, atol=1e-6)
 
@@ -222,7 +215,6 @@ class TestNaNLossDetection:
         model = ProbabilisticTransformer(config)
         dataset = _make_synthetic_dataset(n_samples=100)
 
-        # Corrupt model weights to produce NaN outputs
         with torch.no_grad():
             for param in model.parameters():
                 param.fill_(float("nan"))

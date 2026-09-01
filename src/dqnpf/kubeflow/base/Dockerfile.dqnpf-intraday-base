@@ -1,14 +1,3 @@
-# dqnpf-intraday base image, combined predictor and KFP backtest base.
-#
-# Extends the DQN base image (PyTorch CPU, grpcio, environment_pb2, modelenv
-# binary at /usr/local/bin/modelenv-server) with the probabilisticforecaster and
-# dqnpf packages so that DQNAdvisor, ForecasterInference,
-# and IntegrationLayer can all be imported in a single Python process.
-#
-# Tagged as: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqnpf-intraday-base:<sha>
-# Requirements: 20.1, 20.2, 20.3, 20.4
-#
-# Rebuild marker: e081406-swap-defaults (FROM fresh dqn/base with swap-default-table modelenv)
 
 ARG DQN_BASE_IMAGE=731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/dqn/base:latest
 FROM ${DQN_BASE_IMAGE}
@@ -18,39 +7,19 @@ LABEL description="Combined DQN + ProbabilisticForecaster integration-layer base
 
 WORKDIR /app
 
-# Pinned dependencies on top of the DQN base. Build context is the repo root
-# so that the COPYs of probabilisticforecaster/ and dqnpf/
-# below resolve; therefore the requirements file must be referenced by its full
-# path within the repo.
 COPY dqnpf/kubeflow/base/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy the probabilisticforecaster, deepqnetwork, and dqnpf source
-# trees as plain Python packages onto PYTHONPATH. None of them has a
-# setup.py / pyproject.toml (the rest of the repo runs them straight off
-# disk), so we follow the same pattern as the forecaster component images:
-# COPY the package directories into /app and let Python's import system
-# find them.
-#
-# deepqnetwork is intentionally re-copied here even though dqn/base exists,
-# dqn/base does not bundle the deepqnetwork package source (only the
-# environment_pb2 stubs and the modelenv binary). The DQN component images
-# COPY deepqnetwork in their own Dockerfiles too; dqnpf inherits dqn/base
-# for the heavy deps (torch, etc.) and stubs/binary, but still has to bring
-# its own deepqnetwork source.
 COPY probabilisticforecaster/ /app/probabilisticforecaster/
 COPY deepqnetwork/ /app/deepqnetwork/
 COPY dqnpf/ /app/dqnpf/
 ENV PYTHONPATH=/app:${PYTHONPATH:-}
 
-# Build-time import smoke test (Requirements 20.1, 20.2, DQNPF-IMG-1)
 RUN python -c "from dqnpf.integration import IntegrationLayer; \
 from deepqnetwork.advisor import DQNAdvisor; \
 from probabilisticforecaster.inference import ForecasterInference; \
 print('dqnpf-intraday-base import smoke OK')"
 
-# Sanity: modelenv binary exists (Requirement 20.4, inherited from dqn-base,
-# which copies it to /usr/local/bin/modelenv-server, NOT /usr/local/bin/modelenv).
 RUN test -x /usr/local/bin/modelenv-server
 
 ENV PYTHONUNBUFFERED=1

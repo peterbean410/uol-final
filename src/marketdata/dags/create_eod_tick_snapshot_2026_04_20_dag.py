@@ -32,10 +32,6 @@ _ECR_IMAGE = (
     "/forex-marketdata-download-interval-price-data:latest"
 )
 
-# download_tick_data_2026 runs Mon–Fri (cron "0 * * * 1-5"). The sensor looks
-# at the hourly download covering 23:00→00:00 of the prior calendar day. For a
-# Sun-midnight run that's Sat 23:00 (no download); for Mon-midnight it's
-# Sun 23:00 (no download). Python weekday(): Mon=0…Sun=6.
 _NO_UPSTREAM_WEEKDAYS = {6, 0}
 
 
@@ -59,7 +55,7 @@ def _branch(data_interval_end, **_):
 
 
 with DAG(
-    max_active_runs=1,  # depends_on_past serial; =1 prevents max_active_runs starvation deadlock
+    max_active_runs=1,
     dag_id="create_eod_tick_snapshot_2026_04_20",
     default_args=default_args,
     description="Create FX end-of-day tick snapshots starting from 2026-04-20",
