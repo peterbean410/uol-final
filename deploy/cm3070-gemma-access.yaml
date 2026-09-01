@@ -1,0 +1,17 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-cm3070-advisor-to-gemma
+  namespace: peterbean
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: gemma-4-31b
+  rules:
+    - from:
+        - source:
+            namespaces:
+              - cm3070
+            principals:
+              - cluster.local/ns/cm3070/sa/cm3070-advisor
