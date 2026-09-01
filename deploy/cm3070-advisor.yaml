@@ -4,6 +4,19 @@ metadata:
   name: cm3070-advisor
   namespace: cm3070
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cm3070-advisor-cache
+  namespace: cm3070
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,6 +40,10 @@ spec:
       serviceAccountName: cm3070-advisor
       imagePullSecrets:
         - name: ecr-registry-credentials
+      volumes:
+        - name: tick-cache
+          persistentVolumeClaim:
+            claimName: cm3070-advisor-cache
       containers:
         - name: advisor
           image: 731833471586.dkr.ecr.ap-southeast-1.amazonaws.com/forex-cm3070-advisor:latest
@@ -39,6 +56,9 @@ spec:
           envFrom:
             - secretRef:
                 name: cm3070-advisor-secrets
+          volumeMounts:
+            - name: tick-cache
+              mountPath: /app/feature-prototype/cache
           resources:
             requests:
               cpu: 50m
