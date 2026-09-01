@@ -21,6 +21,7 @@ Run from `src/` (so `dqnpf` resolves), not from this directory:
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -156,6 +157,16 @@ def compute_advice() -> Advice:
     )
 
 
+def _provenance(a: Advice) -> str:
+    """The bar an answer is derived from, and where that bar came from.
+
+    Every reply carries this. The advisor reasons over a fixed historical slice,
+    so a prose answer without the bar timestamp reads as if it described the
+    present market.
+    """
+    return f"(bar {a.bar_time_utc} · source: {a.data_source} · not financial advice)"
+
+
 def format_advice(a: Advice) -> str:
     regime = "high-uncertainty" if a.high_sigma else "normal"
     if a.screened:
@@ -255,6 +266,7 @@ class TelegramBot:
     def __init__(self, token: str, allowed_chat_ids: set[int] | None = None):
         self._base = f"https://api.telegram.org/bot{token}"
         self._token = token
+        self._username: str | None = None
         self._allowed = allowed_chat_ids or set()
 
     def _call(self, method: str, *, params=None, timeout=10):
@@ -312,22 +324,46 @@ class TelegramBot:
         if not self._authorised(chat_id):
             logger.warning("ignoring message from unauthorised chat %s", chat_id)
             return
-        is_command = text.startswith("/")
-        cmd = text.lower().lstrip("/").split("@")[0].split()[0] if text else ""
         logger.info("message from chat %s: %r", chat_id, text)
+        # In a group the bot is addressed by mention ("@thebot what now?") or by
+        # a qualified command ("/advice@thebot"). Strip its own @mention so the
+        # rest is handled exactly as it would be in a direct message.
+        if self._username:
+            text = re.sub(rf"@{re.escape(self._username)}\b", "", text,
+                          flags=re.IGNORECASE).strip()
+        is_command = text.startswith("/")
+        # A bare mention leaves nothing behind; split() is then empty, so index
+        # defensively rather than raising out of the polling loop.
+        head = text.lower().lstrip("/").split("@")[0].split()
+        cmd = head[0] if head else ""
         try:
             if is_command and cmd in ("start", "help"):
                 self.send_message(chat_id, HELP)
             elif is_command and cmd in ("advice", "advise", "rec", "recommendation"):
-                structured = format_advice(compute_advice())
-                self.send_message(chat_id, llm.narrate(structured) or structured)
+                advice = compute_advice()
+                structured = format_advice(advice)
+                prose = llm.narrate(structured)
+                self.send_message(
+                    chat_id,
+                    prose + "\n\n" + _provenance(advice) if prose else structured,
+                )
             elif is_command:
                 self.send_message(chat_id, HELP)  # unknown command
+            elif not text:
+                # Addressed with a bare mention and nothing else.
+                advice = compute_advice()
+                structured = format_advice(advice)
+                prose = llm.narrate(structured)
+                self.send_message(
+                    chat_id,
+                    prose + "\n\n" + _provenance(advice) if prose else structured,
+                )
             else:
                 # free-form question -> answer in prose, grounded in the live advice.
                 # The LLM may call the send_price_chart tool, which renders a chart
                 # and sends it to this chat.
-                structured = format_advice(compute_advice())
+                advice = compute_advice()
+                structured = format_advice(advice)
 
                 def _execute_tool(name: str, args: dict) -> str:
                     if name == "send_price_chart":
@@ -343,20 +379,27 @@ class TelegramBot:
                     structured, user_message=text,
                     tools=[CHART_TOOL], execute_tool=_execute_tool,
                 )
-                self.send_message(
-                    chat_id,
-                    prose
-                    or structured
-                    + "\n\n(Conversational mode needs a local LLM (set LLM_BASE_URL; see README.)",
-                )
+                if prose:
+                    # Prose replaces the structured block, so re-attach the
+                    # provenance: which bar the advice is derived from and where
+                    # that bar came from. Without it the answer reads as though
+                    # it describes the present market.
+                    self.send_message(chat_id, prose + "\n\n" + _provenance(advice))
+                else:
+                    self.send_message(
+                        chat_id,
+                        structured
+                        + "\n\n(Conversational mode needs a local LLM (set LLM_BASE_URL; see README.)",
+                    )
         except Exception as exc:  # noqa: BLE001 - never let one message kill the loop
             logger.exception("failed to handle message")
             self.send_message(chat_id, f"Sorry) could not compute advice ({exc}).")
 
     def run(self) -> None:
         me = self.get_me()
+        self._username = me.get("username")
         logger.info("bot @%s started (long-polling); allowed=%s",
-                    me.get("username"), self._allowed or "ALL")
+                    self._username, self._allowed or "ALL")
         offset: int | None = None
         while True:
             try:
@@ -369,7 +412,12 @@ class TelegramBot:
                 offset = upd["update_id"] + 1
                 msg = upd.get("message") or upd.get("edited_message")
                 if msg:
-                    self.handle(msg)
+                    try:
+                        self.handle(msg)
+                    except Exception:  # noqa: BLE001 - one bad message must not
+                        # end the poll loop; the offset has already advanced, so
+                        # the loop continues with the next update.
+                        logger.exception("unhandled error while handling a message")
 
 
 # --------------------------------------------------------------------------- #
