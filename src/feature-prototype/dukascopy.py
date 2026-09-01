@@ -41,6 +41,7 @@ _UA = "Mozilla/5.0 (prototype-research; USDJPY tick fetch)"
 
 
 _BACKOFF_SECONDS = 1.5
+_MIN_HOUR_COVERAGE = 0.7
 
 
 def _hour_url(symbol: str, dt: datetime) -> str:
@@ -132,12 +133,24 @@ def fetch_ticks(
     logger.info("dukascopy: fetching %d hourly tick files for %s", len(hours), symbol)
 
     def _one(dt):
-        return dt, _fetch_hour_raw(symbol, dt, cache_dir)
+        try:
+            return dt, _fetch_hour_raw(symbol, dt, cache_dir), True
+        except Exception:
+            return dt, b"", False
 
     raw_by_hour: dict = {}
+    failed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for dt, body in ex.map(_one, hours):
+        for dt, body, ok in ex.map(_one, hours):
             raw_by_hour[dt] = body
+            failed += 0 if ok else 1
+    if hours and failed > len(hours) * (1.0 - _MIN_HOUR_COVERAGE):
+        raise RuntimeError(
+            f"only {len(hours) - failed}/{len(hours)} hours downloaded; "
+            "refusing to build a window from a fraction of the ticks"
+        )
+    if failed:
+        logger.warning("dukascopy: %d/%d hours unavailable", failed, len(hours))
 
     rows: list[tuple] = []
     empty = 0
