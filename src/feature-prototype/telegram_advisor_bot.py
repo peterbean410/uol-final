@@ -20,6 +20,7 @@ Run from `src/` (so `dqnpf` resolves), not from this directory:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sys
@@ -56,8 +57,10 @@ VARIANCE_THRESHOLD = 3.0
 DIRECTIONAL_TOLERANCE = 1.0
 HELP = (
     "USD/JPY advisor bot.\n"
-    "  /advice (get the current recommendation\n"
-    "  /help) this message\n"
+    "  /advice, get the current recommendation\n"
+    "  /subscribe, get alerted when the recommendation turns to buy or sell\n"
+    "  /unsubscribe, stop those alerts\n"
+    "  /help; this message\n"
     "Or just ask in plain language (e.g. \"what's your view on USD/JPY?\") ("
     "if a local language model is configured I'll answer in prose, grounded in "
     "the live recommendation.\n\n"
@@ -155,12 +158,85 @@ def current_slice() -> "data_mod.PriceData":
         return _slice
 
 
-def start_price_refresher(interval: float = LIVE_CACHE_TTL_SECONDS) -> None:
-    """Keep the slice current in the background, off the request path."""
+_SUBS_PATH = _PROTO_DIR / "cache" / "subscribers.json"
+_subs_lock = threading.Lock()
+
+
+def _read_subs() -> dict:
+    try:
+        state = json.loads(_SUBS_PATH.read_text())
+    except (OSError, ValueError):
+        return {"chats": [], "last_signal": None}
+    state.setdefault("chats", [])
+    state.setdefault("last_signal", None)
+    return state
+
+
+def _write_subs(state: dict) -> None:
+    _SUBS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _SUBS_PATH.with_name(_SUBS_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(_SUBS_PATH)
+
+
+def set_subscribed(chat_id: int, wanted: bool) -> bool:
+    """Add or remove a chat from signal alerts. Returns the resulting state."""
+    with _subs_lock:
+        state = _read_subs()
+        chats = set(state["chats"])
+        chats.add(chat_id) if wanted else chats.discard(chat_id)
+        state["chats"] = sorted(chats)
+        _write_subs(state)
+        return chat_id in chats
+
+
+def _announce_signal(notify) -> None:
+    """Push a message when the screened recommendation leaves HOLD.
+
+    Edge-triggered on the action itself, so a position that stays open does not
+    produce an alert on every refresh, while a change of side or size does. The
+    last announced action is persisted, so a restart cannot replay an alert the
+    subscriber has already had.
+    """
+    advice = compute_advice()
+    action = (advice.final_action or "HOLD").upper()
+    with _subs_lock:
+        state = _read_subs()
+        if action == "HOLD":
+            if state["last_signal"] is not None:
+                state["last_signal"] = None
+                _write_subs(state)
+            return
+        if state["last_signal"] == action:
+            return
+        chats = list(state["chats"])
+        state["last_signal"] = action
+        _write_subs(state)
+    if not chats:
+        return
+    text = f"Signal: {action}\n\n{format_advice(advice)}"
+    for chat_id in chats:
+        try:
+            notify(chat_id, text)
+        except Exception:
+            logger.exception("could not notify chat %s", chat_id)
+
+
+def start_price_refresher(notify=None, interval: float = LIVE_CACHE_TTL_SECONDS) -> None:
+    """Keep the slice current in the background, off the request path.
+
+    When ``notify`` is given it also announces buy/sell signals, so a subscriber
+    hears about one without having to ask.
+    """
 
     def loop() -> None:
         while True:
             _refresh_slice()
+            if notify is not None:
+                try:
+                    _announce_signal(notify)
+                except Exception:
+                    logger.exception("signal announcement failed")
             time.sleep(interval)
 
     threading.Thread(target=loop, name="price-refresh", daemon=True).start()
@@ -395,6 +471,16 @@ class TelegramBot:
         try:
             if is_command and cmd in ("start", "help"):
                 self.send_message(chat_id, HELP)
+            elif is_command and cmd in ("subscribe", "alerts", "unsubscribe"):
+                wanted = cmd != "unsubscribe"
+                on = set_subscribed(chat_id, wanted)
+                self.send_message(
+                    chat_id,
+                    "Signal alerts ON, I'll message this chat when the screened "
+                    "recommendation leaves HOLD. It is still advice: I place no orders."
+                    if on else
+                    "Signal alerts OFF, I'll only answer when you ask.",
+                )
             elif is_command and cmd in ("advice", "advise", "rec", "recommendation"):
                 advice = compute_advice()
                 structured = format_advice(advice)
@@ -455,7 +541,7 @@ class TelegramBot:
         self._username = me.get("username")
         logger.info("bot @%s started (long-polling); allowed=%s",
                     self._username, self._allowed or "ALL")
-        start_price_refresher()
+        start_price_refresher(self.send_message)
         offset: int | None = None
         while True:
             try:
