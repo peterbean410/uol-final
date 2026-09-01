@@ -42,6 +42,7 @@ _UA = "Mozilla/5.0 (prototype-research; USDJPY tick fetch)"
 
 _BACKOFF_SECONDS = 1.5
 _MIN_HOUR_COVERAGE = 0.7
+_TAIL_HOURS = 6
 
 
 def _hour_url(symbol: str, dt: datetime) -> str:
@@ -118,6 +119,12 @@ def fetch_ticks(
     """Download ticks for ``[start, end)`` and return a tidy tick DataFrame.
 
     Columns: ``timestamp_ns, bid, ask, mid, volume`` (UTC, ascending).
+
+    Hours are requested newest-first. Dukascopy throttles this hard once a run
+    gets going, so whichever hours are fetched last are the ones most likely to
+    fail; asking oldest-first therefore loses precisely the recent hours a "what
+    should I do now" answer depends on. Any recent hour that still fails is then
+    retried serially, because a stale tail matters more than a mid-window gap.
     """
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
@@ -138,12 +145,29 @@ def fetch_ticks(
         except Exception:
             return dt, b"", False
 
+    ordered = sorted(hours, reverse=True)
+
     raw_by_hour: dict = {}
-    failed = 0
+    failures: list[datetime] = []
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for dt, body, ok in ex.map(_one, hours):
+        for dt, body, ok in ex.map(_one, ordered):
             raw_by_hour[dt] = body
-            failed += 0 if ok else 1
+            if not ok:
+                failures.append(dt)
+
+    if failures:
+        now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        tail_from = now_hour - timedelta(hours=_TAIL_HOURS)
+        recent = [d for d in failures if tail_from <= d <= now_hour]
+        for dt in sorted(recent, reverse=True):
+            try:
+                raw_by_hour[dt] = _fetch_hour_raw(symbol, dt, cache_dir)
+                failures.remove(dt)
+                logger.info("dukascopy: recovered recent hour %s on retry", dt)
+            except Exception:
+                logger.warning("dukascopy: recent hour %s still unavailable", dt)
+
+    failed = len(failures)
     if hours and failed > len(hours) * (1.0 - _MIN_HOUR_COVERAGE):
         raise RuntimeError(
             f"only {len(hours) - failed}/{len(hours)} hours downloaded; "

@@ -130,7 +130,12 @@ def _refresh_slice() -> None:
         return
     with _slice_lock:
         _slice = fresh
-    logger.info("price slice refreshed: %s (%d bars)", fresh.source, fresh.n_bars)
+    last = fresh.frame["timestamp_ns"].iloc[-1] / 1e9
+    age_min = (datetime.now(timezone.utc).timestamp() - last) / 60.0
+    logger.info(
+        "price slice refreshed: %s (%d bars, newest bar %.0f min old)",
+        fresh.source, fresh.n_bars, age_min,
+    )
 
 
 def current_slice() -> "data_mod.PriceData":
