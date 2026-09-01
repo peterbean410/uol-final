@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import lzma
 import struct
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -39,19 +40,24 @@ _REC = struct.Struct(">IIIff")
 _UA = "Mozilla/5.0 (prototype-research; USDJPY tick fetch)"
 
 
+_BACKOFF_SECONDS = 1.5
+
+
 def _hour_url(symbol: str, dt: datetime) -> str:
-    # NB: month is 0-indexed in Dukascopy paths.
     return f"{_BASE}/{symbol}/{dt.year:04d}/{dt.month - 1:02d}/{dt.day:02d}/{dt.hour:02d}h_ticks.bi5"
 
 
-def _fetch_hour_raw(symbol: str, dt: datetime, cache_dir: Path, retries: int = 3) -> bytes:
+def _fetch_hour_raw(symbol: str, dt: datetime, cache_dir: Path, retries: int = 5) -> bytes:
     """Return the raw ``.bi5`` bytes for one hour, using a per-hour disk cache.
 
     An empty (0-byte) result means a no-trading hour (weekend/holiday) and is
-    cached as such so re-runs do not re-request it.
+    cached as such so re-runs do not re-request it. Only hours that have already
+    finished are cached: caching the hour in progress would freeze the newest bar
+    at whatever was published when it was first requested.
     """
     cpath = cache_dir / symbol / f"{dt.year:04d}" / f"{dt.month:02d}" / f"{dt.day:02d}" / f"{dt.hour:02d}h.bi5"
-    if cpath.exists():
+    complete = dt + timedelta(hours=1) <= datetime.now(timezone.utc)
+    if complete and cpath.exists():
         return cpath.read_bytes()
     cpath.parent.mkdir(parents=True, exist_ok=True)
     url = _hour_url(symbol, dt)
@@ -63,15 +69,18 @@ def _fetch_hour_raw(symbol: str, dt: datetime, cache_dir: Path, retries: int = 3
                 body = resp.read()
             break
         except urllib.error.HTTPError as e:
-            if e.code in (404, 410):  # no data for this hour
+            if e.code in (404, 410):
                 body = b""
                 break
             if attempt == retries - 1:
                 raise
+            time.sleep(_BACKOFF_SECONDS * (2 ** attempt))
         except (urllib.error.URLError, TimeoutError):
             if attempt == retries - 1:
                 raise
-    cpath.write_bytes(body)
+            time.sleep(_BACKOFF_SECONDS * (2 ** attempt))
+    if complete:
+        cpath.write_bytes(body)
     return body
 
 
@@ -87,10 +96,10 @@ def _decode_hour(body: bytes, hour_start: datetime, point_divisor: float) -> lis
     for ms, ask_i, bid_i, av, bv in _REC.iter_unpack(raw):
         rows.append(
             (
-                base_ns + int(ms) * 1_000_000,  # timestamp_ns
+                base_ns + int(ms) * 1_000_000,
                 bid_i / point_divisor,
                 ask_i / point_divisor,
-                float(av) + float(bv),  # combined volume (millions)
+                float(av) + float(bv),
             )
         )
     return rows
@@ -103,7 +112,7 @@ def fetch_ticks(
     *,
     point_divisor: float = 1000.0,
     cache_dir: str | Path = "feature-prototype/cache/dukascopy",
-    max_workers: int = 12,
+    max_workers: int = 4,
 ) -> pd.DataFrame:
     """Download ticks for ``[start, end)`` and return a tidy tick DataFrame.
 

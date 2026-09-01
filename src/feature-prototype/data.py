@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,18 +27,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Allow `import dukascopy` whether imported as a sibling or run standalone.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dukascopy  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 SYMBOL = "USDJPY"
-PIP_SIZE = 0.01  # one pip for JPY-quote pairs
-BAR_SECONDS = 300  # M5
-POINT_DIVISOR = 1000.0  # Dukascopy integer price -> price for 3-decimal JPY pairs
+PIP_SIZE = 0.01
+BAR_SECONDS = 300
+POINT_DIVISOR = 1000.0
 
-# Default reproducible window: 3 weeks of Jan-2024 USD/JPY (~4k M5 bars).
 DEFAULT_START = "2024-01-08"
 DEFAULT_END = "2024-01-29"
 
@@ -46,8 +45,8 @@ DEFAULT_END = "2024-01-29"
 class PriceData:
     """A loaded price slice plus provenance."""
 
-    frame: pd.DataFrame  # [timestamp_ns, open, high, low, close, volume]
-    source: str  # "cache:<path>" | "dukascopy:<range>" | "synthetic"
+    frame: pd.DataFrame
+    source: str
 
     @property
     def n_bars(self) -> int:
@@ -111,8 +110,13 @@ def _from_dukascopy(start_date: str, end_date: str, cache_dir: Path) -> pd.DataF
     return aggregate_m5(ticks)
 
 
-def _synthetic(n_bars: int, seed: int) -> pd.DataFrame:
-    """Seeded USD/JPY-like M5 path with volatility clustering (offline fallback)."""
+def _synthetic(n_bars: int, seed: int, end_ns: int | None = None) -> pd.DataFrame:
+    """Seeded USD/JPY-like M5 path with volatility clustering (offline fallback).
+
+    ``end_ns`` anchors the last bar. Left unset the series starts at a fixed
+    2024 epoch, which keeps offline re-runs byte-identical; a live caller anchors
+    it to the present so a fallback slice cannot be mistaken for real 2024 bars.
+    """
     rng = np.random.default_rng(seed)
     omega, alpha, beta = 1.0e-9, 0.08, 0.90
     var = np.empty(n_bars)
@@ -130,7 +134,10 @@ def _synthetic(n_bars: int, seed: int) -> pd.DataFrame:
     high = np.maximum(open_, close) + 0.5 * bar_rng
     low = np.minimum(open_, close) - 0.5 * bar_rng
     volume = rng.integers(50, 500, size=n_bars).astype("float64")
-    start_ns = pd.Timestamp("2024-01-01 00:00", tz="UTC").value
+    if end_ns is None:
+        start_ns = pd.Timestamp("2024-01-01 00:00", tz="UTC").value
+    else:
+        start_ns = end_ns - (n_bars - 1) * BAR_SECONDS * 1_000_000_000
     ts = start_ns + np.arange(n_bars, dtype="int64") * (BAR_SECONDS * 1_000_000_000)
     return _normalise(
         pd.DataFrame(
@@ -147,10 +154,21 @@ def load_usdjpy_m5(
     end_date: str = DEFAULT_END,
     synthetic_bars: int = 6000,
     seed: int = 7,
+    max_age_seconds: float | None = None,
+    synthetic_end_now: bool = False,
 ) -> PriceData:
-    """Load a USD/JPY M5 slice: cache -> Dukascopy download+aggregate -> synthetic."""
+    """Load a USD/JPY M5 slice: cache -> Dukascopy download+aggregate -> synthetic.
+
+    ``max_age_seconds`` bounds how old the cached parquet may be before it is
+    refetched. The default of ``None`` accepts a cache of any age, which is what
+    the reproducible prototype run wants; a live caller passes a short TTL so the
+    slice tracks the market instead of pinning whichever window was fetched first.
+    """
     cache_path = Path(cache_path)
-    if cache_path.exists():
+    if cache_path.exists() and (
+        max_age_seconds is None
+        or (time.time() - cache_path.stat().st_mtime) <= max_age_seconds
+    ):
         frame = _normalise(pd.read_parquet(cache_path))
         logger.info("loaded %d M5 bars from cache %s", len(frame), cache_path)
         return PriceData(frame=frame, source=f"cache:{cache_path.name}")
@@ -162,12 +180,15 @@ def load_usdjpy_m5(
         logger.info("downloaded+aggregated %d real M5 bars -> cached", len(frame))
         return PriceData(frame=frame, source=f"dukascopy:{start_date}..{end_date}")
     except Exception as exc:  # noqa: BLE001 - fall back so the prototype still runs
-        logger.warning("Dukascopy unavailable (%s); using synthetic fallback", exc)
+        logger.warning("Dukascopy unavailable (%s); falling back", exc)
+        if cache_path.exists():
+            frame = _normalise(pd.read_parquet(cache_path))
+            logger.warning("serving %d stale bars from %s", len(frame), cache_path)
+            return PriceData(frame=frame, source=f"cache-stale:{cache_path.name}")
 
-    frame = _synthetic(synthetic_bars, seed)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(cache_path, index=False)
-    logger.info("generated %d synthetic M5 bars -> cached", len(frame))
+    end_ns = pd.Timestamp.now(tz="UTC").floor("5min").value if synthetic_end_now else None
+    frame = _synthetic(synthetic_bars, seed, end_ns)
+    logger.info("generated %d synthetic M5 bars", len(frame))
     return PriceData(frame=frame, source="synthetic")
 
 

@@ -23,18 +23,16 @@ from __future__ import annotations
 import logging
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
-# --- make the forex packages and the sibling prototype modules importable ----
 _THIS = Path(__file__).resolve()
 _PROTO_DIR = _THIS.parent
-# The package root is whichever ancestor holds `dqnpf/`, `src/` in the
-# repository, `/app` in the container. Searching for it rather than counting
-# parents keeps this working in both.
 _PKG_ROOT = next(
     (p for p in _THIS.parents if (p / "dqnpf").is_dir()), _PROTO_DIR.parent
 )
@@ -67,9 +65,6 @@ HELP = (
 )
 
 
-# --------------------------------------------------------------------------- #
-# Config (env or .env), never hard-coded
-# --------------------------------------------------------------------------- #
 def _load_dotenv() -> None:
     env_path = _PROTO_DIR / ".env"
     if not env_path.exists():
@@ -84,9 +79,6 @@ def _load_dotenv() -> None:
         os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 
-# --------------------------------------------------------------------------- #
-# Advice, computed through the REAL IntegrationLayer screen + gate
-# --------------------------------------------------------------------------- #
 @dataclass
 class Advice:
     final_action: str
@@ -102,6 +94,72 @@ class Advice:
     data_source: str
 
 
+LIVE_WINDOW_DAYS = 4
+LIVE_CACHE_TTL_SECONDS = 600
+
+
+def _live_slice() -> dict:
+    """Loader arguments for a trailing window that ends at the present moment.
+
+    The prototype pins a fixed January 2024 window so its reported numbers stay
+    reproducible. A bot answering "what should I do now" must not inherit that
+    pin, so it asks for the last fortnight and lets the cache expire between
+    polls. The end date is tomorrow because the tick range is half-open.
+    """
+    today = datetime.now(timezone.utc).date()
+    return {
+        "cache_path": _PROTO_DIR / "cache" / "usdjpy_m5_live.parquet",
+        "start_date": str(today - timedelta(days=LIVE_WINDOW_DAYS)),
+        "end_date": str(today + timedelta(days=1)),
+        "max_age_seconds": LIVE_CACHE_TTL_SECONDS,
+        "synthetic_end_now": True,
+    }
+
+
+_slice_lock = threading.Lock()
+_slice: "data_mod.PriceData | None" = None
+
+
+def _refresh_slice() -> None:
+    """Fetch the trailing window and publish it for the request path to read."""
+    global _slice
+    try:
+        fresh = data_mod.load_usdjpy_m5(**_live_slice())
+    except Exception:
+        logger.exception("price refresh failed; keeping the previous slice")
+        return
+    with _slice_lock:
+        _slice = fresh
+    logger.info("price slice refreshed: %s (%d bars)", fresh.source, fresh.n_bars)
+
+
+def current_slice() -> "data_mod.PriceData":
+    """Return the most recent slice, fetching once if the refresher has not run.
+
+    Downloading a window of tick files takes minutes, so the Telegram handler
+    must never do it inline: a blocked handler stops the bot answering at all.
+    """
+    with _slice_lock:
+        if _slice is not None:
+            return _slice
+    _refresh_slice()
+    with _slice_lock:
+        if _slice is None:
+            raise RuntimeError("no USD/JPY price data available yet")
+        return _slice
+
+
+def start_price_refresher(interval: float = LIVE_CACHE_TTL_SECONDS) -> None:
+    """Keep the slice current in the background, off the request path."""
+
+    def loop() -> None:
+        while True:
+            _refresh_slice()
+            time.sleep(interval)
+
+    threading.Thread(target=loop, name="price-refresh", daemon=True).start()
+
+
 @dataclass
 class _Act:
     action: int
@@ -110,9 +168,7 @@ class _Act:
 
 def compute_advice() -> Advice:
     """Compute the advisor's recommendation for the latest available M5 bar."""
-    price = data_mod.load_usdjpy_m5(
-        cache_path=_PROTO_DIR / "cache" / "usdjpy_m5.parquet"
-    )
+    price = current_slice()
     close = price.frame["close"].to_numpy()
     ts = price.frame["timestamp_ns"].to_numpy()
     t = len(close) - 1
@@ -183,9 +239,6 @@ def format_advice(a: Advice) -> str:
     )
 
 
-# --------------------------------------------------------------------------- #
-# Price chart, rendered on demand, sent via the LLM `send_price_chart` tool
-# --------------------------------------------------------------------------- #
 def render_price_chart(lookback_bars: int = 72) -> tuple[bytes, float, int, str]:
     """Render recent USD/JPY M5 price movement to a PNG. Returns
     (png_bytes, last_price, n_bars, data_source)."""
@@ -197,7 +250,7 @@ def render_price_chart(lookback_bars: int = 72) -> tuple[bytes, float, int, str]
     import matplotlib.pyplot as plt
     import pandas as pd
 
-    price = data_mod.load_usdjpy_m5(cache_path=_PROTO_DIR / "cache" / "usdjpy_m5.parquet")
+    price = current_slice()
     close = price.frame["close"].to_numpy()
     ts = price.frame["timestamp_ns"].to_numpy()
     try:
@@ -207,8 +260,6 @@ def render_price_chart(lookback_bars: int = 72) -> tuple[bytes, float, int, str]
     n = max(12, min(want or 72, len(close), 288))
     close = close[-n:]
     stamps = pd.to_datetime(ts[-n:], utc=True)
-    # Plot bar-by-bar (index x) so weekend/session gaps don't draw a false
-    # diagonal; label a handful of x-ticks with the real bar time.
     x = range(n)
 
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -234,7 +285,6 @@ def render_price_chart(lookback_bars: int = 72) -> tuple[bytes, float, int, str]
     return buf.getvalue(), float(close[-1]), n, price.source
 
 
-# OpenAI-style function the LLM can call to send the user a chart.
 CHART_TOOL = {
     "type": "function",
     "function": {
@@ -259,9 +309,6 @@ CHART_TOOL = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# Telegram Bot HTTP API, long-polling
-# --------------------------------------------------------------------------- #
 class TelegramBot:
     def __init__(self, token: str, allowed_chat_ids: set[int] | None = None):
         self._base = f"https://api.telegram.org/bot{token}"
@@ -325,15 +372,10 @@ class TelegramBot:
             logger.warning("ignoring message from unauthorised chat %s", chat_id)
             return
         logger.info("message from chat %s: %r", chat_id, text)
-        # In a group the bot is addressed by mention ("@thebot what now?") or by
-        # a qualified command ("/advice@thebot"). Strip its own @mention so the
-        # rest is handled exactly as it would be in a direct message.
         if self._username:
             text = re.sub(rf"@{re.escape(self._username)}\b", "", text,
                           flags=re.IGNORECASE).strip()
         is_command = text.startswith("/")
-        # A bare mention leaves nothing behind; split() is then empty, so index
-        # defensively rather than raising out of the polling loop.
         head = text.lower().lstrip("/").split("@")[0].split()
         cmd = head[0] if head else ""
         try:
@@ -348,9 +390,8 @@ class TelegramBot:
                     prose + "\n\n" + _provenance(advice) if prose else structured,
                 )
             elif is_command:
-                self.send_message(chat_id, HELP)  # unknown command
+                self.send_message(chat_id, HELP)
             elif not text:
-                # Addressed with a bare mention and nothing else.
                 advice = compute_advice()
                 structured = format_advice(advice)
                 prose = llm.narrate(structured)
@@ -359,9 +400,6 @@ class TelegramBot:
                     prose + "\n\n" + _provenance(advice) if prose else structured,
                 )
             else:
-                # free-form question -> answer in prose, grounded in the live advice.
-                # The LLM may call the send_price_chart tool, which renders a chart
-                # and sends it to this chat.
                 advice = compute_advice()
                 structured = format_advice(advice)
 
@@ -380,10 +418,6 @@ class TelegramBot:
                     tools=[CHART_TOOL], execute_tool=_execute_tool,
                 )
                 if prose:
-                    # Prose replaces the structured block, so re-attach the
-                    # provenance: which bar the advice is derived from and where
-                    # that bar came from. Without it the answer reads as though
-                    # it describes the present market.
                     self.send_message(chat_id, prose + "\n\n" + _provenance(advice))
                 else:
                     self.send_message(
@@ -400,6 +434,7 @@ class TelegramBot:
         self._username = me.get("username")
         logger.info("bot @%s started (long-polling); allowed=%s",
                     self._username, self._allowed or "ALL")
+        start_price_refresher()
         offset: int | None = None
         while True:
             try:
@@ -415,12 +450,9 @@ class TelegramBot:
                     try:
                         self.handle(msg)
                     except Exception:  # noqa: BLE001 - one bad message must not
-                        # end the poll loop; the offset has already advanced, so
-                        # the loop continues with the next update.
                         logger.exception("unhandled error while handling a message")
 
 
-# --------------------------------------------------------------------------- #
 def _allowed_from_env() -> set[int]:
     import os
 
