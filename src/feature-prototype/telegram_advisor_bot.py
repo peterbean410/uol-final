@@ -30,9 +30,14 @@ import requests
 
 # --- make the forex packages and the sibling prototype modules importable ----
 _THIS = Path(__file__).resolve()
-_FOREX_ROOT = _THIS.parents[3]
 _PROTO_DIR = _THIS.parent
-for _p in (str(_FOREX_ROOT), str(_PROTO_DIR)):
+# The package root is whichever ancestor holds `dqnpf/`, `src/` in the
+# repository, `/app` in the container. Searching for it rather than counting
+# parents keeps this working in both.
+_PKG_ROOT = next(
+    (p for p in _THIS.parents if (p / "dqnpf").is_dir()), _PROTO_DIR.parent
+)
+for _p in (str(_PKG_ROOT), str(_PROTO_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -249,6 +254,7 @@ CHART_TOOL = {
 class TelegramBot:
     def __init__(self, token: str, allowed_chat_ids: set[int] | None = None):
         self._base = f"https://api.telegram.org/bot{token}"
+        self._token = token
         self._allowed = allowed_chat_ids or set()
 
     def _call(self, method: str, *, params=None, timeout=10):
@@ -258,6 +264,15 @@ class TelegramBot:
         if not data.get("ok"):
             raise RuntimeError(f"telegram {method} failed: {data}")
         return data["result"]
+
+    def _redact(self, value: object) -> str:
+        """Strip the bot token from anything bound for a log line.
+
+        ``requests`` embeds the full request URL (token included) in its
+        exception text, so logging the exception verbatim would publish the
+        credential to stdout and, in the cluster, to log aggregation.
+        """
+        return str(value).replace(self._token, "<redacted>")
 
     def get_me(self) -> dict:
         return self._call("getMe")
@@ -347,7 +362,7 @@ class TelegramBot:
             try:
                 updates = self.get_updates(offset)
             except requests.RequestException as exc:
-                logger.warning("getUpdates error: %s; retrying in 3s", exc)
+                logger.warning("getUpdates error: %s; retrying in 3s", self._redact(exc))
                 time.sleep(3)
                 continue
             for upd in updates:

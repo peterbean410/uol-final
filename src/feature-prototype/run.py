@@ -29,9 +29,14 @@ import numpy as np
 
 # --- make both the forex packages and the sibling prototype modules importable
 _THIS = Path(__file__).resolve()
-_FOREX_ROOT = _THIS.parents[3]
 _PROTO_DIR = _THIS.parent
-for p in (str(_FOREX_ROOT), str(_PROTO_DIR)):
+# The package root is whichever ancestor holds `dqnpf/`, `src/` in the
+# repository, `/app` in the container. Searching for it rather than counting
+# parents keeps this working in both.
+_PKG_ROOT = next(
+    (p for p in _THIS.parents if (p / "dqnpf").is_dir()), _PROTO_DIR.parent
+)
+for p in (str(_PKG_ROOT), str(_PROTO_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -49,7 +54,7 @@ from dqnpf.config import IntegrationConfig  # noqa: E402
 
 logger = logging.getLogger("prototype")
 
-FIG_DIR = _THIS.parents[1] / "figures"
+FIG_DIR = _PROTO_DIR / "figures"
 RESULTS_DIR = _PROTO_DIR / "results"
 VARIANCE_THRESHOLD = 3.0
 DIRECTIONAL_TOLERANCE = 1.0
@@ -58,7 +63,7 @@ DIRECTIONAL_TOLERANCE = 1.0
 def _git_sha() -> str:
     try:
         return subprocess.check_output(
-            ["git", "-C", str(_FOREX_ROOT), "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(_PKG_ROOT), "rev-parse", "--short", "HEAD"],
             text=True,
         ).strip()
     except Exception:  # noqa: BLE001

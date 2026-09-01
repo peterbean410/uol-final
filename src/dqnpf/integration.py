@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
 
 from dqnpf.action_mapper import (
     ACTION_NAMES,
@@ -18,8 +18,10 @@ from dqnpf.action_mapper import (
     map_action,
 )
 from dqnpf.config import IntegrationConfig
-from dqnpf.forecaster_bridge import ForecasterBridge
-from dqnpf.signal_cache import SignalCache
+if TYPE_CHECKING:  # annotations only, importing the bridge pulls torch/pandas,
+    # which the screen itself never needs (see IntegrationLayer.__init__).
+    from dqnpf.forecaster_bridge import ForecasterBridge
+    from dqnpf.signal_cache import SignalCache
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,9 @@ import pytest
 
 
 _REQUIRED_MODULES = [
-    ("dqnpf", "IntegrationLayer"),
+    # dqnpf deliberately does not re-export at the package root (see its
+    # __init__), so check the module that actually defines the symbol.
+    ("dqnpf.integration", "IntegrationLayer"),
     ("deepqnetwork.advisor", "DQNAdvisor"),
     ("probabilisticforecaster.inference", "ForecasterInference"),
 ]
